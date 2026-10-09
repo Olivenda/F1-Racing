@@ -26,7 +26,7 @@ from pygame.math import Vector2
 
 from .car_setup import CarSetup
 from .profiles import DriverProfile, Team
-from .tyres import COMPOUNDS, Compound
+from .tyres import COMPOUND_ORDER, COMPOUNDS, Compound
 
 if TYPE_CHECKING:
     from .car import Car
@@ -648,7 +648,7 @@ class NetPlay:
             self._read_setups(peer, msg.get("setups"))
         elif kind == "strategy":
             plan = msg.get("plan")
-            if isinstance(plan, list) and all(isinstance(s, list) and len(s) == 2 and s[0] in COMPOUNDS
+            if isinstance(plan, list) and all(isinstance(s, list) and len(s) == 2 and s[0] in COMPOUND_ORDER
                                               and isinstance(s[1], int) for s in plan) and len(plan) <= 6:
                 peer.strategy = plan
         elif kind == "in":

@@ -236,10 +236,11 @@ class PracticeAnalysisScreen:
         n = self.race_laps
         base = valid[len(valid) // 3]                    # a representative quick lap, not the one-off best
         ref = laps[0]["compound"] if laps[0]["compound"] in COMPOUNDS else "medium"
+        if COMPOUNDS[ref].kind != "slick":
+            ref = "medium"          # practice on rain tyres: the plan is still a dry one
         rates = self._wear_rates()
         measured = next(iter(rates.items()), None)
-        wet = self.car.track.wetness > 0.22
-        options = ["inter", "wet"] if wet else COMPOUND_ORDER
+        options = COMPOUND_ORDER    # dry tyres only: rain is the engineer's call during the race
         fuel_kg = self.car.fuel_per_lap * n
         pit_loss = self._pit_loss()
         # pace of fresh softs, from the compound the laps were done on (avg fuel load in practice)
