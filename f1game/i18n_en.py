@@ -625,6 +625,40 @@ EXACT: dict[str, str] = {
     "Frontflügel beschädigt! Box für Reparatur empfohlen.": "Front wing damaged! Box for repairs recommended.",
     "Unterboden beschädigt - weniger Abtrieb. Lässt sich in der Box nicht tauschen.":
         "Floor damaged - less downforce. It can't be replaced in the pits.",
+    # ---------------------------------------------------------------- keyboard bindings, pedals, gearbox
+    "Gas": "Throttle", "Bremse": "Brake", "Links lenken": "Steer left", "Rechts lenken": "Steer right",
+    "Hochschalten": "Shift up", "Runterschalten": "Shift down", "Tastatur zurücksetzen": "Reset keyboard",
+    "Pedal-Achsen": "Pedal axes", "KOMBINIERT - siehe Hilfe!": "COMBINED - see help!",
+    "getrennt (Gas + Bremse gleichzeitig möglich)": "separate (throttle + brake together possible)",
+    "Gas und Bremse brauchen ZWEI getrennte Achsen, sonst kann man nicht gleichzeitig bremsen und Gas geben. Zeigt "
+    "dies 'kombiniert': im Lenkrad-Treiber (Logitech G HUB: 'Kombinierte Pedale' aus, Thrustmaster/Fanatec: "
+    "'separate axes') umstellen und Gas + Bremse neu kalibrieren. Eine separate Pedalbox (eigenes USB-Gerät) wird "
+    "beim Kalibrieren erkannt.":
+        "Throttle and brake need TWO separate axes, otherwise you can't brake and accelerate at the same time. If "
+        "this says 'combined': switch it in the wheel driver (Logitech G HUB: turn off 'combined pedals', "
+        "Thrustmaster/Fanatec: 'separate axes') and calibrate throttle + brake again. A separate pedal box (its own "
+        "USB device) is detected during calibration.",
+    "Alle Tastatur-Belegungen auf Standard (Pfeile/WASD, Leertaste, B, R ...).":
+        "All keyboard bindings back to default (arrows/WASD, space, B, R ...).",
+    "Gewünschte Taste auf der Tastatur drücken. ESC bricht ab. Die Taste wird dabei von jeder anderen Aktion "
+    "entfernt.": "Press the key you want. ESC cancels. The key is removed from any other action.",
+    "ENTER, dann die neue Taste drücken. Im Splitscreen fährt Spieler 1 mit diesen Tasten (ohne Pfeile), Spieler 2 "
+    "mit den Pfeiltasten.": "ENTER, then press the new key. In split screen player 1 drives with these keys "
+                            "(without arrows), player 2 with the arrow keys.",
+    "Links/rechts: Achse von Hand wählen (alle Geräte, auch separate Pedalboxen).":
+        "Left/right: pick the axis by hand (all devices, separate pedal boxes too).",
+    "Getriebe": "Gearbox", "Automatik": "Automatic", "Sequenziell (selbst schalten)": "Sequential (shift yourself)",
+    "Automatik: das Auto schaltet selbst. Sequenziell: du schaltest - Tastatur E/Q (änderbar), Gamepad RB/LB, "
+    "Lenkrad Schaltwippen. Jeder Gang hat einen Drehzahlbegrenzer, im zu hohen Gang fehlt die Beschleunigung. Zu "
+    "frühes Runterschalten wird verweigert (Motorschutz).":
+        "Automatic: the car shifts itself. Sequential: you shift - keyboard E/Q (rebindable), gamepad RB/LB, wheel "
+        "paddles. Every gear has a rev limiter, in too high a gear the car won't pull. Downshifting too early is "
+        "refused (engine protection).",
+    "SEQ": "SEQ", "GERADE": "STRAIGHT", "PIT LIMITER": "PIT LIMITER",
+    # ---------------------------------------------------------------- split screen
+    "Spieler": "Players", "1 Spieler": "1 player", "2 Spieler (Splitscreen)": "2 players (split screen)",
+    "P1: WASD · LEER Gerade · B Box · R Reset      P2: Pfeile · STRG-R Gerade · SHIFT-R Box · ENTF Reset":
+        "P1: WASD · SPACE straight · B box · R reset      P2: arrows · R-CTRL straight · R-SHIFT box · DEL reset",
 }
 
 TEMPLATES: list[tuple[str, str]] = [
@@ -891,6 +925,10 @@ TEMPLATES: list[tuple[str, str]] = [
     ("Strecke {#}% nass", "track {}% wet"), ("Strecke {#}% nass · Ende ~{#}s", "track {}% wet · stops in ~{}s"),
     ("Regen in ~{#}s", "rain in ~{}s"), ("Regen kommt in ca. {#} Sekunden.", "Rain expected in about {} seconds."),
     ("{}: Box für {}", "{}: box for {}"),
+    ("Tastatur: {}", "Keyboard: {}"), ("{}: Achse {#}  ({#} -> {#})", "{}: axis {}  ({} -> {})"),
+    ("Sprit {#} Rd.", "Fuel {} laps"), ("P{#} · {}", "P{} · {}"), ("ZIEL! {} P{#}", "FINISH! {} P{}"),
+    ("ZIEL! Du bist P{#}", "FINISH! You are P{}"), ("{}: P{#}", "{}: P{}"),
+    ("{}: ZU FRÜH GAS - Räder drehen durch!", "{}: TOO EARLY ON THE THROTTLE - wheelspin!"),
     ("ENTER {} · G Garage (Setup anpassen) · Pfeile blättern · ESC Menü",
      "ENTER {} · G garage (adjust setup) · arrows scroll · ESC menu"),
     ("{#} Siege  ({})", "{} wins  ({})"), ("{#}  ({} %)", "{}  ({} %)"), ("{#}  (Ø {})", "{}  (avg {})"),
