@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 
 import pygame
 
+from .ffb import ForceFeedback
 from .profiles import DATA_DIR
 
 CONTROLS_FILE = DATA_DIR / "controls.json"
@@ -66,14 +67,19 @@ class AxisBinding:
     rest: float = 0.0
     full: float = 1.0
     device: str = ""        # another device's name (separate pedal box); "" = the wheel/pad itself
+    low: float | None = None  # steering only: the raw value at the opposite end stop (asymmetric wheels)
 
     def read(self, joy: "pygame.joystick.JoystickType | None") -> float | None:
         if joy is None or self.axis < 0 or self.axis >= joy.get_numaxes():
             return None
+        raw = joy.get_axis(self.axis)
+        if self.low is not None and (raw - self.rest) * (self.full - self.rest) < 0:
+            span = self.low - self.rest
+            return -(raw - self.rest) / span if abs(span) >= 1e-3 else None
         span = self.full - self.rest
         if abs(span) < 1e-3:
             return None
-        return (joy.get_axis(self.axis) - self.rest) / span
+        return (raw - self.rest) / span
 
 
 @dataclass
@@ -89,6 +95,9 @@ class DeviceProfile:
     saturation: float = 1.0         # fraction of the axis that already gives full lock (wheel: 0.5 = half turn)
     pedal_deadzone: float = 0.04
     rumble: float = 0.7             # vibration / force strength 0..1
+    rotation: int = 0               # wheel: degrees lock-to-lock as set in the driver (0 = not a wheel)
+    ffb: float = 0.7                # force feedback strength 0..1 (wheels with FFB motors)
+    ffb_invert: bool = False        # some drivers report the force direction mirrored
 
     @classmethod
     def for_device(cls, name: str, axes: int) -> "DeviceProfile":
@@ -100,7 +109,7 @@ class DeviceProfile:
                        brake=AxisBinding(min(2, axes - 1), 1.0, -1.0) if axes > 2 else AxisBinding(-1),
                        buttons={"drs": 0, "pit": 1, "pause": 9, "camera": 2, "view": 3, "reset": 8,
                                 "map": -1, "continue": 6, "menu": 7, "gear_up": 4, "gear_down": 5},
-                       deadzone=0.0, linearity=1.0, saturation=0.5, pedal_deadzone=0.02, rumble=0.8)
+                       deadzone=0.0, linearity=1.0, saturation=0.5, pedal_deadzone=0.02, rumble=0.8, rotation=900)
         prof = cls()
         if axes < 6:  # simple pads without analog triggers: right stick Y as combined throttle/brake
             prof.throttle = AxisBinding(min(3, axes - 1), 0.0, -1.0)
@@ -113,14 +122,17 @@ class DeviceProfile:
     @classmethod
     def from_json(cls, raw: dict) -> "DeviceProfile":
         prof = cls()
-        for key in ("kind", "deadzone", "linearity", "saturation", "pedal_deadzone", "rumble"):
+        for key in ("kind", "deadzone", "linearity", "saturation", "pedal_deadzone", "rumble", "rotation", "ffb",
+                    "ffb_invert"):
             if key in raw:
                 setattr(prof, key, type(getattr(prof, key))(raw[key]))
         for key in AXES:
             if isinstance(raw.get(key), dict):
                 b = raw[key]
+                low = b.get("low")
                 setattr(prof, key, AxisBinding(int(b.get("axis", -1)), float(b.get("rest", 0.0)),
-                                               float(b.get("full", 1.0)), str(b.get("device", ""))))
+                                               float(b.get("full", 1.0)), str(b.get("device", "")),
+                                               float(low) if low is not None else None))
         if isinstance(raw.get("buttons"), dict):
             saved = {k: int(v) for k, v in raw["buttons"].items() if k in ACTIONS}
             # actions added in later versions keep their default button if it is still free
@@ -151,6 +163,7 @@ class Controls:
         self._rumble_until: dict[int, int] = {}
         self.slot_map: dict[int, int | None] | None = None   # split-screen: player slot -> device
         self.keys: dict[str, list[int]] = default_keys()
+        self.ffb = ForceFeedback()
         self._remap: dict[int, int | None] = {}
         self._load()
         self._build_remap()
@@ -257,6 +270,11 @@ class Controls:
         self._build_remap()
         self.save()
 
+    def clear_key(self, action: str) -> None:
+        self.keys[action] = []
+        self._build_remap()
+        self.save()
+
     def reset_keys(self) -> None:
         self.keys = default_keys()
         self._build_remap()
@@ -355,6 +373,31 @@ class Controls:
             joy.rumble(min(1.0, low * prof.rumble), min(1.0, high * prof.rumble), ms)
         except (pygame.error, AttributeError):
             pass
+
+    def ffb_device(self, slot: int = 0) -> bool:
+        """True if this player's device is a wheel with working force feedback (opened on demand)."""
+        joy, prof = self._device(slot)
+        if joy is None or prof is None or prof.kind != "wheel" or prof.ffb <= 0:
+            if self.ffb.instance_id is not None and (joy is None or joy.get_instance_id() == self.ffb.instance_id):
+                self.ffb.detach()
+            return False
+        return self.ffb.attach(joy)
+
+    def force(self, torque: float, spring: float, damper: float, vibration: float, period_ms: int,
+              slot: int = 0) -> bool:
+        """Steering force for a wheelbase. Returns False when the device has no FFB (caller falls back to rumble)."""
+        if not self.ffb_device(slot):
+            return False
+        prof = self._device(slot)[1]
+        k = prof.ffb
+        sign = -1.0 if prof.ffb_invert else 1.0
+        self.ffb.set_forces(sign * torque * k, spring * k, damper * k, vibration * k, period_ms)
+        return True
+
+    def ffb_idle(self) -> None:
+        """Menus / pause: a light centring spring instead of driving forces."""
+        if self.ffb.available:
+            self.ffb.neutral()
 
     def stop_rumble(self) -> None:
         for joy in self.joys.values():

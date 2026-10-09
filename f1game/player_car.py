@@ -40,6 +40,7 @@ class Player_Car(Car):
         self.brake_assist_active = False
         self.aero_request = False
         self._fb_impulse = 0.0
+        self._ffb_jolt = 0.0
         self.slot = 0               # split-screen player number (0 = player 1)
         self.shift_flash = 0.0
         self.keyset = "all"         # "all", "wasd" or "arrows"
@@ -95,7 +96,7 @@ class Player_Car(Car):
             lo, _ = self.gear_range(self.manual_gear)
             if self.manual_gear > 1 and self.speed_fwd < lo * 0.7:
                 super().shift(-1)
-        self._feedback(controls)
+        self._feedback(controls, dt)
 
     def held_keys(self, controls) -> tuple[bool, bool, bool, bool]:
         """(throttle, brake, left, right) from this player's keys (rebindable, see Controls.keys)."""
@@ -106,12 +107,14 @@ class Player_Car(Car):
     def throttle_held(self, controls) -> bool:
         return self.held_keys(controls)[0] or controls.throttle_held(self.slot)
 
-    def _feedback(self, controls) -> None:
-        """Vibration / force jolts: impacts, gravel, kerb-like slides and wheelspin."""
+    def _feedback(self, controls, dt: float = 1 / 120) -> None:
+        """Force feedback on wheelbases, vibration on everything else: impacts, gravel, kerbs, slides, wheelspin."""
         if not controls.has_device(self.slot):
             return
         hit = self.wall_impulse + self.car_impulse - self._fb_impulse
         self._fb_impulse = self.wall_impulse + self.car_impulse
+        if self._force_feedback(controls, hit, dt):
+            return
         if hit > 20:
             k = min(1.0, hit / 250.0)
             controls.rumble(k, k, 120 + int(200 * k), self.slot)
@@ -121,6 +124,38 @@ class Player_Car(Car):
             controls.rumble(0.0, 0.3, 70, self.slot)
         elif self.launch_spin > 0.0 and self.throttle > 0.5:
             controls.rumble(0.25, 0.0, 70, self.slot)
+
+    def _force_feedback(self, controls, hit: float, dt: float) -> bool:
+        """Steering torque: the self-aligning force of the front tyres (heavier with speed and downforce, light when
+        the front washes out), the wheel pulling into a slide (natural counter-steer), a pull from bent suspension,
+        jolts from impacts and the rumble of kerbs and gravel."""
+        v = max(0.0, self.speed_fwd)
+        speed = min(1.0, v / 420.0)
+        use = self.lateral_use
+        # front grip feel: full up to ~85% of the grip, then the wheel goes light (understeer)
+        grip_feel = 1.0 if use < 0.85 else max(0.3, 1.0 - (use - 0.85) * 2.2)
+        torque = -self.steer_angle * (0.15 + 0.85 * speed) * grip_feel * 0.9
+        # rear stepping out: the car's velocity points away from the nose -> the wheel turns into the slide
+        slip = self.vel.dot(self.right) / 220.0 if v > 20 else 0.0
+        torque += max(-0.6, min(0.6, slip)) * 0.8
+        torque += self.damage.steer_bias * 1.5
+        if hit > 20:
+            self._ffb_jolt = (1.0 if self.spin >= 0 else -1.0) * min(1.0, hit / 200.0)
+        self._ffb_jolt *= max(0.0, 1.0 - dt * 12.0)
+        torque += self._ffb_jolt
+        vibration, period = 0.03 * speed, 30          # road texture
+        track = self.track
+        if self.on_grass and v > 20:
+            vibration, period = 0.35 + 0.3 * speed, 45
+        elif abs(self.lateral) > track.half_width - 7 and v > 20:
+            vibration, period = 0.3 + 0.25 * speed, 22   # riding a kerb
+        elif self.launch_spin > 0.0 and self.throttle > 0.5:
+            vibration, period = 0.25, 18
+        spring = 0.35 * (1.0 - speed)                   # parked: the wheel centres itself
+        damper = 0.12 + 0.1 * speed
+        if self.frozen or self.in_pit:
+            torque = 0.0
+        return controls.force(max(-1.0, min(1.0, torque)), spring, damper, vibration, period, self.slot)
 
     def shift(self, delta: int) -> bool:
         ok = super().shift(delta)

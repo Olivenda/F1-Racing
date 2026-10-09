@@ -211,6 +211,7 @@ class Car:
         self._rot_cache: dict[int, pygame.Surface] = {}
         self.vmax = 0.0
         self.lap_vmax = 0.0
+        self.lateral_use = 0.0          # share of the available cornering grip in use (force feedback)
         self.manual_gearbox = False     # sequential: the driver shifts, each gear has its own rev limiter
         self.manual_gear = 1
 
@@ -485,6 +486,7 @@ class Car:
         self.pos += self.vel * dt
         if self.tyres is not None:
             lateral_use = min(1.2, abs(vf2 * yaw_rate) / max(grip, 1.0))
+            self.lateral_use = lateral_use
             self.tyres.update(dt, lateral_use, self.brake, self.throttle, abs(vl2), abs(vf2) > 5.0)
         if vf2 > 5.0 and not self.session_done:
             self._consume(dt, vf2 / top)

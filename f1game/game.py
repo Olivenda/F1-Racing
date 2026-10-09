@@ -79,6 +79,8 @@ class Game:
                                   pygame.JOYDEVICEREMOVED):
                     events.extend(self.controls.translate(event, in_session))
             events.extend(self.controls.menu_stick(dt, in_session))
+            if not in_session or self.state.paused or self.state.finished or                     not any(p.autopilot is None for p in self.state.players):
+                self.controls.ffb_idle()
             for event in events:
                 if in_session and event.type == pygame.KEYDOWN and not getattr(event, "from_joystick", False):
                     # rebound keyboard actions arrive as the keys the session knows
