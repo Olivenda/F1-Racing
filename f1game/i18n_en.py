@@ -479,6 +479,140 @@ EXACT: dict[str, str] = {
         "opponents' pace. The format decides whether there is practice and qualifying before the race. Progress, "
         "contracts and achievements are kept.",
     "Ungespeicherte Änderungen": "Unsaved changes",
+    # ---------------------------------------------------------------- wheel / controller
+    "Lenkrad & Controller": "Wheel & controller", "nur Tastatur": "keyboard only", "kein Gerät": "no device",
+    "ENTER öffnet die Einrichtung: Wheelbase, Pedale und Gamepads kalibrieren, Lenkbereich, Totzone, Vibration und "
+    "Tastenbelegung.": "ENTER opens the setup: calibrate wheelbase, pedals and gamepads, steering range, deadzone, "
+                       "vibration and button mapping.",
+    "Wheelbase, Pedale und Gamepads · gespeichert in data/controls.json":
+        "Wheelbase, pedals and gamepads · saved in data/controls.json",
+    "Gerät": "Device", "Controller-Eingabe": "Controller input", "Gerätetyp": "Device type",
+    "Lenkung kalibrieren": "Calibrate steering", "Gaspedal kalibrieren": "Calibrate throttle",
+    "Bremspedal kalibrieren": "Calibrate brake", "Lenkbereich": "Steering range", "Lenk-Totzone": "Steering deadzone",
+    "Lenk-Linearität": "Steering linearity", "Pedal-Totzone": "Pedal deadzone",
+    "Vibration / Force-Feedback": "Vibration / force feedback", "Standard wiederherstellen": "Restore defaults",
+    "Lenkrad + Pedale": "Wheel + pedals", "Gamepad": "Gamepad", "Lenkung": "Steering", "Gaspedal": "Throttle",
+    "Bremspedal": "Brake", "nicht belegt": "unassigned", "LIVE-EINGABE": "LIVE INPUT", "Rohachsen": "Raw axes",
+    "KALIBRIERUNG": "CALIBRATION", "TASTE BELEGEN": "ASSIGN BUTTON", "TASTENBELEGUNG": "BUTTON MAPPING",
+    "... warte auf Eingabe ...": "... waiting for input ...",
+    "Gerade-Modus / DRS": "Straight mode / DRS", "Boxenstopp anfordern": "Pit stop menu",
+    "Kamera wechseln": "Change camera", "2D / 3D": "2D / 3D", "Auto zurücksetzen": "Reset car",
+    "Streckenübersicht": "Track overview", "Menü / Verlassen (ESC)": "Menu / leave (ESC)",
+    "Weiter / Training beenden": "Continue / end practice",
+    "Pfeile wählen · links/rechts ändern · ENTER kalibrieren/belegen · ESC zurück":
+        "Arrows select · left/right change · ENTER calibrate/assign · ESC back",
+    "Kein Lenkrad oder Controller gefunden. Gerät anschließen - es wird automatisch erkannt.":
+        "No wheel or controller found. Plug one in - it is detected automatically.",
+    "Angeschlossene Lenkräder und Controller. Links/rechts wechselt das aktive Gerät. Geräte können auch während des "
+    "Spiels angesteckt werden.": "Connected wheels and controllers. Left/right switches the active device. Devices "
+                                 "can be plugged in while the game is running.",
+    "Aus = nur Tastatur. Tastatur funktioniert immer zusätzlich.":
+        "Off = keyboard only. The keyboard always works as well.",
+    "Lenkrad: Lenkachse wird direkt ohne Glättung übernommen. Gamepad: Stick wird bei hohem Tempo leicht entschärft.":
+        "Wheel: the steering axis is used directly without smoothing. Gamepad: the stick is softened slightly at "
+        "high speed.",
+    "ENTER, dann Lenkrad bzw. Stick ganz nach rechts drehen und kurz halten. Die Mittelstellung wird beim Start der "
+    "Kalibrierung gemessen - Lenkrad gerade halten!":
+        "ENTER, then turn the wheel / push the stick fully right and hold briefly. The centre is measured when "
+        "calibration starts - keep the wheel straight!",
+    "ENTER mit losgelassenem Pedal, dann voll durchtreten und kurz halten. Invertierte und kombinierte Pedalachsen "
+    "werden automatisch erkannt.":
+        "ENTER with the pedal released, then press it fully and hold briefly. Inverted and combined pedal axes are "
+        "detected automatically.",
+    "ENTER mit losgelassenem Pedal, dann voll durchtreten und kurz halten.":
+        "ENTER with the pedal released, then press it fully and hold briefly.",
+    "Anteil des Lenkwegs, der schon vollen Einschlag ergibt. Lenkrad mit 900°: 50% = voller Einschlag bei 225° pro "
+    "Seite. Kleiner = direktere Lenkung.":
+        "Share of the steering travel that already gives full lock. 900° wheel: 50% = full lock at 225° per side. "
+        "Smaller = more direct steering.",
+    "Ignorierter Bereich um die Mitte. Gamepad-Sticks ~6%, Lenkräder 0%.":
+        "Ignored zone around the centre. Gamepad sticks ~6%, wheels 0%.",
+    "1.0 = linear. Höher = feinfühliger um die Mitte, schneller am Anschlag.":
+        "1.0 = linear. Higher = finer around the centre, quicker towards full lock.",
+    "Ignorierter Weg am Anfang und Ende der Pedale (gegen Rauschen).":
+        "Ignored travel at the start and end of the pedals (against noise).",
+    "Stöße bei Einschlägen, Kies, Rutschen und durchdrehenden Rädern. Gamepads vibrieren; Lenkräder bekommen "
+    "Rüttel-Impulse, soweit der Treiber SDL-Rumble unterstützt.":
+        "Jolts for impacts, gravel, slides and wheelspin. Gamepads vibrate; wheels get rumble pulses where the "
+        "driver supports SDL rumble.",
+    "Setzt Achsen, Tasten und Lenkgefühl dieses Geräts zurück.":
+        "Resets axes, buttons and steering feel of this device.",
+    "Wird automatisch in data/controls.json gespeichert (pro Gerät).":
+        "Saved automatically in data/controls.json (per device).",
+    "ENTER, dann den gewünschten Knopf drücken. Jede Aktion geht weiterhin auch über die Tastatur.":
+        "ENTER, then press the button you want. Every action still works on the keyboard too.",
+    "Lenkrad ganz nach RECHTS drehen (Stick nach rechts) und halten ...":
+        "Turn the wheel fully RIGHT (stick right) and hold ...",
+    "Gaspedal VOLL durchtreten (Gas-Trigger ganz drücken) und halten ...":
+        "Press the throttle FULLY (throttle trigger all the way) and hold ...",
+    "Bremspedal VOLL durchtreten (Brems-Trigger ganz drücken) und halten ...":
+        "Press the brake FULLY (brake trigger all the way) and hold ...",
+    # ---------------------------------------------------------------- setup: wings, ride height, fuel, plank
+    "Frontflügel-Winkel": "Front wing angle", "Heckflügel-Winkel": "Rear wing angle", "Bodenfreiheit": "Ride height",
+    "flach": "flat", "steil": "steep", "tief": "low", "Planken-Abrieb": "Plank wear",
+    "SPRIT BEIM RENNSTART": "FUEL AT RACE START", "genau Renndistanz": "exactly race distance",
+    "Mehr Frontflügel = mehr Grip an der Vorderachse: das Auto lenkt schärfer ein, das Heck wird nervöser. Kostet "
+    "wenig Topspeed. Kann beim Boxenstopp verstellt werden.":
+        "More front wing = more front grip: sharper turn-in, a nervous rear. Costs little top speed. Can be adjusted "
+        "at a pit stop.",
+    "Mehr Heckflügel = mehr Grip und ein stabiles Heck, aber deutlich mehr Luftwiderstand. Monza/Spa: flach. Monaco: "
+    "steil. Front steiler als Heck = Übersteuern, umgekehrt Untersteuern.":
+        "More rear wing = more grip and a stable rear, but much more drag. Monza/Spa: flat. Monaco: steep. Front "
+        "steeper than rear = oversteer, the other way round = understeer.",
+    "Tiefer = mehr Abtrieb (Bodeneffekt) und etwas weniger Luftwiderstand, aber die Bodenplatte (Planke) schleift "
+    "stärker. Mehr als 1,0 mm Abrieb nach dem Rennen = Disqualifikation! Die Planke wird beim Boxenstopp NICHT "
+    "getauscht.":
+        "Lower = more downforce (ground effect) and a little less drag, but the plank under the car scrapes more. "
+        "More than 1.0 mm of wear after the race = disqualification! The plank is NOT replaced at pit stops.",
+    "Hart = etwas mehr Grip auf glattem Asphalt, aber mehr Reifenverschleiß und schlechter neben der Strecke. Weich = "
+    "reifenschonend, setzt aber öfter auf (Planke).":
+        "Stiff = a bit more grip on smooth tarmac, but more tyre wear and worse off track. Soft = easy on the tyres, "
+        "but bottoms out more (plank).",
+    "Mehr Sprit = Reserve für Safety-Car-Phasen, aber jedes kg kostet Beschleunigung, Grip und Bremsweg. Weniger als "
+    "die Renndistanz = leichter und schneller, dann muss aber getankt werden (Boxenstopp-Menü mit B) oder Sprit "
+    "gespart werden (früher vom Gas).":
+        "More fuel = reserve for safety car periods, but every kg costs acceleration, grip and braking distance. "
+        "Less than race distance = lighter and faster, but you have to refuel (pit menu with B) or save fuel (lift "
+        "earlier).",
+    # ---------------------------------------------------------------- pit menu, fuel, scrutineering
+    "BOXENSTOPP PLANEN": "PLAN PIT STOP", "angefordert": "requested", "Tanken": "Refuel", "Reparatur": "Repair",
+    "nicht wechseln": "no change", "BOX ANFORDERN": "REQUEST PIT STOP", "BOXENSTOPP ABSAGEN": "CANCEL PIT STOP",
+    "Boxenstopp abgesagt": "Pit stop cancelled",
+    "Nichts zu tun - Boxenstopp nicht angefordert": "Nothing to do - no pit stop requested",
+    "ohne Reifenwechsel": "no tyre change", "Reifen bleiben drauf": "Tyres stay on",
+    "Box, Box! Die Crew ist bereit.": "Box, box! The crew is ready.", "-> Box": "-> Box",
+    "Kein Sprit mehr! Auto ausrollen lassen.": "Out of fuel! Let the car roll to a stop.",
+    "Sprit reicht nicht! Lift and Coast oder zum Tanken an die Box.":
+        "Not enough fuel! Lift and coast or box to refuel.",
+    "Planke fast am Limit! Randsteine meiden, sonst Disqualifikation.":
+        "Plank almost at the limit! Stay off the kerbs or face disqualification.",
+    "Kein Benzin mehr": "Out of fuel",
+    # ---------------------------------------------------------------- practice data analysis
+    "DATENANALYSE · FREIES TRAINING": "DATA ANALYSIS · FREE PRACTICE", "zur Datenanalyse": "to data analysis",
+    "RD.": "LAP", "ZEIT": "TIME", "VERSCHL.": "WEAR", "SPRIT": "FUEL", "PLANKE": "PLANK", "VMAX": "VMAX",
+    "RUNDENZEIT & REIFENVERSCHLEISS": "LAP TIME & TYRE WEAR", "RENNINGENIEUR · AUSWERTUNG": "RACE ENGINEER · DEBRIEF",
+    "Keine gezeitete Runde gefahren.": "No timed lap driven.",
+    "Mindestens 2 Runden für den Verlauf.": "At least 2 laps needed for the chart.",
+    "Balken = Rundenzeit (höher = schneller) · gelb = Reifenverschleiß · braun = Boxenrunde":
+        "Bars = lap time (taller = faster) · yellow = tyre wear · brown = pit lap",
+    "Zu wenig Daten": "Not enough data", "Fahre mindestens 2 volle Runden ohne Boxenstopp.":
+        "Drive at least 2 full laps without a pit stop.",
+    "Pace": "Pace", "Sprit": "Fuel", "Planke": "Plank", "kein Stopp nötig": "no stop needed",
+    "DISQUALIFIKATION droht - Bodenfreiheit erhöhen!": "DISQUALIFICATION risk - raise the ride height!",
+    "knapp - Randsteine meiden oder höher fahren": "tight - stay off the kerbs or run higher",
+    "sicher - Bodenfreiheit könnte tiefer": "safe - ride height could go lower",
+    "im grünen Bereich": "within limits",
+    # ---------------------------------------------------------------- weather
+    "Wetter": "Weather", "Trocken": "Dry", "Wechselhaft": "Changeable", "Regen": "Rain", "Starkregen": "Heavy rain",
+    "Nieselregen": "Drizzle", "Nass, trocknet ab": "Wet, drying", "Feucht": "Damp",
+    "Intermediate": "Intermediate", "Wet": "Wet",
+    "Trocken: nie Regen. Wechselhaft: Schauer können kommen und gehen - Strecke wird nass und trocknet wieder ab. "
+    "Regen: nasses Rennen. Bei Nässe Intermediates (grün) oder Wets (blau) holen.":
+        "Dry: never rains. Changeable: showers can come and go - the track gets wet and dries again. Rain: a wet "
+        "race. In the wet, fit intermediates (green) or full wets (blue).",
+    "Strecke ist nass - Box für Intermediates! (B)": "Track is wet - box for intermediates! (B)",
+    "Starkregen - wir brauchen Full Wets! (B)": "Heavy rain - we need full wets! (B)",
+    "Strecke trocknet ab - Slicks sind jetzt schneller! (B)": "Track is drying - slicks are faster now! (B)",
 }
 
 TEMPLATES: list[tuple[str, str]] = [
@@ -713,6 +847,40 @@ TEMPLATES: list[tuple[str, str]] = [
     ("Saison {#} (läuft)", "Season {} (running)"), ("Saison {#}", "Season {}"), ("{#} von {#} freigeschaltet", "{} of {} unlocked"),
     ("{#} Runden pro Rennen", "{} laps per race"), ("{#} Runde pro Rennen", "{} lap per race"),
     ("Slot {#} · Einstellungen für die restlichen Rennen", "Slot {} · settings for the remaining races"),
+    # ---------------------------------------------------------------- wheel / controller, setup, fuel, plank
+    ("Taste: {}", "Button: {}"), ("Achse {#}  ({#} -> {#})", "Axis {}  ({} -> {})"), ("Knopf {#}", "Button {}"),
+    ("Knöpfe: {}", "Buttons: {}"), ("{#} Achsen · {#} Knöpfe · {#} Steuerkreuz", "{} axes · {} buttons · {} d-pad"),
+    ("{}  ({#} Geräte)", "{}  ({} devices)"),
+    ("Knopf am Lenkrad/Controller drücken für: {}. Entf löscht die Belegung, andere Taste bricht ab.",
+     "Press a button on the wheel/controller for: {}. Delete clears it, any other key cancels."),
+    ("{} Übernahme automatisch nach kurzem Halten, ENTER übernimmt sofort, ESC bricht ab.",
+     "{} Accepted automatically after a short hold, ENTER accepts now, ESC cancels."),
+    ("{}: Flügel {#}/{#} · Höhe {#}  (ENTER)", "{}: wing {}/{} · height {}  (ENTER)"),
+    ("Renndistanz {#} Runden", "race distance {} laps"),
+    ("Sprit {#} kg · {#} Rd.", "Fuel {} kg · {} laps"), ("Sprit {#} kg · Reserve {#}", "Fuel {} kg · reserve {}"), ("Planke {#}", "Plank {}"),
+    ("Planke {#}/{#} mm - wird nicht getauscht", "Plank {}/{} mm - not replaced"),
+    ("{#} Rd. ({#} kg)  ->  Reserve {#}", "{} laps ({} kg)  ->  reserve {}"), ("{#} Rd. ({#} kg)", "{} laps ({} kg)"),
+    ("unverändert ({#})", "unchanged ({})"), ("{#}  (jetzt {#} -> {#})", "{}  (now {} -> {})"),
+    ("Ja  ({#}s)", "Yes  ({}s)"), ("Nein  ({#}s)", "No  ({}s)"), ("Ja  (keine Schäden)", "Yes  (no damage)"),
+    ("Nein  (keine Schäden)", "No  (no damage)"), ("[{#}] {}", "[{}] {}"), ("[5/ENTER]  {}", "[5/ENTER]  {}"),
+    ("BOX in dieser Runde: {}", "BOX this lap: {}"), ("{}-Reifen", "{} tyres"), ("{#} Rd. Sprit", "{} laps of fuel"),
+    ("Frontflügel {#}", "Front wing {}"), ("Reifen: {}", "Tyres: {}"), ("Tanken {#} Rd.", "Refuel {} laps"),
+    ("Reparatur ({#}s)", "Repair ({}s)"), ("Boxenstopp ... {#}s", "Pit stop ... {}s"),
+    ("DISQUALIFIZIERT - {}", "DISQUALIFIED - {}"),
+    ("Planke {#} mm abgenutzt (max. {#} mm)", "plank worn {} mm (max. {} mm)"),
+    ("DISQUALIFIKATION (Planke): {}", "DISQUALIFIED (plank): {}"),
+    ("{} · {#} Runden · Hochrechnung auf {#} Rennrunden", "{} · {} laps · projected to {} race laps"),
+    ("Ø {} · Bestzeit {} · Streuung {#}s", "avg {} · best {} · spread {}s"), ("Reifen {}", "Tyres {}"),
+    ("{#}% pro Runde -> hält ~{#} Rd. ({})", "{}% per lap -> lasts ~{} laps ({})"),
+    ("{#} Stopp(s) im Rennen", "{} stop(s) in the race"),
+    ("{#} kg pro Runde -> Rennen braucht {#} kg · Empfehlung: Renndistanz {#} Rd.",
+     "{} kg per lap -> race needs {} kg · recommended: race distance {} laps"),
+    ("{#} mm pro Runde -> {#} mm im Rennen ({})", "{} mm per lap -> {} mm in the race ({})"),
+    ("Strecke {#}% nass", "track {}% wet"), ("Strecke {#}% nass · Ende ~{#}s", "track {}% wet · stops in ~{}s"),
+    ("Regen in ~{#}s", "rain in ~{}s"), ("Regen kommt in ca. {#} Sekunden.", "Rain expected in about {} seconds."),
+    ("{}: Box für {}", "{}: box for {}"),
+    ("ENTER {} · G Garage (Setup anpassen) · Pfeile blättern · ESC Menü",
+     "ENTER {} · G garage (adjust setup) · arrows scroll · ESC menu"),
     ("{#} Siege  ({})", "{} wins  ({})"), ("{#}  ({} %)", "{}  ({} %)"), ("{#}  (Ø {})", "{}  (avg {})"),
 ]
 

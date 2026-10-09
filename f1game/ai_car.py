@@ -44,6 +44,12 @@ class NeuralDriver:
         if self.timer <= 0.0:
             self.timer += AI_CONTROL_INTERVAL
             self.inputs = compute_inputs(car, others, track)
+            if car.tyres is not None and track.wetness > 0.02:
+                # the nets were trained in the dry: on a wet track they "feel" faster than they are, so they
+                # brake earlier and carry the speed the lower grip allows (corner speed ~ sqrt(grip))
+                g = car.tyres.compound.wet_factor(track.wetness)
+                if g < 0.99:
+                    self.inputs[0] /= math.sqrt(max(0.3, g))
             self.outputs = self.net.forward(self.inputs)
         steer, pedal = self.outputs
         return max(0.0, pedal), max(0.0, -pedal), steer

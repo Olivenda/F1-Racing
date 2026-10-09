@@ -38,6 +38,7 @@ class UserSettings:
     units: str = "kmh"
     fps: int = 60
     effects: str = "high"
+    weather: str = "dynamic"
 
     @property
     def tyre_wear_factor(self) -> float:
@@ -63,6 +64,8 @@ class UserSettings:
             settings.units = "kmh"
         if settings.effects not in EFFECT_LEVELS:
             settings.effects = "high"
+        if settings.weather not in ("dry", "dynamic", "wet"):
+            settings.weather = "dynamic"
         if settings.fps not in FPS_OPTIONS:
             settings.fps = 60
         settings.assists = max(0, min(2, int(settings.assists)))

@@ -12,11 +12,12 @@ from .car import build_car_sprite
 from .championship import FORMATS, Championship
 from .profiles import recording_stats
 from .sound import VOLUMES
-from .tyres import COMPOUND_ORDER, COMPOUNDS
+from .tyres import ALL_COMPOUNDS, COMPOUND_ORDER, COMPOUNDS
 from .user_settings import ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, TYRE_WEAR_MODES, UNITS, speed_in
 from .settings import (CYAN, DIFFICULTY_LEVELS, F1_RED, GREEN, GREY, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .track import TRACK_DEFS
+from .weather import WEATHER_MODES
 from .i18n import LANGUAGES, set_language, tr
 from .utils import clear_render_caches, draw_panel, draw_text, format_time, vertical_gradient
 
@@ -250,7 +251,7 @@ class SetupScreen:
         elif row == "Dein Team":
             self.c["team"] = (self.c["team"] + delta) % max(1, len(self.game.teams))
         elif row == "Startreifen":
-            self.c["tyre"] = (self.c["tyre"] + delta) % len(COMPOUND_ORDER)
+            self.c["tyre"] = (self.c["tyre"] + delta) % len(ALL_COMPOUNDS)
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type != pygame.KEYDOWN:
@@ -309,7 +310,7 @@ class SetupScreen:
             track = self.game.tracks[TRACK_DEFS[self.c["track"]].key]
             st = self.game.setup_for(track)
             own = track.definition.key in self.game.setups
-            return (f"{'Eigenes' if own else 'Empfohlen'}: Flügel {st.wing:+d} · Getriebe {st.gearing:+d}"
+            return (f"{'Eigenes' if own else 'Empfohlen'}: Flügel {st.front_wing:+d}/{st.rear_wing:+d} · Höhe {st.ride_height:+d}"
                     "  (ENTER)")
         if row == "Strecke":
             return TRACK_DEFS[self.c["track"]].name
@@ -325,7 +326,7 @@ class SetupScreen:
         if row == "Dein Team":
             return self.game.teams[self.c["team"]].name if self.game.teams else "Referenzauto"
         if row == "Startreifen":
-            comp = COMPOUNDS[COMPOUND_ORDER[self.c["tyre"]]]
+            comp = COMPOUNDS[ALL_COMPOUNDS[self.c["tyre"]]]
             return f"{comp.name}  (Grip {comp.grip * 100:.0f}%)"
         return ""
 
@@ -360,7 +361,7 @@ class SetupScreen:
                 pygame.draw.rect(screen, accent, (px + 12, ry, 5, 38), border_radius=2)
             draw_text(screen, row.upper(), f.tiny, GREY, (px + 28, ry + 12), shadow=False)
             if row == "Startreifen":
-                comp = COMPOUNDS[COMPOUND_ORDER[self.c["tyre"]]]
+                comp = COMPOUNDS[ALL_COMPOUNDS[self.c["tyre"]]]
                 pygame.draw.circle(screen, comp.color, (px + 148, ry + 19), 8, 3)
             draw_text(screen, self._value(row), f.small_bold, WHITE, (px + 165, ry + 10), shadow=False)
             if selected:
@@ -472,17 +473,21 @@ class SetupScreen:
 
 class SettingsScreen:
 
-    ROWS = ["Sprache", "Spielername", "Fahrhilfen", "Ansicht", "Schaden", "Reifenverschleiß", "Safety Car",
+    ROWS = ["Sprache", "Spielername", "Lenkrad & Controller", "Fahrhilfen", "Ansicht", "Schaden", "Reifenverschleiß", "Wetter", "Safety Car",
             "TV-Regie (Zuschauer)", "Sound", "Einheiten", "Partikel & Effekte", "Bildrate", "FPS anzeigen",
             "Vollbild", "ZURÜCK"]
     HELP = {
         "Spielername": "Tippen zum Ändern, Rücktaste löscht. Erscheint in Zeitentabellen und auf dem Podium.",
+        "Lenkrad & Controller": "ENTER öffnet die Einrichtung: Wheelbase, Pedale und Gamepads kalibrieren, "
+                                "Lenkbereich, Totzone, Vibration und Tastenbelegung.",
         "Fahrhilfen": "Mittel: Stabilitätskontrolle + farbige Bremslinie. Voll: zusätzlich automatische "
                       "Bremshilfe vor Kurven.",
         "Ansicht": "Startansicht im Rennen. Im Rennen jederzeit mit V umschalten.",
         "Schaden": "An: Treffer beschädigen Frontflügel, Heck und Aufhängung (weniger Grip/Tempo, Auto zieht). "
                    "Reparatur beim Boxenstopp. Mit Ausfällen: zerstörte Aufhängung = DNF.",
         "Reifenverschleiß": "Doppelt macht Strategie und Boxenstopps wichtiger, Aus deaktiviert den Verschleiß.",
+        "Wetter": "Trocken: nie Regen. Wechselhaft: Schauer können kommen und gehen - Strecke wird nass und "
+                  "trocknet wieder ab. Regen: nasses Rennen. Bei Nässe Intermediates (grün) oder Wets (blau) holen.",
         "TV-Regie (Zuschauer)": "Die Kamera springt automatisch zu engen Zweikämpfen (im Rennen mit A umschalten).",
         "Sprache": "Sprache des Spiels / game language. Standard: English.",
         "Safety Car": "Bei Ausfällen und schweren Unfällen: Safety Car (Feld fährt geschlossen hinter dem SC, "
@@ -514,12 +519,15 @@ class SettingsScreen:
         return {
             "Spielername": st.player_name + ("_" if self.rows_sel == "Spielername" and int(self.t * 2) % 2 else ""),
             "Fahrhilfen": ASSIST_NAMES[st.assists],
+            "Lenkrad & Controller": self.game.controls.device_name() if self.game.controls.connected
+            else "nur Tastatur",
             "Ansicht": "3D-Verfolgerkamera" if st.view3d else "2D-Draufsicht",
             "Schaden": DAMAGE_MODES[st.damage],
             "Reifenverschleiß": TYRE_WEAR_MODES[st.tyre_wear][0],
             "TV-Regie (Zuschauer)": "An" if st.auto_camera else "Aus",
             "Sound": VOLUMES[st.sound][0],
             "Safety Car": "An" if st.safety_car else "Aus",
+            "Wetter": WEATHER_MODES[st.weather],
             "Sprache": LANGUAGES.get(st.language, "English"),
             "FPS anzeigen": "An" if st.show_fps else "Aus",
             "Einheiten": UNITS[st.units][0],
@@ -548,6 +556,9 @@ class SettingsScreen:
             st.auto_camera = not st.auto_camera
         elif row == "Safety Car":
             st.safety_car = not st.safety_car
+        elif row == "Wetter":
+            keys = list(WEATHER_MODES)
+            st.weather = keys[(keys.index(st.weather) + delta) % len(keys)]
         elif row == "Sprache":
             st.language = "de" if st.language == "en" else "en"
             set_language(st.language)
@@ -595,6 +606,9 @@ class SettingsScreen:
         elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
             if row == "ZURÜCK":
                 self._leave()
+            elif row == "Lenkrad & Controller":
+                from .controls_screen import ControlsScreen
+                self.game.state = ControlsScreen(self.game)
             else:
                 self._change(1)
         elif event.key == pygame.K_ESCAPE:
@@ -761,6 +775,8 @@ class PodiumScreen:
                      3: "Platz 3 - aufs Podium gefahren!"}
         if self.player_place == 0:
             headline = f"Sieg für {self.podium[0].name} ({self.podium[0].profile.team})"
+        elif self.podium and self.player_car is not None and getattr(self.player_car, "dsq", False):
+            headline = "DISQUALIFIZIERT - " + self.player_car.dsq_reason
         elif self.podium and session_dnf(self.player_car):
             headline = "Ausgefallen - nächstes Mal!"
         else:

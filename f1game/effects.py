@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .track import Track
 
 SMOKE = (205, 205, 210)
+SPRAY = (200, 208, 218)
 SPARK_COLORS = [(255, 240, 160), (255, 200, 60), (255, 140, 30)]
 
 
@@ -88,6 +89,13 @@ class Effects:
                         self._emit(w.x, w.y, -car.vel.x * 0.15 + random.uniform(-30, 30),
                                    -car.vel.y * 0.15 + random.uniform(-30, 30), random.uniform(0.5, 1.0),
                                    random.uniform(3, 5), 14.0, col, "dust")
+            elif self.track.wetness > 0.15 and speed > 120 and not car.in_pit:
+                # spray off the rear tyres - the wetter and faster, the bigger the cloud
+                if random.random() < min(1.0, speed / 400) * self.track.wetness * dense * dt * 60:
+                    for w in (wl, wr):
+                        self._emit(w.x, w.y, car.vel.x * 0.55 + random.uniform(-25, 25),
+                                   car.vel.y * 0.55 + random.uniform(-25, 25), random.uniform(0.35, 0.7),
+                                   random.uniform(3, 5), 26.0, SPRAY, "smoke")
             elif (slide or lock or spin) and not car.in_pit:
                 if random.random() < dense * dt * 45:
                     for w in (wl, wr):

@@ -39,6 +39,7 @@ class Player_Car(Car):
         self.assist_level = 1
         self.brake_assist_active = False
         self.aero_request = False
+        self._fb_impulse = 0.0
 
     def set_assists(self, level: int) -> None:
         self.assist_level = level
@@ -61,14 +62,47 @@ class Player_Car(Car):
             target -= 1.0
         if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
             target += 1.0
+        controls = session.game.controls
+        pad_throttle, pad_brake = controls.pedal("throttle"), controls.pedal("brake")
+        if pad_throttle is not None:
+            self.throttle = max(self.throttle, pad_throttle)
+        if pad_brake is not None:
+            self.brake = max(self.brake, pad_brake)
+        analog = controls.steering() if target == 0.0 else None
         speed_ratio = min(1.0, max(0.0, self.speed_fwd) / self.top_speed)
-        if abs(target) > abs(self.steer_input) or target * self.steer_input < 0:
-            rate = self.STEER_IN_RATE * (1.0 - 0.45 * speed_ratio)
+        if analog is not None and (analog != 0.0 or controls.profile.kind == "wheel"):
+            if controls.profile.kind == "wheel":
+                # a wheel is the steering: no filtering, the driver's hands are the rate limiter
+                self.steer_input = analog
+            else:
+                # sticks get a little speed-sensitive softening so flicks at 300 km/h don't spin the car
+                target = analog * (1.0 - 0.25 * speed_ratio)
+                self.steer_input = approach(self.steer_input, target, self.STEER_OUT_RATE * 1.6 * dt)
         else:
-            rate = self.STEER_OUT_RATE
-        self.steer_input = approach(self.steer_input, target, rate * dt)
+            if abs(target) > abs(self.steer_input) or target * self.steer_input < 0:
+                rate = self.STEER_IN_RATE * (1.0 - 0.45 * speed_ratio)
+            else:
+                rate = self.STEER_OUT_RATE
+            self.steer_input = approach(self.steer_input, target, rate * dt)
         self._record(dt, session)
         self._apply_assists()
+        self._feedback(controls)
+
+    def _feedback(self, controls) -> None:
+        """Vibration / force jolts: impacts, gravel, kerb-like slides and wheelspin."""
+        if not controls.connected:
+            return
+        hit = self.wall_impulse + self.car_impulse - self._fb_impulse
+        self._fb_impulse = self.wall_impulse + self.car_impulse
+        if hit > 20:
+            k = min(1.0, hit / 250.0)
+            controls.rumble(k, k, 120 + int(200 * k))
+        elif self.on_grass and self.speed_fwd > 30:
+            controls.rumble(0.35, 0.15, 90)
+        elif self.sliding and self.speed_fwd > 60:
+            controls.rumble(0.0, 0.3, 70)
+        elif self.launch_spin > 0.0 and self.throttle > 0.5:
+            controls.rumble(0.25, 0.0, 70)
 
     def _apply_assists(self) -> None:
         self.brake_assist_active = False

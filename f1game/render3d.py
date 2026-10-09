@@ -69,6 +69,7 @@ def _shade(color: Color, factor: float) -> Color:
 class Renderer3D:
     def __init__(self) -> None:
         self.sky = vertical_gradient((SCREEN_WIDTH, int(HORIZON_Y) + 40), (70, 120, 190), FOG)
+        self.rain_sky = vertical_gradient((SCREEN_WIDTH, int(HORIZON_Y) + 40), (78, 84, 96), FOG)
         self.cam_heading = 0.0
         self.cam_pos = Vector2()
         self._initialized = False
@@ -155,10 +156,13 @@ class Renderer3D:
 
     def draw(self, surf: pygame.Surface, track: "Track", cars: Sequence["Car"], target: "Car",
              racing_line: bool, label_font: pygame.font.Font,
-             garages: Sequence[tuple[Vector2, float, Color, str]] = ()) -> None:
+             garages: Sequence[tuple[Vector2, float, Color, str]] = (), rain: float = 0.0) -> None:
         self._setup()
         d = track.definition
         surf.blit(self.sky, (0, 0))
+        if rain > 0.03:
+            self.rain_sky.set_alpha(int(255 * min(1.0, rain * 1.6)))
+            surf.blit(self.rain_sky, (0, 0))
         ground = self._ground_cache.get(d.grass)
         if ground is None:
             ground = vertical_gradient((SCREEN_WIDTH, SCREEN_HEIGHT - int(HORIZON_Y) + 120),

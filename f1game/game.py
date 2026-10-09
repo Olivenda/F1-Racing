@@ -10,13 +10,14 @@ import pygame
 
 from .car_setup import CarSetup, load_setups, recommended, save_setups
 from .career import Career, migrate_legacy
+from .controls import Controls
 from .i18n import set_language, tr
 from .records import Records
 from .championship import Championship
 from .garage import GarageScreen
 from .hud import HUD, Fonts
 from .profiles import DATA_DIR, BrainLibrary, Team, load_drivers, load_teams, player_profile
-from .tyres import COMPOUND_ORDER
+from .tyres import ALL_COMPOUNDS
 from .screens import AnalysisScreen, ChampionshipScreen, MainMenu, PodiumScreen, ResultsScreen, SettingsScreen, SetupScreen
 from .sessions import PracticeSession, QualifyingSession, RaceSession, Session, WeekendConfig
 from .settings import FPS, GREY, MAX_FRAME_DT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE
@@ -42,6 +43,7 @@ class Game:
         self.settings = UserSettings.load()
         set_language(self.settings.language)
         self.sound = SoundSystem(self.settings.sound)
+        self.controls = Controls()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         self.apply_display()
         self.clock = pygame.time.Clock()
@@ -68,7 +70,15 @@ class Game:
     def run(self) -> None:
         while self.running:
             dt = min(self.clock.tick(self.settings.fps or FPS) / 1000.0, MAX_FRAME_DT)
+            in_session = isinstance(self.state, Session)
+            events = []
             for event in pygame.event.get():
+                events.append(event)
+                if event.type in (pygame.JOYBUTTONDOWN, pygame.JOYHATMOTION, pygame.JOYDEVICEADDED,
+                                  pygame.JOYDEVICEREMOVED):
+                    events.extend(self.controls.translate(event, in_session))
+            events.extend(self.controls.menu_stick(dt, in_session))
+            for event in events:
                 if event.type == pygame.QUIT:
                     self.running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_F12:
@@ -144,6 +154,7 @@ class Game:
 
     def go_to_menu(self) -> None:
         self.sound.stop()
+        self.controls.stop_rumble()
         if isinstance(self.state, Session):
             self.state.save_recording()
         self.state = MainMenu(self)
@@ -152,6 +163,7 @@ class Game:
     def free_memory(self) -> None:
         for track in self.tracks.values():
             track.release_surface()
+            track.wetness = 0.0
             if hasattr(track, "_pit_edges_3d"):
                 del track._pit_edges_3d
         clear_render_caches()
@@ -193,13 +205,14 @@ class Game:
         cfg = WeekendConfig(track_key=champ.next_track or champ.rounds[0], mode=career.format,
                             race_laps=career.laps, difficulty_name=career.difficulty,
                             ai_profiles=career.field_profiles(), player=player,
-                            start_compound=COMPOUND_ORDER[self.menu_choice["tyre"]], assists=st.assists,
+                            start_compound=ALL_COMPOUNDS[self.menu_choice["tyre"]], assists=st.assists,
                             view3d=st.view3d, damage=st.damage, tyre_wear_factor=st.tyre_wear_factor,
                             auto_camera=st.auto_camera, championship=champ,
                             pit_stop_times=career.pit_stop_times(), instant=instant and player is None,
                             rival=career.rival if career.kind == "driver" else None, career=True,
                             focus_team=career.team if career.kind == "team" else None,
                             reliability=career.reliability_map(), safety_car=st.safety_car,
+                            weather=st.weather,
                             objective=career.weekend_goal.get("text") if career.kind == "driver" else None)
         self.config = cfg
         first = {"weekend": "practice", "practice": "practice", "qualifying": "qualifying", "race": "race"}[cfg.mode]
@@ -253,10 +266,10 @@ class Game:
         player = None if spectator else player_profile(team, name)
         self.config = WeekendConfig(track_key=track_key, mode=mode, race_laps=laps, difficulty_name=difficulty,
                                     ai_profiles=profiles, player=player,
-                                    start_compound=COMPOUND_ORDER[c["tyre"]], assists=st.assists,
+                                    start_compound=ALL_COMPOUNDS[c["tyre"]], assists=st.assists,
                                     view3d=st.view3d, damage=st.damage, tyre_wear_factor=st.tyre_wear_factor,
                                     auto_camera=st.auto_camera, championship=championship,
-                                    safety_car=st.safety_car)
+                                    safety_car=st.safety_car, weather=st.weather)
         first = {"weekend": "practice", "practice": "practice", "qualifying": "qualifying", "race": "race"}[mode]
         self.start_session(first)
 
@@ -303,6 +316,14 @@ class Game:
                 label, nxt = "weiter zum Qualifying", lambda: self.start_session("qualifying")
             else:
                 label, nxt = "zurück zum Menü", self.go_to_menu
+            player = session.player
+            if player is not None and player.lap_log:
+                from .practice_analysis import PracticeAnalysisScreen
+                after, after_label = nxt, label
+
+                def nxt() -> None:
+                    self.state = PracticeAnalysisScreen(self, player, cfg.race_laps, after, after_label)
+                label = "zur Datenanalyse"
             self.state = ResultsScreen(self, "Ergebnis Freies Training", f"{track} · nach Bestzeit",
                                        ["POS", "FAHRER", "TEAM", "BESTZEIT", "ABSTAND", "RUNDEN"],
                                        session.results_rows(), self.player_name, label, nxt)
@@ -315,6 +336,10 @@ class Game:
                                        session.results_rows(), self.player_name, "zum Rennen",
                                        lambda: self.start_session("race"))
         elif isinstance(session, RaceSession):
+            disqualified = session.scrutineering()
+            if disqualified:
+                names = ", ".join(c.short for c in disqualified)
+                self.toast = (f"DISQUALIFIKATION (Planke): {names}", pygame.time.get_ticks() + 6000)
             if cfg.career and self.career is not None:
                 result = cfg.championship.award(session)
                 self.career.after_race(session, result)

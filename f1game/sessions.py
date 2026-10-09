@@ -11,22 +11,24 @@ import pygame
 from pygame.math import Vector2
 
 from .ai_car import AI_Car
-from .car import Car
+from .car import PLANK_LIMIT_MM, PLANK_RACE_MM, RACE_FUEL_KG, Car
 from .physics import handle_collisions
 from .player_car import Player_Car
 from .profiles import AUTOPILOT_BRAIN, PLAYER_PROFILE, DriverProfile, driver_grip
 from .effects import Effects
 from .render3d import Renderer3D
+from .pit_menu import PitMenu
 from .pitlane import PIT_ACCEL, PIT_DECEL, SPEED_LIMIT
-from .car_setup import recommended
+from .car_setup import CarSetup, recommended
 from .career_events import FAILURES, failure_chance
-from .tyres import COMPOUNDS, COMPOUND_ORDER, TyreSet
+from .tyres import ALL_COMPOUNDS, COMPOUNDS, COMPOUND_ORDER, TyreSet
+from .weather import Weather
 from .utils import approach
 from .sensors import RADAR_RANGE, lookahead_points
 from .race_control import PUNCTURE_WEAR, RaceControl
 from .i18n import tr
 from .stewards import Stewards
-from .settings import (DIFFICULTY_LEVELS, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
+from .settings import (TOP_SPEED, DIFFICULTY_LEVELS, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
                        SCREEN_WIDTH, SLIPSTREAM_RANGE, WHITE, YELLOW, GREEN, Color)
 from .utils import format_time
 
@@ -61,6 +63,8 @@ class WeekendConfig:
     reliability: dict[str, float] = field(default_factory=dict)
     objective: str | None = None
     safety_car: bool = True
+    weather: str = "dry"
+    weather_seed: int = field(default_factory=lambda: random.randrange(1 << 30))
 
     @property
     def spectator(self) -> bool:
@@ -100,6 +104,9 @@ class Camera:
         w, h = track.world_size
         return Vector2(min(max(self.pos.x - SCREEN_WIDTH / 2, 0), max(0, w - SCREEN_WIDTH)),
                        min(max(self.pos.y - SCREEN_HEIGHT / 2, 0), max(0, h - SCREEN_HEIGHT)))
+
+
+REFUEL_KG_PER_S: float = 11.0
 
 
 class Session:
@@ -143,8 +150,19 @@ class Session:
         self._blue_warned = False
         self.team_orders: dict[Car, dict] = {}
         self.failures: dict[str, str] = {}
+        self.pit_menu = PitMenu()
+        self.weather = Weather(config.weather, config.weather_seed + {"practice": 0, "qualifying": 1}.get(self.kind, 2), self.expected_duration())
+        track.wetness = self.weather.wetness
+        self._frame_dt = 0.0
+        self._weather_note = ""
         if config.objective and config.player is not None:
             self.message(f"TEAMZIEL: {config.objective}", (255, 200, 40), 5.0)
+
+    def expected_duration(self) -> float:
+        """Rough session length in seconds, so the rain forecast spans the session."""
+        lap = self.track.length / (TOP_SPEED * 0.85)
+        laps = {"practice": 10, "qualifying": 4}.get(self.kind, self.config.race_laps + 1)
+        return lap * laps
 
     def _create_cars(self, order: list[DriverProfile]) -> None:
         ai_setup = recommended(self.track)
@@ -161,12 +179,24 @@ class Session:
                 car.apply_setup(ai_setup)
             car.tyres = TyreSet(self.compound_for(car), self._wear_factor(car))
             car.damage.multiplier = 0.0 if self.config.damage == "off" else 1.0
+            laps = max(1, self.config.race_laps)
+            car.fill_fuel(self.start_fuel_laps(car), RACE_FUEL_KG / laps)
+            car.plank_per_lap = PLANK_RACE_MM / laps * (1.0 if car is self.player else random.uniform(0.85, 1.1))
             self.cars.append(car)
         self.cam_index = self.cars.index(self.player) if self.player is not None else 0
         own = [k for k, c in enumerate(self.cars) if c.profile.team == self.config.focus_team]
         if self.player is None and own:
             self.cam_index = own[0]
             self.config.auto_camera = False
+
+    def fuel_margin(self, car: Car) -> float:
+        """Extra laps of fuel on top of the race distance: the player's garage choice, AI a safe margin."""
+        if car is self.player and car.setup is not None:
+            return car.setup.fuel / 2.0
+        return 1.0
+
+    def start_fuel_laps(self, car: Car) -> float:
+        return self.config.race_laps + self.fuel_margin(car)
 
     def _wear_factor(self, car: Car) -> float:
         return car.perf.tyre_wear * car.profile.tyre_mgmt * car.sf.wear * self.config.tyre_wear_factor
@@ -179,7 +209,39 @@ class Session:
         return self.cars[self.cam_index]
 
     def compound_for(self, car: Car) -> str:
-        return self.config.start_compound if car.profile is self.config.player else "medium"
+        if car.profile is self.config.player:
+            return self.config.start_compound
+        return Weather.best_compound(self.weather.wetness) or "medium"
+
+    def _weather_calls(self) -> None:
+        """AI crews react to the weather mid-lap: the next pit entry is used, not the next lap."""
+        if self.track.wetness < 0.12 and self.weather.rain < 0.05 and                 all(c.tyres is None or c.tyres.compound.kind == "slick" for c in self.cars):
+            return
+        for car in self.cars:
+            if car.is_player or car.session_done or car.dnf or car.in_pit or car.pit_request is not None:
+                continue
+            if self.is_manager_car(car) and self.team_orders.get(car):
+                continue
+            call = self.weather_tyre_call(car)
+            if call:
+                car.pit_request = call
+                self.add_feed(f"{car.short}: Box für {COMPOUNDS[call].name}")
+
+    def weather_tyre_call(self, car: Car) -> str | None:
+        """Tyre the conditions ask for when the car is on the wrong kind (None = current tyres are fine)."""
+        if car.tyres is None:
+            return None
+        want = Weather.best_compound(self.track.wetness)
+        kind = car.tyres.compound.kind
+        # a little hysteresis so cars don't swap back and forth around the threshold
+        w = self.track.wetness
+        if want is None and kind != "slick" and w < 0.16 and self.weather.rain < 0.1:
+            return self.repair_compound(car) if self.repair_compound(car) in COMPOUND_ORDER else "medium"
+        if want == "inter" and (kind == "slick" and w > 0.26 or kind == "wet" and w < 0.6):
+            return "inter"
+        if want == "wet" and kind != "wet" and w > 0.74:
+            return "wet"
+        return None
 
     def _staggered_start(self) -> None:
         for k, car in enumerate(self.cars):
@@ -221,6 +283,8 @@ class Session:
         if event.type != pygame.KEYDOWN:
             return
         key = event.key
+        if self.player is not None and self.pit_menu.handle_key(event, self.player, self):
+            return
         if self.spectator and key in (pygame.K_UP, pygame.K_DOWN):
             order = self.standings()
             pos = order.index(self.focus) + (-1 if key == pygame.K_UP else 1)
@@ -285,11 +349,7 @@ class Session:
             else:
                 self.player.aero_request = True
         elif key == pygame.K_b and self.player is not None and self.player.autopilot is None:
-            options = [None] + COMPOUND_ORDER
-            nxt = options[(options.index(self.player.pit_request) + 1) % len(options)]
-            self.player.pit_request = nxt
-            self.message(f"BOX: {COMPOUNDS[nxt].name}-Reifen in dieser Runde" if nxt else "Boxenstopp abgesagt",
-                         COMPOUNDS[nxt].color if nxt else WHITE, 2.0)
+            self.pit_menu.toggle(self.player)
         elif key == pygame.K_b and self.is_manager_car(self.focus):
             self._draft_team_order(self.focus)
         elif key == pygame.K_TAB and self.config.focus_team:
@@ -318,6 +378,7 @@ class Session:
 
     def update(self, frame_dt: float) -> None:
         self.game.sound.update(self)
+        self._frame_dt = 0.0 if self.paused else frame_dt
         if self.paused:
             return
         sim_dt = frame_dt * self.time_scale
@@ -338,6 +399,10 @@ class Session:
             f[1] -= frame_dt
         self.feed = [f for f in self.feed if f[1] > 0]
         self.stewards.tick(frame_dt)
+        self._weather_timer = getattr(self, "_weather_timer", 0.0) - frame_dt * self.time_scale
+        if self._weather_timer <= 0:
+            self._weather_timer = 2.0
+            self._weather_calls()
         if self.team_orders:
             self._update_team_orders()
         if self.end_timer is not None:
@@ -348,6 +413,7 @@ class Session:
 
     def _step(self, h: float) -> None:
         self.pre_step(h)
+        self.weather.update(h, self.track, len(self.cars))
         for car in self.cars:
             if car.pit_state is not None:
                 self._lane_tick(car, h)
@@ -427,7 +493,7 @@ class Session:
         if car.in_pit:
             self.message(f"{car.short} ist schon in der Boxengasse", WHITE, 1.5)
             return
-        options: list[str | None] = [*COMPOUND_ORDER, None]
+        options: list[str | None] = [*ALL_COMPOUNDS, None]
         cur = self.team_orders.get(car, {}).get("compound", "none")
         nxt = options[(options.index(cur) + 1) % len(options)] if cur in options else options[0]
         order = self.team_orders.setdefault(car, {"asked": 0})
@@ -539,6 +605,9 @@ class Session:
         return car.tyres.compound.key if car.tyres else "medium"
 
     def _check_damage(self, car: Car) -> None:
+        if car.out_of_fuel and not car.dnf and not car.session_done and not car.in_pit and car.speed_fwd < 8.0:
+            self.retire(car, "Kein Benzin mehr")
+            return
         if car.dnf or car.session_done or car.damage.multiplier <= 0:
             return
         d = car.damage
@@ -610,9 +679,22 @@ class Session:
         if car.pit_stop_timer > 0:
             car.pit_stop_timer -= h
             if car.pit_stop_timer <= 0:
-                car.tyres = TyreSet(car.pit_compound, self._wear_factor(car))
-                car.damage.repair()
+                plan = car.pit_plan or {}
+                if car.pit_compound not in COMPOUNDS and car.puncture and car.tyres is not None:
+                    car.pit_compound = car.tyres.compound.key   # a punctured tyre gets replaced regardless
+                if car.pit_compound in COMPOUNDS:
+                    car.tyres = TyreSet(car.pit_compound, self._wear_factor(car))
+                if plan.get("repair", True):
+                    car.damage.repair()
                 car.puncture = False
+                if plan.get("fuel", 0.0) > 0 and car.fuel_per_lap > 0:
+                    car.fuel += plan["fuel"] * car.fuel_per_lap
+                    car.out_of_fuel = False
+                if plan.get("front_wing", 0) and car.setup is not None:
+                    new = CarSetup(**vars(car.setup))
+                    new.front_wing = max(-5, min(5, new.front_wing + plan["front_wing"]))
+                    car.apply_setup(new)
+                car.pit_plan = None
                 car.pit_stops += 1
                 car.pit_laps.append(car.laps_done + 1)
                 if car is not self.player:
@@ -628,18 +710,30 @@ class Session:
             v = approach(v, target, (PIT_DECEL if v > target else PIT_ACCEL) * h)
             if not car.pit_stopped and car.pit_u >= car.pit_box_u - 1.0:
                 car.pit_stopped = True
-                repair = car.damage.repair_time()
+                plan = car.pit_plan or {}
+                repair = car.damage.repair_time() if plan.get("repair", True) else 0.0
                 served = car.penalty_unserved
                 car.penalty_unserved = 0.0
                 if served > 0:
                     self.stewards.announce(f"{car.short} sitzt {served:.0f}s Strafe in der Box ab", "info")
-                car.pit_stop_timer = self.stop_time(car) + repair + served + \
+                fuel_time = plan.get("fuel", 0.0) * car.fuel_per_lap / REFUEL_KG_PER_S
+                wing_time = 0.8 if plan.get("front_wing", 0) else 0.0
+                tyres = car.pit_compound in COMPOUNDS
+                base = self.stop_time(car) if tyres else 0.0
+                # tyres, fuel and the wing adjustment happen in parallel; repairs come on top
+                car.pit_stop_timer = max(base, fuel_time, wing_time, 0.8) + repair + served + \
                     (0.0 if car is self.player else random.uniform(0.0, 0.8))
                 v = 0.0
                 if car is self.player:
-                    extra = f"  +  Reparatur ({repair:.0f}s)" if repair > 0 else ""
-                    self.message(f"Reifenwechsel: {COMPOUNDS[car.pit_compound].name}{extra}",
-                                 COMPOUNDS[car.pit_compound].color, 2.5)
+                    parts = [f"Reifen: {COMPOUNDS[car.pit_compound].name}" if tyres else "Reifen bleiben drauf"]
+                    if fuel_time > 0:
+                        parts.append(f"Tanken +{plan['fuel']:.1f} Rd.")
+                    if wing_time:
+                        parts.append(f"Frontflügel {plan['front_wing']:+d}")
+                    if repair > 0:
+                        parts.append(f"Reparatur ({repair:.0f}s)")
+                    self.message("  ·  ".join(parts),
+                                 COMPOUNDS[car.pit_compound].color if tyres else WHITE, 3.0)
         car.pit_u += v * h
         pos, heading = pit.pose(min(car.pit_u, pit.length), car.pit_entry_lat)
         car.pos, car.heading = pos, heading
@@ -672,7 +766,10 @@ class Session:
         # the box is past the line: a car crossing it in the pit lane is still on the old set - don't
         # order a second stop for it
         if not car.session_done and car.pit_request is None and car.pit_state is None and not car.is_player:
-            car.pit_request = self.plan_pit(car)
+            call = self.weather_tyre_call(car)
+            car.pit_request = call or self.plan_pit(car)
+            if call:
+                self.add_feed(f"{car.short}: Box für {COMPOUNDS[call].name}")
         if car is self.player:
             if lap_time == car.best_lap and self.fastest_lap[1] == car.short:
                 self.message(f"SCHNELLSTE RUNDE  {format_time(lap_time)}", PURPLE)
@@ -749,7 +846,8 @@ class Session:
         if self.view3d:
             self.r3d.draw(screen, self.track, self.cars + self.extra_objects(), self.cars[self.cam_index],
                           self.show_brake_line,
-                          self.game.fonts.tiny, self.garages())
+                          self.game.fonts.tiny, self.garages(), rain=self.weather.rain)
+            self.weather.draw(screen, self._frame_dt, view3d=True)
             self._draw_overlays(screen)
             return
         track = self.track
@@ -772,6 +870,8 @@ class Session:
         for obj in self.extra_objects():
             obj.draw(screen, off, self.time)
         self.fx.draw(screen, off)
+        focus = self.cars[self.cam_index]
+        self.weather.draw(screen, self._frame_dt, (focus.vel.x, focus.vel.y))
 
         for car in self.cars:
             sp = car.pos - off
@@ -818,6 +918,8 @@ class Session:
         if self.hide_hud and not self.paused:
             return
         self.game.hud.draw_session(screen, self)
+        if self.player is not None:
+            self.pit_menu.draw(screen, self.game.fonts, self.player, self)
         cam_car = self.cars[self.cam_index]
         if self.show_ai_info and isinstance(cam_car, AI_Car):
             self.game.hud.draw_network(screen, cam_car)
@@ -901,7 +1003,9 @@ class QualifyingSession(Session):
         self.message("Die Bestzeit bestimmt deinen Startplatz", (180, 180, 180), 3.5)
 
     def compound_for(self, car: Car) -> str:
-        return "soft"
+        if car.profile is self.config.player:
+            return self.config.start_compound
+        return Weather.best_compound(self.weather.wetness) or "soft"
 
     def on_lap_completed(self, car: Car, lap_time: float) -> None:
         super().on_lap_completed(car, lap_time)
@@ -997,7 +1101,7 @@ class RaceSession(Session):
         if p is None or p.autopilot is not None:
             return
         keys = pygame.key.get_pressed()
-        if keys[pygame.K_UP] or keys[pygame.K_w]:
+        if keys[pygame.K_UP] or keys[pygame.K_w] or self.game.controls.throttle_held():
             p.launch_spin = 1.2
             self.message("ZU FRÜH GAS - Räder drehen durch!", (255, 140, 30), 2.5)
         else:
@@ -1126,6 +1230,9 @@ class RaceSession(Session):
     def compound_for(self, car: Car) -> str:
         if car.profile is self.config.player:
             return self.config.start_compound
+        wet = Weather.best_compound(self.weather.wetness)
+        if wet:
+            return wet
         plan = self._compound_for_laps(self.total_laps)
         if plan != "soft" and random.random() < 0.3:
             plan = COMPOUND_ORDER[COMPOUND_ORDER.index(plan) - 1]
@@ -1178,6 +1285,8 @@ class RaceSession(Session):
         remaining = self.total_laps - car.laps_done
         if tyres is None or tyres.laps < 2 or remaining < 2 or tyres.wear_factor <= 0:
             return None
+        if tyres.compound.kind != "slick" or self.track.wetness > 0.15:
+            return None     # wet running: the weather call decides
         rate = self._wear_rate(car)
         cur = tyres.compound
         full = self.pit_loss(car)
@@ -1269,9 +1378,22 @@ class RaceSession(Session):
             self._player_pos = p
             self._last_order = order
 
+    def scrutineering(self) -> list[Car]:
+        """Post-race technical check: a skid block worn past the limit means disqualification."""
+        out = []
+        for car in self.cars:
+            if car.dnf or car.plank_per_lap <= 0 or car.plank_wear <= PLANK_LIMIT_MM:
+                continue
+            car.dnf = car.dsq = True
+            car.dsq_reason = f"Planke {car.plank_wear:.2f} mm abgenutzt (max. {PLANK_LIMIT_MM:.1f} mm)"
+            out.append(car)
+        return out
+
     def leader_gap(self, car: Car, leader: Car) -> str:
         if not self.race_started:
             return ""
+        if car.dsq:
+            return "DSQ"
         if car.dnf:
             return "DNF"
         if car is leader:

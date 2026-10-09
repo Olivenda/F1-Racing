@@ -114,6 +114,7 @@ class Track:
         self.definition = definition
         self.name = definition.name
         self.half_width = definition.half_width
+        self.wetness = 0.0      # set by the session's weather every step
         self.wall_limit = definition.half_width + definition.runoff
 
         raw = [Vector2(p) * (definition.scale * TRACK_SIZE) for p in definition.points]

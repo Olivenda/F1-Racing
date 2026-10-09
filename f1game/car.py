@@ -25,6 +25,13 @@ if TYPE_CHECKING:
     from .track import Track
 
 MARKERS_PER_LAP: int = 40
+# fuel and plank wear are scaled to the race distance so a 5-lap and a 50-lap race both behave like a full GP
+RACE_FUEL_KG: float = 100.0
+FUEL_ACCEL_LOSS: float = 0.0012     # per kg
+FUEL_GRIP_LOSS: float = 0.0003
+FUEL_BRAKE_LOSS: float = 0.0009
+PLANK_LIMIT_MM: float = 1.0
+PLANK_RACE_MM: float = 0.55         # neutral setup, clean driving, full race distance
 SECTOR_MARKERS: tuple[int, int] = (13, 26)
 
 
@@ -188,11 +195,22 @@ class Car:
         self.slip_target = 0.0
         self.straight_mode = False
         self.straight_mode_time = 0.0
+        self.fuel = 0.0                 # kg on board
+        self.fuel_per_lap = 0.0         # kg per lap at race pace; 0 = fuel not simulated
+        self.out_of_fuel = False
+        self.plank_wear = 0.0           # mm worn off the skid block
+        self.plank_per_lap = 0.0        # mm per lap for a neutral setup; 0 = not simulated
+        self.dsq = False
+        self.dsq_reason = ""
+        self.pit_plan: dict | None = None
+        self.lap_log: list[dict] = []
+        self._lap_log_start: dict | None = None
 
         self._sprite = build_car_sprite(self.color, profile.helmet)
         self._shadow = shadow_of(self._sprite)
         self._rot_cache: dict[int, pygame.Surface] = {}
         self.vmax = 0.0
+        self.lap_vmax = 0.0
 
     @property
     def forward(self) -> Vector2:
@@ -222,13 +240,29 @@ class Car:
         self.setup = setup
         self.sf = setup.factors() if setup is not None else NEUTRAL
 
+    def fill_fuel(self, laps: float, per_lap: float) -> None:
+        self.fuel_per_lap = per_lap
+        self.fuel = max(0.0, laps * per_lap)
+        self.out_of_fuel = False
+
+    @property
+    def fuel_laps(self) -> float:
+        return self.fuel / self.fuel_per_lap if self.fuel_per_lap > 0 else 99.0
+
+    @property
+    def fuel_factors(self) -> tuple[float, float, float]:
+        """(accel, grip, brake) multipliers for the weight of the fuel on board."""
+        f = self.fuel
+        return 1.0 - FUEL_ACCEL_LOSS * f, 1.0 - FUEL_GRIP_LOSS * f, 1.0 - FUEL_BRAKE_LOSS * f
+
     def performance(self) -> dict[str, float]:
         t, d, p, sf = self.tyres, self.damage, self.perf, self.sf
+        fa, fg, fb = self.fuel_factors
         return {
-            "grip": p.aero * sf.grip * (t.grip if t else 1.0) * d.grip_factor,
-            "accel": p.engine * sf.engine * (t.traction if t else 1.0) * d.engine_factor,
+            "grip": p.aero * sf.grip * (t.grip if t else 1.0) * d.grip_factor * fg,
+            "accel": p.engine * sf.engine * (t.traction if t else 1.0) * d.engine_factor * fa,
             "top": p.top_speed * min(sf.drag ** -0.5, sf.rev_limit) * (t.top_speed if t else 1.0) * d.top_speed_factor,
-            "brake": p.brakes * sf.brake * (t.braking if t else 1.0) * d.brake_factor,
+            "brake": p.brakes * sf.brake * (t.braking if t else 1.0) * d.brake_factor * fb,
         }
 
     @property
@@ -324,6 +358,8 @@ class Car:
         if self.pit_state is not None:
             return
 
+        if self.tyres is not None:
+            self.tyres.wetness = self.track.wetness
         fwd, right = self.forward, self.right
         vf = self.vel.dot(fwd)
         vl = self.vel.dot(right)
@@ -396,10 +432,28 @@ class Car:
         self.sliding = abs(vl2) > 60.0
         if vf2 > self.vmax:
             self.vmax = vf2
+        if vf2 > self.lap_vmax:
+            self.lap_vmax = vf2
         self.pos += self.vel * dt
         if self.tyres is not None:
             lateral_use = min(1.2, abs(vf2 * yaw_rate) / max(grip, 1.0))
             self.tyres.update(dt, lateral_use, self.brake, self.throttle, abs(vl2), abs(vf2) > 5.0)
+        if vf2 > 5.0 and not self.session_done:
+            self._consume(dt, vf2 / top)
+
+    def _consume(self, dt: float, speed_ratio: float) -> None:
+        lap_frac = self.speed_fwd * dt / self.track.length
+        if self.fuel_per_lap > 0 and not self.out_of_fuel:
+            # mostly distance based; lifting off still saves fuel (~0.8 is a typical lap's average throttle)
+            self.fuel = max(0.0, self.fuel - self.fuel_per_lap * lap_frac * (0.6 + 0.4 * self.throttle) / 0.92)
+            if self.fuel <= 0.0:
+                self.out_of_fuel = True
+        if self.plank_per_lap > 0:
+            # the skid block touches down when the car is compressed: high speed (downforce), braking dive,
+            # kerbs and grass; a heavy fuel load makes the car sit lower
+            load = 0.35 + 0.9 * speed_ratio * speed_ratio + 0.5 * self.brake * speed_ratio +                 (1.6 * speed_ratio if self.on_grass else 0.0)
+            load *= 1.0 + 0.003 * self.fuel
+            self.plank_wear += self.plank_per_lap * lap_frac * load / 1.35 * self.sf.plank
 
     def update_track_state(self, session: "Session") -> None:
         track = self.track
@@ -453,6 +507,7 @@ class Car:
         return self.current_splits[m] - self.best_splits[m]
 
     def start_timing(self, now: float) -> None:
+        self._lap_log_start = self._snapshot()
         self.timing_started = True
         self.lap_start_time = now
         self.sectors = []
@@ -471,6 +526,7 @@ class Car:
             self.tyres.laps += 1
         self.lap_times.append(lap)
         self.last_lap = lap
+        self._log_lap(lap)
         valid = not self.lap_invalid
         if not valid:
             self.invalid_laps.add(len(self.lap_times) - 1)
@@ -480,6 +536,26 @@ class Car:
             self.best_splits = self.current_splits
         self.current_splits = {}
         session.on_lap_completed(self, lap)
+
+    def _snapshot(self) -> dict:
+        t = self.tyres
+        return {"wear": t.wear if t else 0.0, "compound": t.compound.key if t else "", "fuel": self.fuel,
+                "plank": self.plank_wear, "pits": self.pit_stops}
+
+    def _log_lap(self, lap: float) -> None:
+        """Per-lap telemetry for the post-practice analysis."""
+        now = self._snapshot()
+        start = self._lap_log_start or now
+        pitted = now["pits"] != start["pits"]
+        self.lap_log.append({
+            "lap": len(self.lap_times), "time": lap, "valid": not self.lap_invalid, "compound": now["compound"],
+            "wear": now["wear"], "wear_delta": None if pitted else now["wear"] - start["wear"],
+            "fuel": now["fuel"], "fuel_used": None if pitted else start["fuel"] - now["fuel"],
+            "plank": now["plank"], "plank_delta": now["plank"] - start["plank"], "pit": pitted,
+            "vmax": self.lap_vmax * PX_PER_S_TO_KMH,
+        })
+        self._lap_log_start = now
+        self.lap_vmax = 0.0
 
     def current_lap_time(self, now: float) -> float | None:
         return now - self.lap_start_time if self.timing_started else None

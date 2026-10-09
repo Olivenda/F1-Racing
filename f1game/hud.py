@@ -11,6 +11,7 @@ import pygame
 
 from .settings import (CYAN, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PURPLE, PX_PER_S_TO_KMH,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
+from .car import PLANK_LIMIT_MM
 from .tyres import COMPOUNDS
 from .i18n import tr
 from .user_settings import speed_in
@@ -81,6 +82,7 @@ class HUD:
         else:
             self._delta_panel(screen, s)
         self._sectors(screen, s)
+        self._weather(screen, s)
         self._neutralization(screen, s)
         self._blue_flag(screen, s)
         self._messages(screen, s)
@@ -106,7 +108,7 @@ class HUD:
         if s.kind == "race":
             lap_txt = f"{min(p.laps_done + 1, s.total_laps)}/{s.total_laps}"
             if p.session_done:
-                lap_txt = "DNF" if p.dnf else "ZIEL"
+                lap_txt = "DSQ" if p.dsq else "DNF" if p.dnf else "ZIEL"
         elif s.kind == "qualifying":
             lap_txt = "IN" if p.session_done else ("OUT" if not p.timing_started else
                                                     f"{min(p.laps_done + 1, 3)}/3")
@@ -165,7 +167,7 @@ class HUD:
             if pen > 0:
                 draw_text(screen, f"+{pen:.0f}", f.tiny, ORANGE, (x + 108, ry + ty + 1), shadow=False)
             if car.dnf:
-                draw_text(screen, "DNF", val_font, (255, 80, 80), (x + 200, ry + ty), anchor="topright", shadow=False)
+                draw_text(screen, "DSQ" if car.dsq else "DNF", val_font, (255, 80, 80), (x + 200, ry + ty), anchor="topright", shadow=False)
                 continue
             if car.in_pit:
                 draw_text(screen, "BOX", val_font, ORANGE, (x + 200, ry + ty), anchor="topright", shadow=False)
@@ -213,6 +215,35 @@ class HUD:
             pygame.draw.rect(screen, col, (rect.x, rect.bottom - 4, rect.w, 4), border_radius=2)
             label = f"S{k + 1}  {t:.3f}" if t is not None else f"S{k + 1}"
             draw_text(screen, label, f.tiny, text_col, (rect.centerx, rect.y + 10), anchor="center", shadow=False)
+
+    def _weather(self, screen: pygame.Surface, s: "Session") -> None:
+        w = getattr(s, "weather", None)
+        if w is None or (w.mode == "dry" and w.wetness < 0.01):
+            return
+        f = self.f
+        x, y, bw, bh = 812, 14, 200, 50
+        draw_panel(screen, (x, y, bw, bh))
+        # cloud with rain drops / sun
+        cx, cy = x + 24, y + 22
+        if w.rain > 0.05 or w.wetness > 0.2:
+            for dx, r in ((-7, 7), (0, 9), (8, 7)):
+                pygame.draw.circle(screen, (170, 178, 192), (cx + dx, cy - 2), r)
+            for k in range(min(4, 1 + int(w.rain * 4))):
+                px = cx - 9 + k * 6
+                pygame.draw.line(screen, (90, 150, 255), (px, cy + 9), (px - 2, cy + 15), 2)
+        else:
+            pygame.draw.circle(screen, (255, 200, 40), (cx, cy), 8)
+        col = (90, 150, 255) if w.wetness > 0.22 else WHITE
+        draw_text(screen, w.label(), f.small_bold, col, (x + 46, y + 6), shadow=False)
+        sub = f"Strecke {w.wetness * 100:.0f}% nass"
+        eta = w.eta_rain()
+        if eta is not None:
+            sub = f"Regen in ~{eta:.0f}s"
+        else:
+            dry = w.eta_dry()
+            if dry is not None and dry < 90:
+                sub += f" · Ende ~{dry:.0f}s"
+        draw_text(screen, sub, f.tiny, (180, 180, 190), (x + 46, y + 28), shadow=False)
 
     def _neutralization(self, screen: pygame.Surface, s: "Session") -> None:
         rc = getattr(s, "rc", None)
@@ -320,8 +351,8 @@ class HUD:
             draw_panel(screen, (cx - 150, py, 300, 70), (60, 45, 0), 220)
             limit, unit = speed_in(100.0, self.units)
             draw_text(screen, f"PIT LIMITER  {limit:.0f} {unit}", f.medium, (255, 210, 40), (cx, py + 20), anchor="center")
-            sub = (f"Reifenwechsel ... {car.pit_stop_timer:3.1f}s" if car.pit_stop_timer > 0
-                   else f"-> {COMPOUNDS[car.pit_compound].name}")
+            sub = (f"Boxenstopp ... {car.pit_stop_timer:3.1f}s" if car.pit_stop_timer > 0
+                   else f"-> {COMPOUNDS[car.pit_compound].name}" if car.pit_compound in COMPOUNDS else "-> Box")
             draw_text(screen, sub, f.small_bold, WHITE, (cx, py + 50), anchor="center")
         if getattr(car, "brake_assist_active", False):
             draw_text(screen, "BREMSHILFE", f.small_bold, (255, 90, 90), (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 110),
@@ -379,7 +410,27 @@ class HUD:
         if d.front_wing > 0.4 or d.suspension > 0.35:
             return "Schaden am Auto! Box für Reparatur empfohlen.", (255, 90, 90)
         if car.pit_request:
-            return f"Box, Box! {COMPOUNDS[car.pit_request].name}-Reifen sind bereit.", ORANGE
+            if car.pit_request in COMPOUNDS:
+                return f"Box, Box! {COMPOUNDS[car.pit_request].name}-Reifen sind bereit.", ORANGE
+            return "Box, Box! Die Crew ist bereit.", ORANGE
+        if car.out_of_fuel:
+            return "Kein Sprit mehr! Auto ausrollen lassen.", (255, 90, 90)
+        call = s.weather_tyre_call(car) if hasattr(s, "weather_tyre_call") else None
+        if call == "inter":
+            return "Strecke ist nass - Box für Intermediates! (B)", (90, 150, 255)
+        if call == "wet":
+            return "Starkregen - wir brauchen Full Wets! (B)", (90, 150, 255)
+        if call is not None:
+            return "Strecke trocknet ab - Slicks sind jetzt schneller! (B)", YELLOW
+        w = getattr(s, "weather", None)
+        if w is not None:
+            eta = w.eta_rain(60.0)
+            if eta is not None:
+                return f"Regen kommt in ca. {eta:.0f} Sekunden.", (90, 150, 255)
+        if car.fuel_per_lap > 0 and remaining is not None and remaining > 0 and                 car.fuel_laps < remaining - (car.distance % s.track.length) / s.track.length - 0.05:
+            return "Sprit reicht nicht! Lift and Coast oder zum Tanken an die Box.", (255, 90, 90)
+        if car.plank_per_lap > 0 and car.plank_wear > 0.85 * PLANK_LIMIT_MM and s.kind == "race":
+            return "Planke fast am Limit! Randsteine meiden, sonst Disqualifikation.", (255, 90, 90)
         if t is not None and t.wear > 0.8:
             return "Reifen sind am Ende - jetzt reinkommen!", (255, 90, 90)
         if getattr(s, "blue_flag", 0) > 0:
@@ -404,7 +455,7 @@ class HUD:
         f = self.f
         car = s.focus
         standings = s.standings()
-        x, y, w, h = SCREEN_WIDTH - 256, 322, 240, 246
+        x, y, w, h = SCREEN_WIDTH - 256, 322, 240, 254
         draw_panel(screen, (x, y, w, h))
         pygame.draw.rect(screen, car.color, (x, y, w, 4), border_radius=3)
         pos = standings.index(car) + 1
@@ -466,6 +517,19 @@ class HUD:
             worst = max(v for _, v in parts)
             draw_text(screen, text[:40], f.tiny, (255, 90, 90) if worst > 0.4 else YELLOW, (x + 12, cy), shadow=False)
         cy += 20
+        if car.fuel_per_lap > 0 or car.plank_per_lap > 0:
+            if car.fuel_per_lap > 0:
+                need = (remaining - (car.distance % s.track.length) / s.track.length) if remaining else None
+                short = need is not None and car.fuel_laps < need - 0.05
+                fcol = (255, 90, 90) if car.out_of_fuel or short else YELLOW if car.fuel_laps < 1.5 else WHITE
+                ftxt = f"Sprit {car.fuel:.1f} kg · " + (f"Reserve {car.fuel_laps - need:+.1f}" if need is not None
+                                                        else f"{car.fuel_laps:.1f} Rd.")
+                draw_text(screen, ftxt, f.tiny, fcol, (x + 12, cy), shadow=False)
+            if car.plank_per_lap > 0:
+                pw = car.plank_wear
+                pcol = (255, 90, 90) if pw > PLANK_LIMIT_MM else YELLOW if pw > 0.8 * PLANK_LIMIT_MM else                     (150, 200, 160)
+                draw_text(screen, f"Planke {pw:.2f}", f.tiny, pcol, (x + w - 12, cy), anchor="topright", shadow=False)
+            cy += 20
         gap, trend = self._gap_trend(s, car, standings)
         if s.kind == "race" and gap is not None:
             trend_txt = "" if trend is None else (f"  ({trend:+.1f}/Rd.)")
@@ -476,8 +540,6 @@ class HUD:
             info.append(f"Stopps {car.pit_stops}")
         if s.kind == "race" and car.tl_count:
             info.append(f"Track Limits {car.tl_count}/{5}")
-        if car.last_lap:
-            info.append(f"Letzte {format_time(car.last_lap)[2:]}")
         if car.vmax > 30:
             vmax, unit = speed_in(car.vmax * PX_PER_S_TO_KMH, s.game.settings.units)
             info.append(f"Vmax {vmax:.0f}")
