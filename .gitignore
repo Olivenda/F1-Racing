@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+data/careers/
+data/recordings/
+data/championship.json
+data/records.json
+data/settings.json
+data/setups.json
+data/brains/*.bak*

@@ -1,0 +1,13 @@
+[
+  {"name": "Red Cow",        "color": [54, 113, 198],  "engine": 1.03, "aero": 1.03, "top_speed": 1.01, "brakes": 1.02, "tyre_wear": 0.98},
+  {"name": "Papaya GP",      "color": [255, 128, 0],   "engine": 1.02, "aero": 1.04, "top_speed": 1.00, "brakes": 1.01, "tyre_wear": 0.95},
+  {"name": "Scuderia Rosso", "color": [232, 0, 45],    "engine": 1.03, "aero": 1.01, "top_speed": 1.03, "brakes": 1.00, "tyre_wear": 1.04},
+  {"name": "Silver Arrow",   "color": [0, 245, 208],   "engine": 1.02, "aero": 1.02, "top_speed": 1.01, "brakes": 1.01, "tyre_wear": 0.97},
+  {"name": "Anton Martino",  "color": [0, 106, 78],    "engine": 1.00, "aero": 1.00, "top_speed": 1.00, "brakes": 1.00, "tyre_wear": 1.00},
+  {"name": "William",        "color": [50, 103, 212],  "engine": 1.01, "aero": 0.98, "top_speed": 1.02, "brakes": 0.99, "tyre_wear": 1.01},
+  {"name": "Young Bull",     "color": [7, 11, 54],     "engine": 1.01, "aero": 0.99, "top_speed": 1.00, "brakes": 1.00, "tyre_wear": 1.00},
+  {"name": "Bleu Alpine",    "color": [0, 161, 225],   "engine": 0.98, "aero": 1.00, "top_speed": 0.99, "brakes": 1.00, "tyre_wear": 1.02},
+  {"name": "Hase",           "color": [223, 225, 225], "engine": 0.99, "aero": 0.98, "top_speed": 1.00, "brakes": 0.99, "tyre_wear": 1.05},
+  {"name": "Four Rings",     "color": [235, 69, 38],   "engine": 0.98, "aero": 0.98, "top_speed": 0.99, "brakes": 0.99, "tyre_wear": 1.00},
+  {"name": "Caddy",          "color": [170, 170, 173], "engine": 0.97, "aero": 0.97, "top_speed": 0.98, "brakes": 0.98, "tyre_wear": 1.03}
+]

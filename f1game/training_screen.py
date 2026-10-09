@@ -1,0 +1,281 @@
+# Copyright Olivenda (Oliver Petz) 2026
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING
+
+import pygame
+from pygame.math import Vector2
+
+from .hud import draw_network
+from .profiles import recording_stats
+from .settings import CYAN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW
+from .track import Track
+from .training import REWARD_STYLES, Trainer
+from .utils import draw_panel, draw_text
+
+if TYPE_CHECKING:
+    from .game import Game
+
+MODES = ["base", "balanced", "aggressive", "cautious", "clone"]
+DEFAULT_GENS = {"base": 60, "balanced": 20, "aggressive": 20, "cautious": 20, "clone": 15}
+
+
+class TrainingScreen:
+    ROWS = ["Modus", "Generationen", "Population", "START"]
+    FRAME_BUDGET = 0.028
+    TURBO_BUDGET = 0.075
+
+    def __init__(self, game: "Game") -> None:
+        self.game = game
+        self.sel = 3
+        self.mode_i = 0
+        self.gens = DEFAULT_GENS["base"]
+        self.population = 40
+        self.trainer: Trainer | None = None
+        self.error: str | None = None
+        self.log: list[str] = []
+        self.turbo = False
+        self.started_at = 0.0
+        self._overview: dict[str, tuple[pygame.Surface, float, Vector2]] = {}
+        self.rec_files, self.rec_samples = recording_stats()
+
+    @property
+    def mode(self) -> str:
+        return MODES[self.mode_i]
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type != pygame.KEYDOWN:
+            return
+        if self.trainer is not None:
+            if event.key == pygame.K_t:
+                self.turbo = not self.turbo
+            elif event.key == pygame.K_ESCAPE or (self.trainer.done and event.key == pygame.K_RETURN):
+                self._leave()
+            return
+        if event.key == pygame.K_ESCAPE:
+            self.game.go_to_menu()
+        elif event.key in (pygame.K_UP, pygame.K_w):
+            self.sel = (self.sel - 1) % len(self.ROWS)
+        elif event.key in (pygame.K_DOWN, pygame.K_s):
+            self.sel = (self.sel + 1) % len(self.ROWS)
+        elif event.key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_a, pygame.K_d):
+            d = -1 if event.key in (pygame.K_LEFT, pygame.K_a) else 1
+            row = self.ROWS[self.sel]
+            if row == "Modus":
+                self.mode_i = (self.mode_i + d) % len(MODES)
+                self.gens = DEFAULT_GENS[self.mode]
+            elif row == "Generationen":
+                self.gens = max(2, min(300, self.gens + d * 5))
+            elif row == "Population":
+                self.population = max(16, min(96, self.population + d * 8))
+        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+            self._start()
+
+    def _start(self) -> None:
+        self.error = None
+        if self.mode != "base" and self.mode != "clone" and not self.game.brains.has("base"):
+            self.error = "Zuerst das Basis-Netz trainieren."
+            return
+        tracks = list(self.game.tracks.values())
+        try:
+            self.trainer = Trainer(self.mode, tracks, self.gens, self.population, self.game.brains,
+                                   log=self._log)
+        except (ValueError, FileNotFoundError) as exc:
+            self.error = str(exc)
+            self.trainer = None
+            return
+        self.started_at = time.time()
+
+    def _log(self, msg: str) -> None:
+        self.log.append(msg)
+        self.log = self.log[-9:]
+
+    def _leave(self) -> None:
+        if self.trainer is not None and self.trainer.done:
+            self.game.reload_brains()
+        self.game.go_to_menu()
+
+    def update(self, dt: float) -> None:
+        tr = self.trainer
+        if tr is None or tr.done:
+            return
+        budget = self.TURBO_BUDGET if self.turbo else self.FRAME_BUDGET
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < budget and not tr.done:
+            tr.step(40)
+
+    def _overview_for(self, track: Track, box: pygame.Rect) -> tuple[pygame.Surface, float, Vector2]:
+        key = track.definition.key
+        if key not in self._overview:
+            surf = pygame.Surface(box.size, pygame.SRCALPHA)
+            scale, off = track.minimap_transform(pygame.Rect(0, 0, box.w, box.h), pad=20)
+            pts = [(p.x * scale + off.x, p.y * scale + off.y) for p in track.center]
+            w = max(3, int(track.half_width * 2 * scale))
+            for p in pts:
+                pygame.draw.circle(surf, (70, 72, 80), p, w / 2 + 2)
+            for p in pts:
+                pygame.draw.circle(surf, (48, 50, 56), p, w / 2)
+            s0 = track.center[0] * scale + off
+            n0 = track.normals[0] * (w / 2)
+            pygame.draw.line(surf, WHITE, s0 - n0, s0 + n0, 2)
+            self._overview[key] = (surf, scale, off)
+        return self._overview[key]
+
+    def draw(self, screen: pygame.Surface) -> None:
+        screen.fill((14, 15, 20))
+        if self.trainer is None:
+            self._draw_setup(screen)
+        else:
+            self._draw_training(screen)
+
+    def _draw_setup(self, screen: pygame.Surface) -> None:
+        f = self.game.fonts
+        pygame.draw.rect(screen, (40, 110, 200), (60, 40, 8, 60))
+        draw_text(screen, "KI-TRAINING", f.big, WHITE, (84, 36))
+        draw_text(screen, "Neuroevolution: Netze fahren, die besten vererben ihre Gewichte weiter.", f.small, GREY,
+                  (86, 86))
+        px, py, pw = 60, 140, 560
+        draw_panel(screen, (px, py, pw, 330), PANEL, 220)
+        values = {"Modus": REWARD_STYLES[self.mode].title, "Generationen": str(self.gens),
+                  "Population": f"{self.population} Netze"}
+        for i, row in enumerate(self.ROWS):
+            ry = py + 16 + i * 66
+            sel = i == self.sel
+            if row == "START":
+                col = (40, 110, 200) if sel else (20, 50, 90)
+                pygame.draw.rect(screen, col, (px + 20, ry + 8, pw - 40, 54), border_radius=8)
+                draw_text(screen, "TRAINING STARTEN", f.large, WHITE, (px + pw // 2, ry + 35), anchor="center")
+                continue
+            if sel:
+                pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, 56), border_radius=6)
+                pygame.draw.rect(screen, (40, 110, 200), (px + 12, ry, 5, 56), border_radius=2)
+                draw_text(screen, "<  >", f.large, YELLOW, (px + pw - 40, ry + 28), anchor="midright")
+            draw_text(screen, row.upper(), f.tiny, GREY, (px + 30, ry + 8), shadow=False)
+            draw_text(screen, values[row], f.medium, WHITE, (px + 30, ry + 24), shadow=False)
+
+        info = pygame.Rect(650, 140, 570, 330)
+        draw_panel(screen, info, PANEL, 220)
+        style = REWARD_STYLES[self.mode]
+        draw_text(screen, style.title.upper(), f.large, WHITE, (info.x + 20, info.y + 16))
+        draw_text(screen, style.description, f.small, (200, 200, 205), (info.x + 20, info.y + 58))
+        lines = ["Belohnungsfunktion (Fitness):",
+                 "  + gefahrene Strecke (px)",
+                 f"  - {style.w_wall} x Mauer-Aufprallimpuls,  - 150 x Sek. neben der Strecke",
+                 "  - 400 pro Unfall,  - 250 pro Track-Limits-Verstoß"]
+        if style.w_car or style.w_gain:
+            lines += [f"  - {style.w_car} x Auto-Kontaktimpuls",
+                      f"  + {style.w_gain:.0f} x gewonnene Positionen",
+                      f"  {'+' if style.w_tailgate >= 0 else '-'} {abs(style.w_tailgate):.0f} x Sek. dicht hinter Gegner"]
+        if self.mode == "clone":
+            lines += ["", f"Trainingsdaten: {self.rec_files} Aufnahmen, {self.rec_samples} Samples",
+                      "Jede deiner Sessions wird automatisch aufgezeichnet."]
+        lines += ["", f"Ergebnis: data/brains/{self.mode}.json (Backup der alten Datei)"]
+        for i, line in enumerate(lines):
+            draw_text(screen, line, f.mono, (210, 210, 215), (info.x + 20, info.y + 96 + i * 21), shadow=False)
+        if self.error:
+            draw_text(screen, self.error, f.small_bold, (255, 110, 110), (60, 490))
+        draw_text(screen, "ENTER Start · ESC zurück · Pfeiltasten wählen", f.small, GREY,
+                  (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30), anchor="center")
+
+    def _draw_training(self, screen: pygame.Surface) -> None:
+        f = self.game.fonts
+        tr = self.trainer
+        assert tr is not None
+        view = tr.view
+        world = pygame.Rect(16, 16, 800, 470)
+        draw_panel(screen, world, PANEL, 230)
+        if view is not None and not self.turbo:
+            surf, scale, off = self._overview_for(view.track, world)
+            screen.blit(surf, world)
+            leader = view.leader()
+            for car, alive in zip(view.cars, view.alive):
+                p = Vector2(world.x + car.pos.x * scale + off.x, world.y + car.pos.y * scale + off.y)
+                fwd = car.forward
+                tip, back = p + fwd * 7, p - fwd * 5
+                side = Vector2(-fwd.y, fwd.x) * 4
+                col = car.color if alive else (90, 90, 95)
+                pygame.draw.polygon(screen, col, [tip, back + side, back - side])
+            lp = Vector2(world.x + leader.pos.x * scale + off.x, world.y + leader.pos.y * scale + off.y)
+            pygame.draw.circle(screen, YELLOW, lp, 12, 2)
+            draw_text(screen, f"{view.track.name} · {'Rennen mit Kollisionen' if view.traffic else 'Solo (Geister)'}"
+                              f" · {sum(view.alive)}/{len(view.cars)} aktiv · t={view.time:4.1f}s",
+                      f.small_bold, WHITE, (world.x + 14, world.y + 10))
+        elif self.turbo:
+            draw_text(screen, "TURBO - Darstellung aus, volle Rechenleistung fürs Training", f.medium, YELLOW,
+                      world.center, anchor="center")
+
+        st = pygame.Rect(832, 16, 432, 150)
+        draw_panel(screen, st, PANEL, 230)
+        draw_text(screen, REWARD_STYLES[tr.mode].title.upper(), f.medium, CYAN, (st.x + 14, st.y + 10))
+        gen_shown = min(tr.generation + 1, tr.target_generations)
+        draw_text(screen, f"Generation {gen_shown}/{tr.target_generations}", f.large, WHITE, (st.x + 14, st.y + 38))
+        elapsed = time.time() - self.started_at
+        draw_text(screen, f"Lauf {tr.task_index}/{tr.task_total} · Population {tr.pop_size} · "
+                          f"{tr.champion.parameter_count if tr.champion else tr.population[0].parameter_count} Gewichte",
+                  f.tiny, GREY, (st.x + 14, st.y + 80), shadow=False)
+        draw_text(screen, f"Echtzeit {elapsed / 60:4.1f} min · simuliert {tr.sim_time / 60:5.1f} min "
+                          f"(x{tr.sim_time / max(elapsed, 1e-6):.0f})", f.tiny, GREY, (st.x + 14, st.y + 98),
+                  shadow=False)
+        prog = (tr.generation + tr.task_index / max(1, tr.task_total)) / tr.target_generations
+        pygame.draw.rect(screen, (45, 45, 52), (st.x + 14, st.y + 122, st.w - 28, 10), border_radius=4)
+        pygame.draw.rect(screen, (40, 110, 200), (st.x + 14, st.y + 122, (st.w - 28) * min(1, prog), 10),
+                         border_radius=4)
+
+        lg = pygame.Rect(832, 176, 432, 310)
+        draw_panel(screen, lg, PANEL, 230)
+        draw_text(screen, "PROTOKOLL", f.tiny, GREY, (lg.x + 14, lg.y + 8), shadow=False)
+        y = lg.y + 28
+        for line in self.log:
+            for chunk in _chunks(line, 58):
+                draw_text(screen, chunk, f.tiny, (210, 210, 215), (lg.x + 14, y), shadow=False)
+                y += 17
+
+        self._draw_chart(screen, pygame.Rect(16, 498, 520, 206))
+        nn = pygame.Rect(548, 498, 716, 206)
+        draw_panel(screen, nn, PANEL, 230)
+        if view is not None and not self.turbo:
+            draw_text(screen, "NETZ DES FÜHRENDEN GENOMS (live)", f.tiny, GREY, (nn.x + 12, nn.y + 8), shadow=False)
+            draw_network(screen, nn.inflate(-24, -30).move(0, 8), view.leader().driver.net, f.tiny)
+
+        if tr.done:
+            shade = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            shade.fill((0, 0, 0, 170))
+            screen.blit(shade, (0, 0))
+            draw_text(screen, "TRAINING ABGESCHLOSSEN", f.big, WHITE, (SCREEN_WIDTH // 2, 290), anchor="center")
+            draw_text(screen, f"Gespeichert: {tr.saved_path}", f.small, GREY, (SCREEN_WIDTH // 2, 340),
+                      anchor="center")
+            draw_text(screen, "ENTER: zurück zum Menü (neue Gehirne werden sofort verwendet)", f.medium, CYAN,
+                      (SCREEN_WIDTH // 2, 390), anchor="center")
+        else:
+            draw_text(screen, "T Turbo · ESC abbrechen (ohne Speichern)", f.tiny, GREY,
+                      (SCREEN_WIDTH - 20, SCREEN_HEIGHT - 8), anchor="bottomright")
+
+    def _draw_chart(self, screen: pygame.Surface, rect: pygame.Rect) -> None:
+        f = self.game.fonts
+        tr = self.trainer
+        assert tr is not None
+        draw_panel(screen, rect, PANEL, 230)
+        draw_text(screen, "FITNESS PRO GENERATION", f.tiny, GREY, (rect.x + 12, rect.y + 8), shadow=False)
+        draw_text(screen, "beste", f.tiny, YELLOW, (rect.right - 110, rect.y + 8), shadow=False)
+        draw_text(screen, "Durchschnitt", f.tiny, (90, 160, 255), (rect.right - 70, rect.y + 8), shadow=False)
+        hist = tr.history
+        if len(hist) < 2:
+            draw_text(screen, "Kurve erscheint nach der 2. Generation", f.small, GREY, rect.center, anchor="center")
+            return
+        area = rect.inflate(-40, -50).move(8, 10)
+        lo = min(min(h["mean"] for h in hist), 0.0)
+        hi = max(h["best"] for h in hist)
+        span = max(1.0, hi - lo)
+        pygame.draw.line(screen, (60, 60, 70), area.bottomleft, area.bottomright)
+        for key, col in (("mean", (90, 160, 255)), ("best", YELLOW)):
+            pts = [(area.x + area.w * i / (len(hist) - 1), area.bottom - area.h * (h[key] - lo) / span)
+                   for i, h in enumerate(hist)]
+            pygame.draw.lines(screen, col, False, pts, 2)
+        draw_text(screen, f"{hi:.0f}", f.tiny, GREY, (rect.x + 6, area.y - 4), shadow=False)
+        draw_text(screen, f"{lo:.0f}", f.tiny, GREY, (rect.x + 6, area.bottom - 10), shadow=False)
+
+
+def _chunks(text: str, width: int) -> list[str]:
+    return [text[i:i + width] for i in range(0, len(text), width)] or [""]
