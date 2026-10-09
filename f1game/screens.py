@@ -13,11 +13,11 @@ from .championship import FORMATS, Championship
 from .profiles import recording_stats
 from .sound import VOLUMES
 from .tyres import COMPOUND_ORDER, COMPOUNDS
-from .user_settings import ASSIST_NAMES, DAMAGE_MODES, TYRE_WEAR_MODES
-from .settings import (CYAN, DIFFICULTY_LEVELS, F1_RED, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH,
-                       WHITE, YELLOW)
+from .user_settings import ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, TYRE_WEAR_MODES, UNITS, speed_in
+from .settings import (CYAN, DIFFICULTY_LEVELS, F1_RED, GREEN, GREY, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
+                       SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .track import TRACK_DEFS
-from .i18n import LANGUAGES, set_language
+from .i18n import LANGUAGES, set_language, tr
 from .utils import clear_render_caches, draw_panel, draw_text, format_time, vertical_gradient
 
 if TYPE_CHECKING:
@@ -39,6 +39,7 @@ MODE_HINTS: dict[str, str] = {
 
 
 def _wrap(text: str, font: pygame.font.Font, width: int) -> list[str]:
+    text = tr(text)
     lines, line = [], ""
     for word in text.split():
         trial = f"{line} {word}".strip()
@@ -57,6 +58,7 @@ def session_dnf(car) -> bool:
 
 
 def _fit(text: str, font: pygame.font.Font, width: int) -> str:
+    text = tr(text)
     if font.size(text)[0] <= width:
         return text
     while text and font.size(text + "...")[0] > width:
@@ -273,8 +275,20 @@ class SetupScreen:
                 self._open_garage()
             else:
                 self.sel = self.rows.index("START")
+        elif event.key == pygame.K_r and not self.spectator:
+            self._random_race()
         elif event.key == pygame.K_ESCAPE:
             self.game.go_to_menu()
+
+    def _random_race(self) -> None:
+        import random
+        c = self.c
+        c["track"] = random.randrange(len(TRACK_DEFS))
+        c["team"] = random.randrange(max(1, len(self.game.teams)))
+        c["tyre"] = random.randrange(len(COMPOUND_ORDER))
+        c["mode"] = next((k for k, m in enumerate(self.modes) if m[0] == "race"), c["mode"])
+        self.game.start_weekend(TRACK_DEFS[c["track"]].key, self.modes[c["mode"]][0], c["laps"],
+                                self.diffs[c["diff"]], c["opponents"])
 
     def _open_garage(self) -> None:
         game = self.game
@@ -358,6 +372,9 @@ class SetupScreen:
                    f"{'3D' if st.view3d else '2D'} · Schaden {DAMAGE_MODES[st.damage]} · "
                    f"Reifenverschleiß {TYRE_WEAR_MODES[st.tyre_wear][0]}")
         draw_text(screen, summary, f.tiny, (120, 200, 255), (px, py + 534), shadow=False)
+        if not self.spectator:
+            draw_text(screen, "R: Zufallsrennen (Strecke, Team, Reifen)", f.tiny, YELLOW, (px, py + 554),
+                      shadow=False)
         self._draw_track_preview(screen)
         self._draw_roster(screen)
 
@@ -456,7 +473,8 @@ class SetupScreen:
 class SettingsScreen:
 
     ROWS = ["Sprache", "Spielername", "Fahrhilfen", "Ansicht", "Schaden", "Reifenverschleiß", "Safety Car",
-            "TV-Regie (Zuschauer)", "Sound", "FPS anzeigen", "Vollbild", "ZURÜCK"]
+            "TV-Regie (Zuschauer)", "Sound", "Einheiten", "Partikel & Effekte", "Bildrate", "FPS anzeigen",
+            "Vollbild", "ZURÜCK"]
     HELP = {
         "Spielername": "Tippen zum Ändern, Rücktaste löscht. Erscheint in Zeitentabellen und auf dem Podium.",
         "Fahrhilfen": "Mittel: Stabilitätskontrolle + farbige Bremslinie. Voll: zusätzlich automatische "
@@ -469,9 +487,14 @@ class SettingsScreen:
         "Sprache": "Sprache des Spiels / game language. Standard: English.",
         "Safety Car": "Bei Ausfällen und schweren Unfällen: Safety Car (Feld fährt geschlossen hinter dem SC, "
                       "Restart) oder Virtuelles Safety Car (alle langsamer). Gelbe Flaggen, Reifenschäden.",
-        "Sound": "Motor (Tonhöhe folgt der Drehzahl), Reifenquietschen, Einschläge und Startampel - "
-                 "alles live erzeugt, ohne Audiodateien.",
+        "Sound": "V6-Turbo-Motor mit Zündfolge, Turbopfeifen, Getriebesurren, Schaltrucken und Fehlzündungen "
+                 "beim Gaswegnehmen, Reifenquietschen, Kies, Fahrtwind, Einschläge und Startampel - Gegner in "
+                 "Stereo mit Dopplereffekt. Alles live erzeugt, ohne Audiodateien.",
         "FPS anzeigen": "Bildrate unten rechts einblenden (im Rennen auch mit F3).",
+        "Einheiten": "Geschwindigkeit in km/h oder mph - im HUD, in der Garage und in der Analyse.",
+        "Partikel & Effekte": "Reifenrauch, Funken bei Einschlägen, Staub neben der Strecke und Bremsspuren auf "
+                              "dem Asphalt.",
+        "Bildrate": "Höhere Bildrate = flüssiger, braucht mehr Rechenleistung.",
         "Vollbild": "Skaliert das Spiel auf den ganzen Bildschirm.",
         "ZURÜCK": "Einstellungen werden automatisch gespeichert.",
     }
@@ -499,6 +522,9 @@ class SettingsScreen:
             "Safety Car": "An" if st.safety_car else "Aus",
             "Sprache": LANGUAGES.get(st.language, "English"),
             "FPS anzeigen": "An" if st.show_fps else "Aus",
+            "Einheiten": UNITS[st.units][0],
+            "Partikel & Effekte": EFFECT_LEVELS[st.effects],
+            "Bildrate": f"{st.fps} FPS",
             "Vollbild": "An" if st.fullscreen else "Aus",
         }.get(row, "")
 
@@ -533,6 +559,13 @@ class SettingsScreen:
             self.game.sound.set_volume(st.sound)
         elif row == "FPS anzeigen":
             st.show_fps = not st.show_fps
+        elif row == "Einheiten":
+            st.units = "mph" if st.units == "kmh" else "kmh"
+        elif row == "Partikel & Effekte":
+            keys = list(EFFECT_LEVELS)
+            st.effects = keys[(keys.index(st.effects) + delta) % len(keys)]
+        elif row == "Bildrate":
+            st.fps = FPS_OPTIONS[(FPS_OPTIONS.index(st.fps) + delta) % len(FPS_OPTIONS)]
         elif row == "Vollbild":
             st.fullscreen = not st.fullscreen
             self.game.apply_display()
@@ -584,24 +617,26 @@ class SettingsScreen:
         pygame.draw.rect(screen, (200, 200, 210), (60, 40, 8, 60))
         draw_text(screen, "EINSTELLUNGEN", f.big, WHITE, (84, 36))
         draw_text(screen, "Gespeichert in data/settings.json", f.small, GREY, (86, 86))
-        px, py, pw = 60, 140, 640
-        draw_panel(screen, (px, py, pw, 540), PANEL, 215)
+        px, py, pw = 60, 124, 640
+        draw_panel(screen, (px, py, pw, 560), PANEL, 215)
+        rh = min(41, (560 - 20) // len(self.ROWS))
         for i, row in enumerate(self.ROWS):
-            ry = py + 10 + i * 41
+            ry = py + 10 + i * rh
             selected = i == self.sel
             if row == "ZURÜCK":
                 col = (120, 120, 130) if selected else (50, 50, 58)
-                pygame.draw.rect(screen, col, (px + 20, ry + 8, pw - 40, 40), border_radius=8)
-                draw_text(screen, "ZURÜCK", f.medium, WHITE, (px + pw // 2, ry + 28), anchor="center")
+                pygame.draw.rect(screen, col, (px + 20, ry + 4, pw - 40, rh - 4), border_radius=8)
+                draw_text(screen, "ZURÜCK", f.medium, WHITE, (px + pw // 2, ry + 2 + rh // 2), anchor="center")
                 continue
             if selected:
-                pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, 42), border_radius=6)
-                pygame.draw.rect(screen, (200, 200, 210), (px + 12, ry, 5, 42), border_radius=2)
-            draw_text(screen, row.upper(), f.tiny, GREY, (px + 28, ry + 14), shadow=False)
+                pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, rh - 2), border_radius=6)
+                pygame.draw.rect(screen, (200, 200, 210), (px + 12, ry, 5, rh - 2), border_radius=2)
+            mid = ry + (rh - 2) // 2
+            draw_text(screen, row.upper(), f.tiny, GREY, (px + 28, mid), anchor="midleft", shadow=False)
             draw_text(screen, self._value(row), f.small_bold, CYAN if row == "Spielername" else WHITE,
-                      (px + 250, ry + 11), shadow=False)
+                      (px + 250, mid), anchor="midleft", shadow=False)
             if selected and row != "Spielername":
-                draw_text(screen, "<  >", f.medium, YELLOW, (px + pw - 24, ry + 21), anchor="midright")
+                draw_text(screen, "<  >", f.medium, YELLOW, (px + pw - 24, mid), anchor="midright")
         hb = pygame.Rect(730, 140, 510, 200)
         draw_panel(screen, hb, PANEL, 215)
         draw_text(screen, self.rows_sel.upper(), f.medium, WHITE, (hb.x + 18, hb.y + 16))
@@ -691,7 +726,7 @@ class PodiumScreen:
         self.player_place = order.index(session.player) + 1 if session.player is not None else 0
         gains = [(c.grid_slot - (k + 1), -k, c) for k, c in enumerate(order) if not c.dnf and c.grid_slot]
         self.driver_of_day = max(gains, key=lambda g: (g[0], g[1]))[::2] if gains else None
-        self.sprites = [pygame.transform.rotozoom(build_car_sprite(c.color, c.profile.helmet), 90, 3.0)
+        self.sprites = [pygame.transform.rotozoom(build_car_sprite(c.color, c.profile.helmet, 3.0), 90, 1.0)
                         for c in self.podium]
         self.bg = _Background()
         self.t = 0.0
@@ -1095,6 +1130,10 @@ class AnalysisScreen:
             self.facts.append(("Meiste Plätze gewonnen", f"{best_gain[1].short} +{best_gain[0]}"))
         if losses and losses[0] < 0:
             self.facts.append(("Meiste Plätze verloren", f"{losses[1].short} {losses[0]}"))
+        trap = max(order, key=lambda c: c.vmax, default=None)
+        if trap is not None and trap.vmax > 0:
+            v, unit = speed_in(trap.vmax * PX_PER_S_TO_KMH, game.settings.units)
+            self.facts.append(("Speedtrap", f"{trap.short} {v:.0f} {unit}"))
         stops = sum(c.pit_stops for c in order)
         self.facts.append(("Boxenstopps gesamt", str(stops)))
         dnfs = [c.short for c in order if c.dnf]

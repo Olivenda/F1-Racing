@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from .career_events import (DRIVER_PRESS, TEAM_PRESS, base_reliability, goal_met, make_weekend_goal,
                             pick_press, sponsor_offers, sponsor_payout)
+from .career_achievements import ACHIEVEMENTS, make_rookie, newly_unlocked
 from .championship import POINTS, Championship
 from .profiles import (DATA_DIR, DriverProfile, Team, load_pool, player_profile, rating_to_checkpoint,
                        rating_to_pace)
@@ -81,6 +82,19 @@ FACILITIES: dict[str, tuple[str, str]] = {
 }
 FACILITY_COST = [8.0, 14.0, 20.0]
 FACILITY_UPKEEP = 0.25
+PERSONAL: dict[str, tuple[str, str]] = {
+    "manager": ("Manager", "Bessere Vertragsangebote: +6 % Gehalt und mehr Verhandlungsspielraum je Stufe"),
+    "pr": ("PR-Berater", "+0.4 Ruf nach jedem Rennen je Stufe"),
+    "coach": ("Mentaltrainer", "+0.5 Vertrauen pro Rennen, verfehlte Wochenendziele kosten weniger Vertrauen"),
+}
+PERSONAL_COST = [1.5, 3.0, 5.0]
+REBRAND_COST = 2.0
+NATIONALITIES = ["", "DE", "AT", "CH", "GB", "IE", "FR", "BE", "NL", "IT", "ES", "PT", "MC", "DK", "SE", "NO", "FI",
+                 "PL", "CZ", "US", "CA", "MX", "BR", "AR", "AU", "NZ", "JP", "CN", "AE", "ZA"]
+HELMET_COLORS: list[tuple[int, int, int]] = [(0, 230, 255), (255, 255, 255), (255, 210, 0), (255, 60, 60),
+                                             (60, 220, 90), (255, 120, 200), (150, 90, 255), (255, 140, 30),
+                                             (30, 30, 34), (120, 200, 255)]
+MAX_POOL = 70
 
 
 def upgrade_cost(level: int) -> float:
@@ -142,11 +156,20 @@ class Career:
     sponsor: dict[str, Any] = field(default_factory=dict)
     sponsor_offers: list[dict[str, Any]] = field(default_factory=list)
     sponsor_mood: float = 60.0
+    player_short: str = ""
+    player_number: int = 0
+    player_nationality: str = ""
+    helmet: list[int] = field(default_factory=lambda: [0, 230, 255])
+    personal: dict[str, int] = field(default_factory=lambda: {k: 0 for k in PERSONAL})
+    achievements: dict[str, int] = field(default_factory=dict)
+    new_achievements: list[str] = field(default_factory=list)
+    race_log: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def create(cls, slot: str, kind: str, player_name: str, difficulty: str, laps: int, fmt: str, teams: list[Team],
                team_name: str = "", team_color: tuple[int, int, int] = (255, 0, 140),
-               player_drives: bool = True) -> "Career":
+               player_drives: bool = True, short: str = "", number: int = 0, nationality: str = "",
+               helmet: tuple[int, int, int] = (0, 230, 255)) -> "Career":
         team_data = {t.name: {"color": list(t.color), "engine": t.engine, "aero": t.aero, "top_speed": t.top_speed,
                               "brakes": t.brakes, "tyre_wear": t.tyre_wear} for t in teams}
         drivers: dict[str, dict[str, Any]] = {}
@@ -162,7 +185,8 @@ class Career:
                                   "years": 2 if seat else 0}
         career = cls(kind=kind, player_name=player_name, difficulty=difficulty, laps=laps, format=fmt,
                      teams=team_data, drivers=drivers, player_drives=player_drives if kind == "team" else True,
-                     slot=slot)
+                     slot=slot, player_short=short.strip().upper()[:3], player_number=number,
+                     player_nationality=nationality, helmet=list(helmet))
         if kind == "team":
             name = team_name.strip() or f"{player_name} Racing"
             career.teams[name] = {"color": list(team_color), **NEW_TEAM_BASE, "own": True}
@@ -260,7 +284,13 @@ class Career:
     def player(self) -> DriverProfile | None:
         if not self.player_drives or not self.team:
             return None
-        return replace(player_profile(self.team_obj(self.team), self.player_name), rating=0)
+        prof = player_profile(self.team_obj(self.team), self.player_name)
+        return replace(prof, rating=0, short=self.player_short or prof.short, helmet=tuple(self.helmet),
+                       number=self.player_number)
+
+    @property
+    def short_code(self) -> str:
+        return self.player_short or "".join(ch for ch in self.player_name.upper() if ch.isalpha())[:3] or "YOU"
 
     def pit_stop_times(self) -> dict[str, float]:
         return {self.team: crew_stop_time(self.crew)} if self.kind == "team" else {}
@@ -454,6 +484,7 @@ class Career:
         else:
             notes += self._team_after_race(rows)
         notes += self._ai_development()
+        self._log_race(rows, names, track)
         self._make_press(rows, names)
         self.news = (notes + self.news)[:16]
         log["races"] = log.get("races", 0) + 1
@@ -462,6 +493,25 @@ class Career:
         self._champ_saved()
         return notes
 
+    def _log_race(self, rows: list[dict[str, Any]], names: list[str], track: str) -> None:
+        if self.player_drives and self.player_name in names:
+            k = names.index(self.player_name)
+            pos, dnf, pts = k + 1, rows[k]["dnf"], rows[k]["points"]
+        else:
+            ours = [k for k, r in enumerate(rows) if r["team"] == self.team]
+            if not ours:
+                return
+            finished = [k for k in ours if not rows[k]["dnf"]]
+            best = min(finished) if finished else min(ours)
+            pos, dnf, pts = best + 1, not finished, sum(rows[k]["points"] for k in ours)
+        self.race_log.append({"s": self.season, "r": len(self.championship.results), "track": track, "pos": pos,
+                              "dnf": bool(dnf), "pts": pts, "q": self.quali_pos, "team": self.team})
+        self.race_log = self.race_log[-400:]
+        self.quali_pos = 0
+
+    def form(self, n: int = 5) -> list[dict[str, Any]]:
+        return self.race_log[-n:]
+
     def _driver_after_race(self, rows: list[dict[str, Any]], names: list[str]) -> list[str]:
         notes = []
         log = self.season_log
@@ -469,7 +519,7 @@ class Career:
         if me is None:
             return notes
         row = rows[me]
-        rep = row["points"] / 4.0 - 0.4 - (2.0 if row["dnf"] else 0.0)
+        rep = row["points"] / 4.0 - 0.4 - (2.0 if row["dnf"] else 0.0) + 0.4 * self.personal.get("pr", 0)
         mates = [k for k, r in enumerate(rows) if r["team"] == self.team and k != me]
         for k in mates:
             if me < k:
@@ -487,7 +537,9 @@ class Career:
                 log["rival_behind"] += 1
                 notes.append(f"Rivale {self.rival} war diesmal vorne.")
         self.reputation = max(0.0, min(100.0, self.reputation + rep))
-        trust = (1.0 if any(me < k for k in mates) else 0.0) - (1.5 if row["dnf"] and not row.get("failure") else 0.0)
+        coach = self.personal.get("coach", 0)
+        trust = (1.0 if any(me < k for k in mates) else 0.0) - (1.5 if row["dnf"] and not row.get("failure") else 0.0) \
+            + 0.5 * coach
         bonus = 0.0
         goal = self.weekend_goal
         if goal:
@@ -500,7 +552,7 @@ class Career:
                 bonus = 0.3
                 notes.append(f"Wochenendziel erreicht ({goal['text']}): +0.3 Mio Bonus, Team vertraut dir mehr.")
             else:
-                trust -= 4.0
+                trust -= max(1.0, 4.0 - coach)
                 notes.append(f"Wochenendziel verfehlt ({goal['text']}).")
         self.trust = max(0.0, min(100.0, self.trust + trust))
         pay = self.contract.get("salary", 0.0) / len(self.championship.rounds) + 0.05 * row["points"] + bonus
@@ -693,10 +745,11 @@ class Career:
                 candidates = ranking[-1:]
         for team in candidates:
             rank = ranking.index(team) + 1
-            salary = round(0.6 + (n - rank) * 0.9 + self.reputation / 25, 1)
+            manager = self.personal.get("manager", 0)
+            salary = round((0.6 + (n - rank) * 0.9 + self.reputation / 25) * (1.0 + 0.06 * manager), 1)
             goal = max(2, min(20, round(rank * 1.6) + 2))
             limit = 1.0 + self.reputation / 250 + (self.trust / 400 if team == self.team else 0.0) + \
-                random.uniform(0.0, 0.15)
+                random.uniform(0.0, 0.15) + 0.04 * manager
             offers.append({"team": team, "salary": salary, "years": random.choice([1, 2, 2, 3]), "goal": goal,
                            "rank": rank, "limit": round(limit, 3)})
         offers.sort(key=lambda o: o["rank"])
@@ -833,6 +886,7 @@ class Career:
                 d["rating"] = max(55, min(95, d["rating"] + random.randint(-1, 1)))
             d["salary"] = round(0.3 + ((d["rating"] - 60) / 32) ** 2 * 14, 1) if d["team"] != self.team \
                 else d["salary"]
+        notes += self._retirements_and_rookies()
         for team, t in self.teams.items():
             if t.get("own"):
                 continue
@@ -846,7 +900,128 @@ class Career:
         self.save()
         return notes
 
+    def _retirements_and_rookies(self) -> list[str]:
+        notes = []
+        mine = set(self.own_drivers()) if self.kind == "team" else set()
+        retired = []
+        for name, d in list(self.drivers.items()):
+            if d.get("default") or name in mine or d["age"] < 37:
+                continue
+            if random.random() < 0.15 * (d["age"] - 36):
+                retired.append(name)
+                del self.drivers[name]
+        if retired:
+            notes.append("Karriereende: " + ", ".join(retired[:4]) + (" ..." if len(retired) > 4 else "")
+                         + " treten zurück." if len(retired) > 1 else f"Karriereende: {retired[0]} tritt zurück.")
+        free_pool = sum(1 for d in self.drivers.values() if not d.get("default"))
+        count = max(2, min(4, len(retired) + 1)) if free_pool < MAX_POOL else 0
+        names = set(self.drivers) | {self.player_name}
+        shorts = {d["short"] for d in self.drivers.values()} | {self.short_code}
+        rookies = []
+        for _ in range(count):
+            r = make_rookie(names, shorts)
+            name = r.pop("name")
+            names.add(name)
+            shorts.add(r["short"])
+            self.drivers[name] = r
+            rookies.append(f"{name} ({r['nationality']}, {r['age']} J., Potenzial {r['potential']})")
+        if rookies:
+            notes.append("Neue Talente im Fahrermarkt: " + ", ".join(rookies))
+        self._fill_seats(announce=False)
+        return notes
+
+    def buy_personal(self, key: str) -> str:
+        level = self.personal.get(key, 0)
+        if level >= len(PERSONAL_COST):
+            return f"{PERSONAL[key][0]} bereits auf Maximalstufe"
+        cost = PERSONAL_COST[level]
+        if self.bank < cost:
+            return f"Zu wenig Geld auf dem Konto ({cost:.1f} Mio nötig)"
+        self.bank -= cost
+        self.personal[key] = level + 1
+        self.news.insert(0, f"Investition: {PERSONAL[key][0]} Stufe {level + 1} (-{cost:.1f} Mio)")
+        self.save()
+        return f"{PERSONAL[key][0]} Stufe {level + 1}"
+
+    def check_achievements(self) -> list[str]:
+        new = newly_unlocked(self)
+        for key in new:
+            self.achievements[key] = self.season
+            self.new_achievements.append(key)
+            self.news.insert(0, f"ERFOLG FREIGESCHALTET: {ACHIEVEMENTS[key][1]} - {ACHIEVEMENTS[key][2]}")
+        return new
+
+    def set_options(self, laps: int, difficulty: str, fmt: str) -> None:
+        self.laps, self.difficulty, self.format = laps, difficulty, fmt
+        champ = self.championship
+        champ.laps, champ.difficulty, champ.format = laps, difficulty, fmt
+        if self.kind == "driver":
+            self._new_weekend_goal()
+        self._champ_saved()
+
+    def set_identity(self, short: str, number: int, nationality: str, helmet: tuple[int, int, int]) -> None:
+        self.player_short = short.strip().upper()[:3]
+        self.player_number = max(0, min(99, number))
+        self.player_nationality = nationality
+        self.helmet = [int(v) for v in helmet]
+
+    def _rewrite(self, key: str, old: str, new: str) -> None:
+        for res in self.championship.results:
+            for row in res["rows"]:
+                if row.get(key) == old:
+                    row[key] = new
+        title_key = "champion" if key == "name" else "team_champion"
+        for h in self.history:
+            for table in ("driver_table", "team_table"):
+                for e in h.get(table, []):
+                    if e.get(key) == old:
+                        e[key] = new
+            if h.get(title_key) == old:
+                h[title_key] = new
+            if key == "team" and h.get("team") == old:
+                h["team"] = new
+
+    def rename_player(self, name: str) -> str:
+        name = name.strip()
+        if not name or name == self.player_name:
+            return ""
+        if name in self.drivers or name in self.teams:
+            return "Dieser Name ist schon vergeben"
+        old = self.player_name
+        self._rewrite("name", old, name)
+        self.player_name = name
+        self.championship.player_name = name
+        self.news.insert(0, f"{old} tritt ab sofort als {name} an.")
+        self._champ_saved()
+        return f"Name geändert: {name}"
+
+    def rename_team(self, name: str) -> str:
+        name = name.strip()
+        if self.kind != "team" or not name or name == self.team:
+            return ""
+        if name in self.teams or name in self.drivers:
+            return "Diesen Namen gibt es schon"
+        if self.budget < REBRAND_COST:
+            return f"Rebranding kostet {REBRAND_COST:.0f} Mio - zu wenig Budget"
+        old = self.team
+        self.budget -= REBRAND_COST
+        self.season_log["expenses"] = self.season_log.get("expenses", 0.0) + REBRAND_COST
+        self.teams = {(name if k == old else k): v for k, v in self.teams.items()}
+        for d in self.drivers.values():
+            if d["team"] == old:
+                d["team"] = name
+        for e in self.race_log:
+            if e.get("team") == old:
+                e["team"] = name
+        self._rewrite("team", old, name)
+        self.team = name
+        self.championship.team = name
+        self.news.insert(0, f"Rebranding: {old} heißt jetzt {name} (-{REBRAND_COST:.0f} Mio)")
+        self._champ_saved()
+        return f"Team heißt jetzt {name}"
+
     def save(self) -> None:
+        self.check_achievements()
         if hasattr(self, "_champ_obj"):
             self.champ = asdict(self._champ_obj)
         CAREER_DIR.mkdir(parents=True, exist_ok=True)
@@ -861,6 +1036,8 @@ class Career:
             career = cls(**raw)
         except (OSError, ValueError, TypeError):
             return None
+        for d in career.drivers.values():
+            d["short"] = d["short"].strip(" :")
         career._fill_seats()
         career._ensure_reliability()
         if career.kind == "team" and not career.sponsor and not career.sponsor_offers:
@@ -869,7 +1046,7 @@ class Career:
             career._new_weekend_goal()
         return career
 
-    def _fill_seats(self) -> None:
+    def _fill_seats(self, announce: bool = True) -> None:
         changed = False
         wanted = {d["name"]: d.get("team", "") for d in load_pool()}
         for team, t in self.teams.items():
@@ -885,7 +1062,7 @@ class Career:
                 self.drivers[pick]["team"] = team
                 self.drivers[pick]["years"] = 2
                 changed = True
-        if changed:
+        if changed and announce:
             self.news.insert(0, "Neu: Jedes Team startet jetzt mit zwei Autos - volles Starterfeld wie in der echten F1.")
             self.save()
 
@@ -897,5 +1074,5 @@ class Career:
             pass
 
 
-__all__ = ["Career", "AREAS", "MAX_LEVEL", "MAX_CREW", "POINTS", "TEAM_COLORS", "crew_stop_time", "upgrade_cost",
+__all__ = ["Career", "AREAS", "PERSONAL", "PERSONAL_COST", "NATIONALITIES", "HELMET_COLORS", "REBRAND_COST", "MAX_LEVEL", "MAX_CREW", "POINTS", "TEAM_COLORS", "crew_stop_time", "upgrade_cost",
            "crew_cost", "load_pool", "team_rank"]

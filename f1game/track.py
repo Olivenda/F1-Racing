@@ -273,11 +273,14 @@ class Track:
         stripe = tuple(min(255, c + 7) for c in d.grass)
         for x in range(0, self.world_size[0], 80):
             pygame.draw.rect(surf, stripe, (x, 0, 40, self.world_size[1]))
+        rng = random.Random(sum(map(ord, d.key)) * 7)
+        self._speckle(surf, rng, d.grass, self.world_size[0] * self.world_size[1] // 260, 9)
 
         self._render_scenery(surf)
 
         for p in self.center:
             pygame.draw.circle(surf, d.runoff_color, p, self.wall_limit)
+        self._render_gravel(surf, rng)
         for i in range(self.n):
             j = (i + 1) % self.n
             a, b = self.center[i], self.center[j]
@@ -285,6 +288,7 @@ class Track:
             hw = self.half_width
             pygame.draw.polygon(surf, d.asphalt, [a - na * hw, b - nb * hw, b + nb * hw, a + na * hw])
             pygame.draw.circle(surf, d.asphalt, a, hw)
+        self._render_asphalt_detail(surf, rng)
 
         self._render_pit_lane(surf)
         self._render_aero_zones(surf)
@@ -322,6 +326,52 @@ class Track:
         self._render_start_and_grid(surf)
         return surf
 
+    @staticmethod
+    def _speckle(surf: pygame.Surface, rng: random.Random, base: Color, count: int, spread: int) -> None:
+        w, h = surf.get_size()
+        shades = [tuple(max(0, min(255, c + k)) for c in base) for k in (-spread, -spread // 2, spread // 2, spread)]
+        fill = surf.fill
+        for _ in range(count):
+            fill(shades[rng.randrange(4)], (rng.randrange(w), rng.randrange(h), 2, 2))
+
+    def _render_gravel(self, surf: pygame.Surface, rng: random.Random) -> None:
+        """Sand-coloured gravel traps on the outside of tight corners."""
+        inner, outer = self.half_width + 12, self.wall_limit - 4
+        if outer - inner < 10:
+            return
+        sand = (196, 178, 128) if self.definition.scenery != "city" else (120, 118, 112)
+        n = self.n
+        for i in range(n):
+            j = (i + 1) % n
+            if circumradius(self.center[i - 5], self.center[i], self.center[(i + 5) % n]) > 260:
+                continue
+            bend = self.tangents[(i + 4) % n] - self.tangents[i - 4]
+            side = -1.0 if bend.dot(self.normals[i]) > 0 else 1.0
+            ni, nj = self.normals[i] * side, self.normals[j] * side
+            ci, cj = self.center[i], self.center[j]
+            pygame.draw.polygon(surf, sand, [ci + ni * inner, cj + nj * inner, cj + nj * outer, ci + ni * outer])
+            for _ in range(6):
+                u, v = rng.uniform(inner, outer), rng.random()
+                p = ci + (cj - ci) * v + ni * u
+                shade = tuple(max(0, c - rng.randint(15, 45)) for c in sand)
+                surf.fill(shade, (int(p.x), int(p.y), 2, 2))
+
+    def _render_asphalt_detail(self, surf: pygame.Surface, rng: random.Random) -> None:
+        """Grain in the tarmac and a darker rubbered-in racing line."""
+        a = self.definition.asphalt
+        if self.racing_line:
+            pts = self.racing_line
+            for width, k in ((26, 4), (14, 8)):
+                col = tuple(max(0, c - k) for c in a)
+                pygame.draw.lines(surf, col, True, pts, width)
+        hw = self.half_width - 3
+        shades = [tuple(max(0, min(255, c + k)) for c in a) for k in (-8, -4, 5, 9)]
+        for i in range(self.n):
+            c, nrm, t = self.center[i], self.normals[i], self.tangents[i]
+            for _ in range(10):
+                p = c + nrm * rng.uniform(-hw, hw) + t * rng.uniform(-6, 6)
+                surf.fill(shades[rng.randrange(4)], (int(p.x), int(p.y), 2, 2))
+
     def _build_scenery(self) -> list[tuple]:
         rng = random.Random(sum(map(ord, self.definition.key)))
         d = self.definition
@@ -347,16 +397,29 @@ class Track:
     def _render_scenery(self, surf: pygame.Surface) -> None:
         for item in self.scenery:
             if item[0] == "building":
-                _, p, w, h, col, _height = item
+                _, p, w, h, col, height = item
                 rect = pygame.Rect(0, 0, w, h)
                 rect.center = p
-                pygame.draw.rect(surf, (30, 30, 34), rect.move(5, 5), border_radius=3)
+                drop = max(5, height // 12)
+                pygame.draw.rect(surf, (24, 26, 30), rect.move(drop, drop), border_radius=3)
                 pygame.draw.rect(surf, col, rect, border_radius=3)
-                pygame.draw.rect(surf, tuple(max(0, c - 35) for c in col), rect, 2, border_radius=3)
+                roof = rect.inflate(-8, -8)
+                pygame.draw.rect(surf, tuple(min(255, c + 14) for c in col), roof, border_radius=2)
+                pygame.draw.rect(surf, tuple(max(0, c - 40) for c in col), rect, 2, border_radius=3)
+                pygame.draw.line(surf, tuple(min(255, c + 45) for c in col), rect.topleft, rect.topright, 2)
+                for k in range(max(1, w // 26)):
+                    unit = pygame.Rect(roof.x + 4 + k * 22, roof.y + 4, 9, 7)
+                    if unit.right < roof.right:
+                        pygame.draw.rect(surf, (150, 152, 158), unit)
+                        pygame.draw.rect(surf, (90, 92, 98), unit, 1)
             else:
                 _, p, r, col, _height = item
-                pygame.draw.circle(surf, (25, 60, 30), p + Vector2(4, 4), r)
-                pygame.draw.circle(surf, col, p, r)
+                pygame.draw.circle(surf, (22, 52, 26), p + Vector2(r * 0.35, r * 0.45), r)
+                dark = tuple(max(0, c - 22) for c in col)
+                pygame.draw.circle(surf, dark, p, r)
+                pygame.draw.circle(surf, col, p - Vector2(r * 0.12, r * 0.12), r * 0.78)
+                light = tuple(min(255, c + 30) for c in col)
+                pygame.draw.circle(surf, light, p - Vector2(r * 0.32, r * 0.32), r * 0.38)
 
     def _render_pit_lane(self, surf: pygame.Surface) -> None:
         pit = self.pit
@@ -431,8 +494,8 @@ class Track:
                 best_i, best_d = i, d
         return best_i
 
-    def project(self, pos: Vector2, hint: int | None = None) -> tuple[int, float, float]:
-        i = self.nearest_index(pos, hint)
+    def project(self, pos: Vector2, hint: int | None = None, back: int = 6, fwd: int = 22) -> tuple[int, float, float]:
+        i = self.nearest_index(pos, hint, back, fwd)
         rel = pos - self.center[i]
         s = (self.cum[i] + rel.dot(self.tangents[i])) % self.length
         return i, s, rel.dot(self.normals[i])

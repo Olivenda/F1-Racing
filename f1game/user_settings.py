@@ -12,6 +12,14 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 DAMAGE_MODES = {"off": "Aus", "on": "An", "dnf": "An + Ausfälle"}
 TYRE_WEAR_MODES = {"off": ("Aus", 0.0), "normal": ("Normal", 1.0), "double": ("Doppelt", 2.0)}
 ASSIST_NAMES = ["Aus", "Mittel (Stabilität + Bremslinie)", "Voll (+ automatische Bremshilfe)"]
+UNITS = {"kmh": ("km/h", 1.0), "mph": ("mph", 0.621371)}
+FPS_OPTIONS = [30, 60, 120, 144]
+EFFECT_LEVELS = {"off": "Aus", "low": "Niedrig", "high": "Hoch"}
+
+
+def speed_in(kmh: float, units: str) -> tuple[float, str]:
+    label, factor = UNITS.get(units, UNITS["kmh"])
+    return kmh * factor, label
 
 
 @dataclass
@@ -27,6 +35,9 @@ class UserSettings:
     sound: str = "normal"
     safety_car: bool = True
     language: str = "en"
+    units: str = "kmh"
+    fps: int = 60
+    effects: str = "high"
 
     @property
     def tyre_wear_factor(self) -> float:
@@ -44,10 +55,16 @@ class UserSettings:
             settings.damage = "on"
         if settings.tyre_wear not in TYRE_WEAR_MODES:
             settings.tyre_wear = "normal"
-        if settings.sound not in ("off", "low", "normal"):
+        if settings.sound not in ("off", "low", "normal", "high"):
             settings.sound = "normal"
         if settings.language not in ("en", "de"):
             settings.language = "en"
+        if settings.units not in UNITS:
+            settings.units = "kmh"
+        if settings.effects not in EFFECT_LEVELS:
+            settings.effects = "high"
+        if settings.fps not in FPS_OPTIONS:
+            settings.fps = 60
         settings.assists = max(0, min(2, int(settings.assists)))
         return settings
 

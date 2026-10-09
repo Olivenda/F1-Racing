@@ -7,12 +7,16 @@ from typing import TYPE_CHECKING, Any
 
 import pygame
 
-from .career import (AREAS, COST_CAP, FACILITIES, FACILITY_COST, FACILITY_UPKEEP, MAX_CREW, MAX_LEVEL, MAX_PROJECTS,
-                     SLOTS, TEAM_COLORS, Career, crew_cost, crew_stop_time, slot_summary, team_rank)
+from .car import build_car_sprite
+from .career import (AREAS, COST_CAP, FACILITIES, FACILITY_COST, FACILITY_UPKEEP, HELMET_COLORS, MAX_CREW, MAX_LEVEL,
+                     MAX_PROJECTS, NATIONALITIES, SLOTS, TEAM_COLORS, Career, crew_cost, crew_stop_time, load_pool,
+                     slot_summary, team_rank)
+from .career_achievements import ACHIEVEMENTS, available
 from .championship import FORMATS
 from .settings import CYAN, DIFFICULTY_LEVELS, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, \
     YELLOW
 from .track import TRACK_DEFS
+from .i18n import tr
 from .utils import draw_panel, draw_text
 
 if TYPE_CHECKING:
@@ -24,6 +28,7 @@ MEDAL = [(255, 215, 0), (200, 200, 210), (205, 127, 50)]
 
 
 def _wrap(text: str, font: pygame.font.Font, width: int) -> list[str]:
+    text = tr(text)
     lines, line = [], ""
     for word in text.split():
         trial = f"{line} {word}".strip()
@@ -38,6 +43,7 @@ def _wrap(text: str, font: pygame.font.Font, width: int) -> list[str]:
 
 
 def _fit(text: str, font: pygame.font.Font, width: int) -> str:
+    text = tr(text)
     if font.size(text)[0] <= width:
         return text
     while text and font.size(text + "...")[0] > width:
@@ -47,6 +53,59 @@ def _fit(text: str, font: pygame.font.Font, width: int) -> str:
 
 def _visible(col: tuple[int, int, int]) -> tuple[int, int, int]:
     return col if sum(col) > 150 else (90, 100, 200)
+
+
+def draw_livery(screen: pygame.Surface, fonts, rect: pygame.Rect, body: tuple[int, int, int],
+                helmet: tuple[int, int, int], number: int, short: str, t: float = 0.0) -> None:
+    """Big preview of the car and helmet - used by the career setup and the design studio."""
+    pygame.draw.rect(screen, (26, 28, 36), rect, border_radius=10)
+    for k in range(6):
+        y = rect.y + 18 + k * (rect.h - 36) // 5
+        pygame.draw.line(screen, (34, 37, 46), (rect.x + 12, y), (rect.right - 12, y), 1)
+    scale = max(2.0, min(7.0, (rect.w * 0.62) / 34))
+    sprite = pygame.transform.rotozoom(build_car_sprite(body, helmet, scale), 3 * math.sin(t * 1.3), 1.0)
+    car_rect = sprite.get_rect(center=(rect.x + rect.w * 0.40, rect.centery))
+    shadow = pygame.Surface((car_rect.w, 18), pygame.SRCALPHA)
+    pygame.draw.ellipse(shadow, (0, 0, 0, 110), shadow.get_rect())
+    screen.blit(shadow, (car_rect.x, car_rect.bottom - 6))
+    screen.blit(sprite, car_rect)
+    hx, hy, hr = rect.right - rect.w * 0.17, rect.y + rect.h * 0.40, max(18, int(rect.h * 0.22))
+    pygame.draw.circle(screen, (10, 10, 12), (hx, hy), hr + 3)
+    pygame.draw.circle(screen, helmet, (hx, hy), hr)
+    dark = tuple(max(0, c - 80) for c in helmet)
+    pygame.draw.arc(screen, dark, (hx - hr, hy - hr, hr * 2, hr * 2), 3.6, 5.8, max(3, hr // 5))
+    pygame.draw.rect(screen, (20, 22, 30), (hx - hr * 0.15, hy - hr * 0.30, hr * 1.1, hr * 0.45),
+                     border_radius=max(3, hr // 4))
+    pygame.draw.rect(screen, (90, 150, 220), (hx - hr * 0.05, hy - hr * 0.24, hr * 0.9, hr * 0.14),
+                     border_radius=3)
+    label = f"#{number}" if number else ""
+    if label:
+        draw_text(screen, label, fonts.large, WHITE, (hx, hy + hr + 22), anchor="center")
+    if short:
+        draw_text(screen, short.upper(), fonts.small_bold, GREY, (hx, hy + hr + (48 if label else 22)),
+                  anchor="center", shadow=False)
+
+
+def draw_form(screen: pygame.Surface, fonts, x: int, y: int, entries: list[dict[str, Any]],
+              label: str = "FORM (LETZTE 5 RENNEN)") -> None:
+    draw_text(screen, label, fonts.tiny, GREY, (x, y), shadow=False)
+    if not entries:
+        draw_text(screen, "noch keine Rennen", fonts.tiny, (90, 92, 104), (x, y + 20), shadow=False)
+        return
+    for k, e in enumerate(entries):
+        r = pygame.Rect(x + k * 54, y + 18, 48, 24)
+        pos = e.get("pos", 0)
+        if e.get("dnf"):
+            col, txt = (150, 40, 40), "DNF"
+        elif pos <= 3:
+            col, txt = MEDAL[pos - 1], f"P{pos}"
+        elif pos <= 10:
+            col, txt = (30, 130, 70), f"P{pos}"
+        else:
+            col, txt = (60, 62, 72), f"P{pos}"
+        pygame.draw.rect(screen, col, r, border_radius=5)
+        dark = sum(col) > 450
+        draw_text(screen, txt, fonts.tiny, (20, 20, 20) if dark else WHITE, r.center, anchor="center", shadow=False)
 
 
 class _Screen:
@@ -103,11 +162,21 @@ class _Screen:
 
 class CareerSetupScreen(_Screen):
 
+    TEXT_ROWS = {"Teamname": ("team_name", 20), "Fahrername": ("driver_name", 20), "Dein Name": ("driver_name", 20),
+                 "Kürzel": ("short", 3)}
+
     def __init__(self, game: "Game", slot: str) -> None:
         super().__init__(game)
         self.slot = slot
         self.kind = slot.split("_")[0]
-        self.team_name = f"{game.settings.player_name.split(' (')[0]} Racing"
+        base = game.settings.player_name.split(" (")[0].strip()
+        self.driver_name = "" if base in ("Du", "") else base
+        self.team_name = f"{self.driver_name or 'Neues'} Racing"
+        self.team_name_edited = False
+        self.short = ""
+        self.number = (sum(ord(ch) for ch in slot) * 7) % 98 + 2
+        self.nation = 0
+        self.helmet = 0
         self.color = 0
         self.drives = True
         self.format = 1
@@ -117,19 +186,33 @@ class CareerSetupScreen(_Screen):
     @property
     def rows(self) -> list[str]:
         team = ["Teamname", "Teamfarbe", "Selbst fahren"] if self.kind == "team" else []
-        return team + ["Format", "Rennrunden", "KI-Stärke", "START", "ZURÜCK"]
+        if self.kind == "team" and not self.drives:
+            ident = ["Dein Name"]
+        else:
+            ident = ["Fahrername", "Kürzel", "Startnummer", "Nationalität", "Helmfarbe"]
+        return team + ident + ["Format", "Rennrunden", "KI-Stärke", "START", "ZURÜCK"]
 
     @property
     def c(self) -> dict[str, int]:
         return self.game.menu_choice
 
+    def _short_code(self) -> str:
+        if self.short:
+            return self.short
+        letters = "".join(ch for ch in (self.driver_name.split() or [""])[-1].upper() if ch.isalpha())
+        return letters[:3] or "YOU"
+
     def _change(self, row: str, delta: int) -> None:
-        if row == "Karriere-Art":
-            self.kind = "team" if self.kind == "driver" else "driver"
-        elif row == "Teamfarbe":
+        if row == "Teamfarbe":
             self.color = (self.color + delta) % len(TEAM_COLORS)
         elif row == "Selbst fahren":
             self.drives = not self.drives
+        elif row == "Startnummer":
+            self.number = (self.number - 1 + delta) % 99 + 1
+        elif row == "Nationalität":
+            self.nation = (self.nation + delta) % len(NATIONALITIES)
+        elif row == "Helmfarbe":
+            self.helmet = (self.helmet + delta) % len(HELMET_COLORS)
         elif row == "Format":
             self.format = (self.format + delta) % len(FORMATS)
         elif row == "Rennrunden":
@@ -142,15 +225,25 @@ class CareerSetupScreen(_Screen):
             return
         rows = self.rows
         row = rows[min(self.sel, len(rows) - 1)]
+        text = self.TEXT_ROWS.get(row)
         if event.key == pygame.K_UP:
             self.sel = (self.sel - 1) % len(rows)
         elif event.key == pygame.K_DOWN:
             self.sel = (self.sel + 1) % len(rows)
-        elif row == "Teamname" and event.key == pygame.K_BACKSPACE:
-            self.team_name = self.team_name[:-1]
-        elif row == "Teamname" and event.unicode and event.unicode.isprintable() and \
-                event.key not in (pygame.K_RETURN, pygame.K_ESCAPE) and len(self.team_name) < 20:
-            self.team_name += event.unicode
+        elif text and event.key == pygame.K_BACKSPACE:
+            setattr(self, text[0], getattr(self, text[0])[:-1])
+            self._text_changed(row)
+        elif text and event.unicode and event.unicode.isprintable() and \
+                event.key not in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_ESCAPE, pygame.K_TAB):
+            ch = event.unicode
+            if row == "Kürzel":
+                if not ch.isalpha():
+                    return
+                ch = ch.upper()
+            value = getattr(self, text[0])
+            if len(value) < text[1]:
+                setattr(self, text[0], value + ch)
+                self._text_changed(row)
         elif event.key in (pygame.K_LEFT, pygame.K_RIGHT):
             self._change(row, -1 if event.key == pygame.K_LEFT else 1)
         elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
@@ -158,31 +251,58 @@ class CareerSetupScreen(_Screen):
                 self._start()
             elif row == "ZURÜCK":
                 self.game.open_career_slots()
+            elif text:
+                self.sel = (self.sel + 1) % len(rows)
             else:
                 self._change(row, 1)
         elif event.key == pygame.K_ESCAPE:
             self.game.open_career_slots()
 
+    def _text_changed(self, row: str) -> None:
+        if row == "Teamname":
+            self.team_name_edited = True
+        elif row in ("Fahrername", "Dein Name") and not self.team_name_edited:
+            self.team_name = f"{(self.driver_name.split() or ['Neues'])[-1]} Racing"[:20]
+
     def _start(self) -> None:
         game = self.game
+        name = self.driver_name.strip()
+        taken = {d["name"] for d in load_pool()} | {t.name for t in game.teams}
+        if not name:
+            self.say("Bitte einen Namen eingeben")
+            return
+        if name in taken:
+            self.say("Diesen Namen trägt schon ein Fahrer oder Team")
+            return
         if self.kind == "team" and not self.team_name.strip():
             self.say("Bitte einen Teamnamen eingeben")
             return
-        if self.kind == "team" and self.team_name.strip() in [t.name for t in game.teams]:
+        if self.kind == "team" and (self.team_name.strip() in taken or self.team_name.strip() == name):
             self.say("Diesen Teamnamen gibt es schon")
             return
-        game.career = Career.create(self.slot, self.kind, game.settings.player_name, self.diffs[self.c["diff"]], self.c["laps"],
+        game.career = Career.create(self.slot, self.kind, name, self.diffs[self.c["diff"]], self.c["laps"],
                                     FORMATS[self.format][0], game.teams, self.team_name.strip(),
-                                    TEAM_COLORS[self.color], self.drives)
+                                    TEAM_COLORS[self.color], self.drives, short=self._short_code(),
+                                    number=self.number, nationality=NATIONALITIES[self.nation],
+                                    helmet=HELMET_COLORS[self.helmet])
         game.career.save()
         game.open_career()
 
     def _value(self, row: str) -> str:
-        if row == "Karriere-Art":
-            return "Fahrer-Karriere" if self.kind == "driver" else "Team-Karriere (Teamchef)"
+        cursor = "_" if int(self.t * 2) % 2 else ""
         if row == "Teamname":
-            return self.team_name + ("_" if int(self.t * 2) % 2 else "")
-        if row == "Teamfarbe":
+            return self.team_name + (cursor if self.rows[self.sel] == row else "")
+        if row in ("Fahrername", "Dein Name"):
+            shown = self.driver_name or ("" if self.rows[self.sel] == row else "(Namen eintippen)")
+            return shown + (cursor if self.rows[self.sel] == row else "")
+        if row == "Kürzel":
+            return (self.short or self._short_code()) + (cursor if self.rows[self.sel] == row else "") + \
+                ("   (Timing-Tower)" if not self.short else "")
+        if row == "Startnummer":
+            return f"#{self.number}"
+        if row == "Nationalität":
+            return NATIONALITIES[self.nation] or "- keine -"
+        if row in ("Teamfarbe", "Helmfarbe"):
             return ""
         if row == "Selbst fahren":
             return "Ja - Teamchef und Fahrer" if self.drives else "Nein - nur Teamchef (2 Fahrer verpflichten)"
@@ -198,55 +318,72 @@ class CareerSetupScreen(_Screen):
         f = self.game.fonts
         kind = "FAHRER" if self.kind == "driver" else "TEAM"
         self.header(screen, f"NEUE {kind}-KARRIERE · SLOT {self.slot[-1]}",
-                    "Verträge, Rivalen, Budget und Entwicklung - Saison für Saison")
-        px, py, pw = 60, 118, 600
-        draw_panel(screen, (px, py, pw, 540), PANEL, 215)
+                    "Dein Name, deine Nummer, dein Helm - Verträge, Rivalen, Budget und Entwicklung")
+        px, py, pw = 60, 112, 600
+        draw_panel(screen, (px, py, pw, 556), PANEL, 215)
         rows = self.rows
         self.sel = min(self.sel, len(rows) - 1)
+        rh = min(50, (556 - 30) // len(rows))
         for i, row in enumerate(rows):
-            ry = py + 14 + i * 50
+            ry = py + 10 + i * rh
             selected = i == self.sel
             if row in ("START", "ZURÜCK"):
-                h = 48 if row == "START" else 34
-                self.button(screen, pygame.Rect(px + 20, ry + 6, pw - 40, h),
+                h = min(44, rh + 4) if row == "START" else min(34, rh - 4)
+                self.button(screen, pygame.Rect(px + 20, ry + 2, pw - 40, h),
                             "KARRIERE STARTEN" if row == "START" else "ZURÜCK", selected,
                             GOLD if row == "START" else (90, 90, 100), f.large if row == "START" else f.medium)
                 continue
+            bh = rh - 6
             if selected:
-                pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, 40), border_radius=6)
-                pygame.draw.rect(screen, GOLD, (px + 12, ry, 5, 40), border_radius=2)
-            draw_text(screen, row.upper(), f.tiny, GREY, (px + 28, ry + 13), shadow=False)
-            draw_text(screen, self._value(row), f.small_bold, CYAN if row == "Teamname" else WHITE,
-                      (px + 175, ry + 11), shadow=False)
-            if row == "Teamfarbe":
-                for k, col in enumerate(TEAM_COLORS):
-                    r = pygame.Rect(px + 175 + k * 34, ry + 8, 26, 24)
+                pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, bh), border_radius=6)
+                pygame.draw.rect(screen, GOLD, (px + 12, ry, 5, bh), border_radius=2)
+            mid = ry + bh // 2
+            draw_text(screen, row.upper(), f.tiny, GREY, (px + 28, mid), anchor="midleft", shadow=False)
+            draw_text(screen, self._value(row), f.small_bold, CYAN if row in self.TEXT_ROWS else WHITE,
+                      (px + 175, mid), anchor="midleft", shadow=False)
+            palette = TEAM_COLORS if row == "Teamfarbe" else HELMET_COLORS if row == "Helmfarbe" else None
+            if palette:
+                pick = self.color if row == "Teamfarbe" else self.helmet
+                size = min(26, 340 // len(palette) - 6)
+                for k, col in enumerate(palette):
+                    r = pygame.Rect(px + 175 + k * (size + 8), mid - size // 2, size, size)
                     pygame.draw.rect(screen, col, r, border_radius=5)
-                    if k == self.color:
+                    if k == pick:
                         pygame.draw.rect(screen, WHITE, r.inflate(6, 6), 2, border_radius=7)
-            if selected and row not in ("Teamname",):
-                draw_text(screen, "<  >", f.medium, YELLOW, (px + pw - 24, ry + 20), anchor="midright")
-        box = pygame.Rect(690, 118, 550, 540)
+            if selected and row not in self.TEXT_ROWS:
+                draw_text(screen, "<  >", f.medium, YELLOW, (px + pw - 24, mid), anchor="midright")
+        box = pygame.Rect(690, 112, 550, 556)
         draw_panel(screen, box, PANEL, 215)
         if self.kind == "driver":
             title = "FAHRER-KARRIERE"
-            text = ("Du startest als Rookie bei einem kleinen Team. Jedes Team gibt dir ein Saisonziel. "
-                    "Punkte, Siege gegen deinen Teamkollegen und deinen Rivalen bringen Ruf. "
-                    "Am Saisonende kommen Vertragsangebote - mit genug Ruf auch von den Top-Teams. "
-                    "Dein Rivale ist im Rennen im Timing-Tower rot markiert.")
+            text = ("Du startest als Rookie bei einem kleinen Team. Punkte, Siege gegen Teamkollegen und Rivalen "
+                    "bringen Ruf. Mit deinem Gehalt investierst du in Manager, PR und Mentaltrainer. "
+                    "Am Saisonende kommen Vertragsangebote - mit genug Ruf auch von den Top-Teams.")
         else:
             title = "TEAM-KARRIERE"
             text = (f"Du gründest ein neues Team mit {45} Mio Budget und einem langsamen Auto. "
                     "Sponsoren und Preisgeld bringen Geld, Gehälter und Betrieb kosten Geld. "
-                    "Investiere in Motor, Aerodynamik, Topspeed, Bremsen, Reifenschonung und die Boxencrew. "
-                    "Verpflichte Fahrer aus einem Pool von 50 Fahrern - Topfahrer kommen erst, wenn dein Team "
-                    "genug Ruf hat. Die Standard-Fahrer bleiben in ihren Teams. "
-                    "Fährst du nicht selbst, kannst du Rennen ansehen oder sofort simulieren.")
-        draw_text(screen, title, f.large, GOLD, (box.x + 20, box.y + 18))
-        for k, line in enumerate(_wrap(text, f.small, box.w - 40)):
-            draw_text(screen, line, f.small, (210, 210, 215), (box.x + 20, box.y + 64 + k * 24), shadow=False)
-        draw_text(screen, f"Gespeichert in data/careers/{self.slot}.json", f.tiny, (120, 200, 255),
-                  (box.x + 20, box.bottom - 30), shadow=False)
+                    "Entwickle das Auto, baue die Fabrik aus und verpflichte Fahrer - jede Saison "
+                    "drängen neue Talente in den Fahrermarkt.")
+        draw_text(screen, title, f.large, GOLD, (box.x + 20, box.y + 16))
+        lines = _wrap(text, f.small, box.w - 40)
+        for k, line in enumerate(lines):
+            draw_text(screen, line, f.small, (210, 210, 215), (box.x + 20, box.y + 58 + k * 23), shadow=False)
+        body = TEAM_COLORS[self.color] if self.kind == "team" else (150, 150, 158)
+        drives = self.kind == "driver" or self.drives
+        preview = pygame.Rect(box.x + 20, box.y + 80 + len(lines) * 23, box.w - 40, 230)
+        draw_livery(screen, f, preview, body, HELMET_COLORS[self.helmet] if drives else (60, 60, 66),
+                    self.number if drives else 0, self._short_code() if drives else "", self.t)
+        who = self.driver_name or "?"
+        sub = f"{who} · {NATIONALITIES[self.nation] or '-'}" if drives else f"Teamchef {who}"
+        if self.kind == "team":
+            sub += f" · {self.team_name or '?'}"
+        draw_text(screen, _fit(sub, f.medium, box.w - 40), f.medium, WHITE, (box.x + 20, preview.bottom + 12))
+        if self.kind == "driver":
+            draw_text(screen, "Die Autofarbe kommt von deinem Team - Helm und Nummer gehören dir.", f.tiny, GREY,
+                      (box.x + 20, preview.bottom + 46), shadow=False)
+        draw_text(screen, f"Gespeichert in data/careers/{self.slot}.json · später änderbar im DESIGN-Studio",
+                  f.tiny, (120, 200, 255), (box.x + 20, box.bottom - 26), shadow=False)
         self.draw_status(screen)
 
 
@@ -353,6 +490,15 @@ class CareerHub(_Screen):
         super().__init__(game)
         self.sel = 0
         self.confirm_quit = False
+        c = self.career
+        if c.new_achievements:
+            titles = [ACHIEVEMENTS[k][1] for k in c.new_achievements if k in ACHIEVEMENTS]
+            c.new_achievements = []
+            c.save()
+            if titles:
+                self.say("ERFOLG FREIGESCHALTET: " + ", ".join(titles))
+                self.status_timer = 6.0
+                game.sound.ui("fanfare")
 
     def actions(self) -> list[tuple[str, str]]:
         c = self.career
@@ -375,13 +521,19 @@ class CareerHub(_Screen):
         if c.kind == "team":
             acts.append(("dev", "ENTWICKLUNG"))
             acts.append(("market", "FAHRERMARKT"))
+        else:
+            acts.append(("personal", "PERSÖNLICH"))
+        acts.append(("design", "DESIGN"))
         acts.append(("compare", "AUTO-VERGLEICH"))
+        acts.append(("stats", "STATISTIK"))
+        acts.append(("trophies", "ERFOLGE"))
         acts.append(("history", "HISTORIE"))
+        acts.append(("options", "OPTIONEN"))
         acts.append(("slots", "SPIELSTÄNDE"))
         acts.append(("quit", "WIRKLICH LÖSCHEN?" if self.confirm_quit else "LÖSCHEN"))
         return acts
 
-    SECOND_ROW = ("compare", "history", "slots", "quit")
+    SECOND_ROW = ("compare", "stats", "trophies", "history", "options", "slots", "quit")
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type != pygame.KEYDOWN:
@@ -419,6 +571,12 @@ class CareerHub(_Screen):
             game.state = CarCompareScreen(game)
         elif act == "history":
             game.state = HistoryScreen(game)
+        elif act in ("personal", "design", "stats", "trophies", "options"):
+            from . import career_extras
+            screen_cls = {"personal": career_extras.PersonalScreen, "design": career_extras.DesignScreen,
+                          "stats": career_extras.StatsScreen, "trophies": career_extras.AchievementsScreen,
+                          "options": career_extras.CareerOptionsScreen}[act]
+            game.state = screen_cls(game)
         elif act == "slots":
             game.career = None
             game.open_career_slots()
@@ -439,6 +597,21 @@ class CareerHub(_Screen):
         else:
             sub = f"{c.team} · Teamchef {c.player_name}" + (" (fährt selbst)" if c.player_drives else "") + f" · {rnd}"
         self.header(screen, f"KARRIERE · SAISON {c.season}", sub)
+        f = self.game.fonts
+        pool = available(c.kind)
+        got = sum(1 for k in pool if k in c.achievements)
+        badge = pygame.Rect(SCREEN_WIDTH - 60 - 170, 34, 170, 46)
+        draw_panel(screen, badge, PANEL, 215)
+        draw_text(screen, "ERFOLGE", f.tiny, GREY, (badge.x + 12, badge.y + 6), shadow=False)
+        draw_text(screen, f"{got}/{len(pool)}", f.medium, GOLD if got else WHITE, (badge.x + 12, badge.y + 20),
+                  shadow=False)
+        self.bar(screen, badge.x + 80, badge.y + 30, 76, got / max(1, len(pool)), GOLD, 6)
+        if c.player_drives:
+            nb = pygame.Rect(badge.x - 130, 34, 120, 46)
+            draw_panel(screen, nb, PANEL, 215)
+            pygame.draw.circle(screen, tuple(c.helmet), (nb.x + 24, nb.centery), 14)
+            draw_text(screen, f"#{c.player_number}" if c.player_number else c.short_code, f.medium, WHITE,
+                      (nb.x + 46, nb.centery), anchor="midleft", shadow=False)
         if c.kind == "driver":
             self._driver_card(screen)
         else:
@@ -524,6 +697,7 @@ class CareerHub(_Screen):
                 draw_text(screen, label, f.tiny, WHITE, (x, yy), shadow=False)
                 self.bar(screen, x + 80, yy + 4, 210, max(0.05, 1.0 - (p - 1) / max(1, len(vals) - 1)), bc, 7)
                 draw_text(screen, f"P{p}", f.tiny, bc, (box.right - 18, yy), anchor="topright", shadow=False)
+        draw_form(screen, f, x, box.bottom - 58, c.form())
 
     def _team_card(self, screen: pygame.Surface) -> None:
         f, c = self.game.fonts, self.career
@@ -582,6 +756,7 @@ class CareerHub(_Screen):
         for k in range(c.seats()):
             draw_text(screen, "- freies Cockpit -", f.small_bold, RED, (x, dy + 18 + (len(rows2) + k) * 22),
                       shadow=False)
+        draw_form(screen, f, x, box.bottom - 86, c.form(), "FORM (BESTES TEAMAUTO)")
         if c.rival:
             log = c.season_log
             draw_text(screen, f"Rivalenteam: {c.rival} · Duelle {log.get('rival_ahead', 0)}:"
@@ -598,7 +773,7 @@ class CareerHub(_Screen):
             table = [{"name": n, "team": c.drivers[n]["team"], "points": 0, "player": False} for n in names]
             if c.player_drives and c.team:
                 table.insert(0, {"name": c.player_name, "team": c.team, "points": 0, "player": True})
-        rh = 25 if len(table) <= 18 else 19
+        rh = 25 if len(table) <= 18 else 19 if len(table) <= 22 else 18
         font = f.small_bold if rh == 25 else f.tiny
         for i, e in enumerate(table[:24]):
             y = box.y + 32 + i * rh
@@ -641,7 +816,8 @@ class CareerHub(_Screen):
             if winner:
                 draw_text(screen, _fit(winner, f.tiny, 140), f.tiny, GOLD, (box.right - 14, y + 3), anchor="topright",
                           shadow=False)
-        nb = pygame.Rect(872, 316, 368, 300)
+        self._next_race(screen, pygame.Rect(872, 314, 368, 112))
+        nb = pygame.Rect(872, 434, 368, 182)
         draw_panel(screen, nb, PANEL, 215)
         draw_text(screen, "NACHRICHTEN", f.tiny, GREY, (nb.x + 14, nb.y + 10), shadow=False)
         y = nb.y + 32
@@ -652,6 +828,33 @@ class CareerHub(_Screen):
                 draw_text(screen, line, f.tiny, (210, 210, 215), (nb.x + 14, y), shadow=False)
                 y += 17
             y += 5
+
+    def _next_race(self, screen: pygame.Surface, box: pygame.Rect) -> None:
+        f, c = self.game.fonts, self.career
+        champ = c.championship
+        draw_panel(screen, box, PANEL, 215)
+        if champ.finished:
+            draw_text(screen, "SAISON BEENDET", f.tiny, GREY, (box.x + 14, box.y + 10), shadow=False)
+            draw_text(screen, "Weiter zum Saisonabschluss", f.small_bold, GOLD, (box.x + 14, box.y + 40), shadow=False)
+            return
+        track = self.game.tracks[champ.next_track]
+        draw_text(screen, "NÄCHSTES RENNEN", f.tiny, GREY, (box.x + 14, box.y + 10), shadow=False)
+        thumb = pygame.Rect(box.right - 128, box.y + 8, 118, box.h - 16)
+        pygame.draw.rect(screen, (26, 28, 36), thumb, border_radius=6)
+        try:
+            track.draw_outline(screen, thumb.inflate(-8, -8), GOLD, 2)
+        except (ValueError, ZeroDivisionError):
+            pass
+        draw_text(screen, _fit(track.name, f.medium, box.w - 160), f.medium, WHITE, (box.x + 14, box.y + 28))
+        fmt = next((label for key, label in FORMATS if key == c.format), c.format)
+        draw_text(screen, f"Lauf {champ.round + 1}/{len(champ.rounds)} · {c.laps} Runden", f.tiny, YELLOW,
+                  (box.x + 14, box.y + 60), shadow=False)
+        draw_text(screen, _fit(fmt, f.tiny, box.w - 160), f.tiny, GREY, (box.x + 14, box.y + 76), shadow=False)
+        rec = self.game.records.tracks.get(track.definition.key)
+        if rec:
+            from .utils import format_time
+            draw_text(screen, _fit(f"Rekord {format_time(rec['time'])} {rec.get('driver', '')}", f.tiny, box.w - 160),
+                      f.tiny, (120, 200, 255), (box.x + 14, box.y + 92), shadow=False)
 
     def _buttons(self, screen: pygame.Surface) -> None:
         f, c = self.game.fonts, self.career

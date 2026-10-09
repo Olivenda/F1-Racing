@@ -61,7 +61,7 @@ class SafetyCar:
         sp = self.pos - cam
         if not (-60 < sp.x < surface.get_width() + 60 and -60 < sp.y < surface.get_height() + 60):
             return
-        img = pygame.transform.rotate(self._sprite, -math.degrees(self.heading))
+        img = pygame.transform.rotozoom(self._sprite, -math.degrees(self.heading), 1.0)
         surface.blit(img, img.get_rect(center=(round(sp.x), round(sp.y))))
         if int(t * 6) % 2 == 0:
             r = Vector2(-math.sin(self.heading), math.cos(self.heading))
@@ -89,6 +89,7 @@ class RaceControl:
         self._order: dict = {}
         self._order_timer = 0.0
         self._since = 0.0
+        self._lead: "Car | None" = None
 
     @property
     def active(self) -> bool:
@@ -118,7 +119,7 @@ class RaceControl:
             self.deploy("SC" if random.random() < 0.65 else "VSC", f"{car.short} steht auf der Strecke")
         elif car.damage.total > 0.5 and random.random() < 0.5:
             self.deploy("SC", f"schwerer Unfall von {car.short}")
-        elif random.random() < 0.25:
+        elif car.damage.total > 0.25 and random.random() < 0.3:
             self.deploy("VSC", f"Trümmer nach Unfall von {car.short}")
 
     def deploy(self, mode: str, reason: str) -> None:
@@ -155,8 +156,8 @@ class RaceControl:
                 if remaining > 2:
                     s.message("Günstiger Stopp unter Neutralisation möglich (B)", (255, 200, 40), 3.0)
                 continue
-            if car.tyres.wear > 0.3 and remaining > 3:
-                car.pit_request = s._compound_for_laps(remaining - 1)
+            if remaining > 2:
+                car.pit_request = s.plan_pit(car, neutralised=True)
 
     def _end(self) -> None:
         s = self.s
@@ -187,6 +188,7 @@ class RaceControl:
     def _sc_step(self, h: float) -> None:
         s, sc = self.s, self.sc
         leader = self._leader()
+        self._lead = leader
         top = TOP_SPEED
         if self.phase in ("out", "in") and sc is None:
             self.phase = "restart"
@@ -232,14 +234,21 @@ class RaceControl:
         L = s.track.length
         best_gap, best_speed = None, 0.0
         yielding = {a for a, b in self.give_back if b is car}
-        objects = [(o.s, o.speed_fwd) for o in s.cars if o is not car and not o.in_pit and not o.dnf
-                   and not o.session_done and o not in yielding]
+        objects = [(o.s, o.speed_fwd, o.distance > car.distance) for o in s.cars if o is not car and not o.in_pit
+                   and not o.dnf and not o.session_done and o not in yielding]
         if self.sc is not None:
-            objects.append((self.sc.s, self.sc.speed))
-        for os_, ov in objects:
-            gap = (os_ - car.s) % L
-            if 5.0 < gap < 900.0 and (best_gap is None or gap < best_gap):
+            objects.append((self.sc.s, self.sc.speed, True))
+        for os_, ov, in_front in objects:
+            gap = (os_ - car.s + L / 2) % L - L / 2
+            # side by side: only the car that is behind in the race order falls back into line
+            lower = -60.0 if in_front else 5.0
+            if lower < gap < 900.0 and (best_gap is None or gap < best_gap):
                 best_gap, best_speed = gap, ov
+        if self.sc is not None and self.phase in ("out", "in"):
+            sc_gap = (self.sc.s - car.s + L / 2) % L - L / 2
+            if -500.0 < sc_gap < 10.0 and car is self._lead:
+                # the leader has got alongside/past the safety car: drop back behind it
+                return top * SC_SPEED * 0.55
         if best_gap is None:
             limit = top * SC_SPEED if self.phase == "restart" else top * CATCH_UP
             return limit

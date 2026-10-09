@@ -11,6 +11,8 @@ from .car import build_car_sprite
 from .car_setup import CarSetup, predicted, recommended
 from .profiles import Team
 from .settings import CYAN, GREEN, GREY, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH, TOP_SPEED, WHITE, YELLOW
+from .i18n import tr
+from .user_settings import speed_in
 from .utils import draw_panel, draw_text
 
 if TYPE_CHECKING:
@@ -21,6 +23,7 @@ ACCENT = (70, 170, 255)
 
 
 def _wrap(text: str, font: pygame.font.Font, width: int) -> list[str]:
+    text = tr(text)
     lines, line = [], ""
     for word in text.split():
         trial = f"{line} {word}".strip()
@@ -49,7 +52,7 @@ class GarageScreen:
         self.bg = _Background()
         self.t = 0.0
         color = team.color if team is not None else (0, 215, 255)
-        self.sprite = pygame.transform.rotozoom(build_car_sprite(color, (255, 255, 255)), 90, 4.0)
+        self.sprite = pygame.transform.rotozoom(build_car_sprite(color, (255, 255, 255), 4.0), 90, 1.0)
 
     @property
     def rows(self) -> list[str]:
@@ -148,9 +151,11 @@ class GarageScreen:
         base = predicted(CarSetup(), team_top)
         screen.blit(self.sprite, self.sprite.get_rect(center=(box.right - 70, box.y + 112)))
         draw_text(screen, "PROGNOSE", f.tiny, GREY, (box.x + 18, box.y + 14), shadow=False)
-        draw_text(screen, f"{pred['top']:.0f} km/h", f.large, WHITE, (box.x + 18, box.y + 34))
+        units = self.game.settings.units
+        top, unit = speed_in(pred["top"], units)
+        draw_text(screen, f"{top:.0f} {unit}", f.large, WHITE, (box.x + 18, box.y + 34))
         draw_text(screen, "Topspeed (Kurven-Modus)", f.tiny, GREY, (box.x + 18, box.y + 70), shadow=False)
-        draw_text(screen, f"{pred['max']:.0f} km/h", f.medium, CYAN, (box.x + 18, box.y + 92))
+        draw_text(screen, f"{speed_in(pred['max'], units)[0]:.0f} {unit}", f.medium, CYAN, (box.x + 18, box.y + 92))
         draw_text(screen, "mit Gerade-Modus + Windschatten" + ("  (Begrenzer!)" if pred["max"] < base["max"] - 2
                                                                 and self.setup.gearing < 0 else ""),
                   f.tiny, GREY, (box.x + 18, box.y + 118), shadow=False)

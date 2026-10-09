@@ -28,22 +28,69 @@ MARKERS_PER_LAP: int = 40
 SECTOR_MARKERS: tuple[int, int] = (13, 26)
 
 
-def build_car_sprite(body: Color, helmet: Color) -> pygame.Surface:
-    L, W = int(CAR_LENGTH), int(CAR_WIDTH)
-    surf = pygame.Surface((L, W), pygame.SRCALPHA)
-    dark = tuple(max(0, c - 70) for c in body)
-    tyre = (18, 18, 20)
-    for x in (3, 23):
-        pygame.draw.rect(surf, tyre, (x, 0, 7, 4), border_radius=1)
-        pygame.draw.rect(surf, tyre, (x, W - 4, 7, 4), border_radius=1)
-    pygame.draw.rect(surf, dark, (0, 2, 4, W - 4))
-    pygame.draw.rect(surf, dark, (L - 4, 1, 3, W - 2))
-    pygame.draw.polygon(surf, body, [(3, 4), (20, 3), (24, 6), (L - 2, 7), (L - 2, W - 7),
-                                     (24, W - 6), (20, W - 3), (3, W - 4)])
-    pygame.draw.ellipse(surf, (15, 15, 18), (13, 5, 9, W - 10))
-    pygame.draw.circle(surf, helmet, (18, W // 2), 2)
-    pygame.draw.polygon(surf, (250, 250, 250), [(L - 4, W // 2), (L - 9, W // 2 - 2), (L - 9, W // 2 + 2)])
-    return surf
+def _mix(a: Color, b: Color, t: float) -> Color:
+    return (int(a[0] + (b[0] - a[0]) * t), int(a[1] + (b[1] - a[1]) * t), int(a[2] + (b[2] - a[2]) * t))
+
+
+_SPRITE_CACHE: dict[tuple, pygame.Surface] = {}
+
+
+def build_car_sprite(body: Color, helmet: Color, scale: float = 1.0) -> pygame.Surface:
+    """Top-down F1 car, drawn 8x oversized and smooth-scaled down so the edges are anti-aliased.
+    The nose points to +x. scale=1 gives the in-race size (CAR_LENGTH x CAR_WIDTH)."""
+    key = (tuple(body), tuple(helmet), round(scale, 2))
+    cached = _SPRITE_CACHE.get(key)
+    if cached is not None:
+        return cached.copy()
+    S = 8
+    L, W = CAR_LENGTH, CAR_WIDTH
+    surf = pygame.Surface((int(L * S), int(W * S)), pygame.SRCALPHA)
+    dark = _mix(body, (0, 0, 0), 0.45)
+    light = _mix(body, (255, 255, 255), 0.35)
+    carbon, tyre, rim = (28, 28, 32), (16, 16, 18), (70, 70, 76)
+
+    def P(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        return [(x * S, y * S) for x, y in pts]
+
+    def R(x: float, y: float, w: float, h: float) -> pygame.Rect:
+        return pygame.Rect(round(x * S), round(y * S), round(w * S), round(h * S))
+
+    for x, w in ((3.0, 7.0), (23.0, 6.0)):
+        for y in (0.0, W - 3.6):
+            pygame.draw.rect(surf, tyre, R(x, y, w, 3.6), border_radius=S)
+            pygame.draw.rect(surf, rim, R(x + 0.6, y + (0.5 if y else 2.6), w - 1.2, 0.5))
+    pygame.draw.polygon(surf, carbon, P([(4, 3.2), (23, 4.2), (25, 6.0), (25, 10.0), (23, 11.8), (4, 12.8)]))
+    pygame.draw.polygon(surf, body, P([(8, 3.6), (12, 3.0), (19, 3.4), (22, 5.6), (22, 10.4), (19, 12.6), (12, 13.0),
+                                       (8, 12.4)]))
+    pygame.draw.polygon(surf, dark, P([(9, 3.9), (12, 3.4), (16, 3.6), (16, 4.4), (9, 4.6)]))
+    pygame.draw.polygon(surf, dark, P([(9, 12.1), (12, 12.6), (16, 12.4), (16, 11.6), (9, 11.4)]))
+    pygame.draw.polygon(surf, body, P([(3.5, 6.0), (13, 5.4), (24, 6.4), (31.5, 7.3), (33.6, 7.7), (33.6, 8.3),
+                                       (31.5, 8.7), (24, 9.6), (13, 10.6), (3.5, 10.0)]))
+    pygame.draw.line(surf, light, (5 * S, 8 * S), (32 * S, 8 * S), int(0.7 * S))
+    pygame.draw.polygon(surf, dark, P([(30.6, 0.8), (33.6, 1.4), (33.6, W - 1.4), (30.6, W - 0.8)]))
+    pygame.draw.rect(surf, light, R(32.6, 1.4, 0.7, W - 2.8))
+    for y in (0.6, W - 1.6):
+        pygame.draw.rect(surf, carbon, R(30.2, y, 3.6, 1.0))
+    pygame.draw.rect(surf, dark, R(0.2, 1.2, 3.6, W - 2.4), border_radius=S // 2)
+    pygame.draw.rect(surf, light, R(0.4, 1.6, 1.0, W - 3.2))
+    for y in (0.8, W - 1.8):
+        pygame.draw.rect(surf, carbon, R(0.0, y, 4.0, 1.0))
+    pygame.draw.ellipse(surf, (12, 12, 14), R(14.0, 5.8, 7.5, 4.4))
+    pygame.draw.circle(surf, helmet, (17.4 * S, 8 * S), 1.7 * S)
+    pygame.draw.circle(surf, _mix(helmet, (0, 0, 0), 0.4), (17.4 * S, 8 * S), 1.7 * S, max(1, S // 3))
+    pygame.draw.arc(surf, carbon, R(15.0, 5.6, 7.6, 4.8), -1.4, 1.4, int(0.6 * S))
+    pygame.draw.line(surf, carbon, (14.6 * S, 8 * S), (21.6 * S, 8 * S), max(1, S // 3))
+    pygame.draw.rect(surf, (255, 40, 40), R(0.0, 7.4, 0.6, 1.2))
+    out = pygame.transform.smoothscale(surf, (max(2, round(L * scale)), max(2, round(W * scale))))
+    _SPRITE_CACHE[key] = out
+    return out.copy()
+
+
+def shadow_of(sprite: pygame.Surface, alpha: int = 85) -> pygame.Surface:
+    shadow = sprite.copy()
+    shadow.fill((0, 0, 0, 255), special_flags=pygame.BLEND_RGB_MULT)
+    shadow.fill((255, 255, 255, alpha), special_flags=pygame.BLEND_RGBA_MULT)
+    return shadow
 
 
 class Car:
@@ -99,6 +146,8 @@ class Car:
 
         self.frozen = False
         self.collide_cars = True
+        self.blue_for: "Car | None" = None
+        self.blue_gap = 0.0
         self.engine_factor = 1.0
         self.perf = amplified(profile.car)
         self.tyres: TyreSet | None = None
@@ -141,7 +190,9 @@ class Car:
         self.straight_mode_time = 0.0
 
         self._sprite = build_car_sprite(self.color, profile.helmet)
+        self._shadow = shadow_of(self._sprite)
         self._rot_cache: dict[int, pygame.Surface] = {}
+        self.vmax = 0.0
 
     @property
     def forward(self) -> Vector2:
@@ -343,6 +394,8 @@ class Car:
         self.vel = fwd2 * vf2 + right2 * vl2
         self.speed_fwd = vf2
         self.sliding = abs(vl2) > 60.0
+        if vf2 > self.vmax:
+            self.vmax = vf2
         self.pos += self.vel * dt
         if self.tyres is not None:
             lateral_use = min(1.2, abs(vf2 * yaw_rate) / max(grip, 1.0))
@@ -351,7 +404,9 @@ class Car:
     def update_track_state(self, session: "Session") -> None:
         track = self.track
         L = track.length
-        idx, s, lat = track.project(self.pos, self.idx)
+        # called every physics step (a few px of travel), so a narrow window keeps the projection from
+        # snapping onto a neighbouring part of the track at chicanes and hairpins
+        idx, s, lat = track.project(self.pos, self.idx, back=4, fwd=6)
         ds = s - self.s
         if ds < -L / 2:
             ds += L
@@ -436,9 +491,12 @@ class Car:
         key = int(round(-math.degrees(self.heading) / 3.0)) * 3 % 360
         img = self._rot_cache.get(key)
         if img is None:
-            img = pygame.transform.rotate(self._sprite, key)
+            img = pygame.transform.rotozoom(self._sprite, key, 1.0)
             self._rot_cache[key] = img
+            self._rot_cache[key + 2000] = pygame.transform.rotozoom(self._shadow, key, 1.0)
         rect = img.get_rect(center=(round(screen_pos.x), round(screen_pos.y)))
+        if not self.is_ghost:
+            surface.blit(self._rot_cache[key + 2000], rect.move(3, 4))
         if self.is_ghost:
             ghost = self._rot_cache.get(key + 1000)
             if ghost is None:

@@ -15,6 +15,7 @@ from .car import Car
 from .physics import handle_collisions
 from .player_car import Player_Car
 from .profiles import AUTOPILOT_BRAIN, PLAYER_PROFILE, DriverProfile, driver_grip
+from .effects import Effects
 from .render3d import Renderer3D
 from .pitlane import PIT_ACCEL, PIT_DECEL, SPEED_LIMIT
 from .car_setup import recommended
@@ -22,7 +23,7 @@ from .career_events import FAILURES, failure_chance
 from .tyres import COMPOUNDS, COMPOUND_ORDER, TyreSet
 from .utils import approach
 from .sensors import RADAR_RANGE, lookahead_points
-from .race_control import RaceControl
+from .race_control import PUNCTURE_WEAR, RaceControl
 from .i18n import tr
 from .stewards import Stewards
 from .settings import (DIFFICULTY_LEVELS, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
@@ -130,6 +131,7 @@ class Session:
         self._label_cache: dict[str, pygame.Surface] = {}
         self.view3d = config.view3d
         self.r3d = Renderer3D()
+        self.fx = Effects(track, game.settings.effects)
         self.stewards = Stewards(self)
         self.overview = False
         self.director_timer = 0.0
@@ -137,6 +139,8 @@ class Session:
         self.best_sectors: list[float | None] = [None, None, None]
         self.hide_hud = False
         self.blue_flag = 0.0
+        self._blue_ignored = 0.0
+        self._blue_warned = False
         self.team_orders: dict[Car, dict] = {}
         self.failures: dict[str, str] = {}
         if config.objective and config.player is not None:
@@ -239,6 +243,10 @@ class Session:
                 self.game.go_to_menu()
             else:
                 self.paused = True
+        elif key == pygame.K_r and self.paused:
+            self.game.sound.stop()
+            self.game.start_session(self.kind)
+            return
         elif key == pygame.K_p and event.mod & pygame.KMOD_SHIFT:
             rc = getattr(self, "rc", None)
             if rc is not None and self.race_started and not rc.active and rc._leader() is not None:
@@ -317,6 +325,7 @@ class Session:
         h = sim_dt / steps
         for _ in range(steps):
             self._step(h)
+        self.fx.update(self, frame_dt)
         if self.spectator and self.config.auto_camera:
             self._director(frame_dt)
         self.camera.update(self.cars[self.cam_index], frame_dt)
@@ -520,7 +529,7 @@ class Session:
             out.append((p + side, heading, colors.get(team, (200, 200, 200)), team))
         return out
 
-    def plan_pit(self, car: Car) -> str | None:
+    def plan_pit(self, car: Car, neutralised: bool = False) -> str | None:
         return None
 
     def damage_pit_allowed(self, car: Car) -> bool:
@@ -660,7 +669,9 @@ class Session:
         if self.fastest_lap is None or lap_time < self.fastest_lap[0]:
             self.fastest_lap = (lap_time, car.short)
             self.add_feed(f"Schnellste Runde: {car.short} {format_time(lap_time)}")
-        if not car.session_done and car.pit_request is None and not car.is_player:
+        # the box is past the line: a car crossing it in the pit lane is still on the old set - don't
+        # order a second stop for it
+        if not car.session_done and car.pit_request is None and car.pit_state is None and not car.is_player:
             car.pit_request = self.plan_pit(car)
         if car is self.player:
             if lap_time == car.best_lap and self.fastest_lap[1] == car.short:
@@ -760,6 +771,7 @@ class Session:
             car.draw(screen, off)
         for obj in self.extra_objects():
             obj.draw(screen, off, self.time)
+        self.fx.draw(screen, off)
 
         for car in self.cars:
             sp = car.pos - off
@@ -993,6 +1005,7 @@ class RaceSession(Session):
 
     def neutralize(self, car: Car) -> None:
         self.rc.governor(car)
+        self._yield_to_blue(car, PHYSICS_STEP)
 
     def extra_objects(self) -> list:
         return [self.rc.sc] if self.rc.sc is not None else []
@@ -1045,20 +1058,51 @@ class RaceSession(Session):
         elif self.time - self.race_start_time > 3.0:
             self._await_reaction = False
 
+    BLUE_RANGE = 320.0
+
     def _check_blue_flag(self) -> None:
-        p = self.player
-        if p is None or p.session_done or p.in_pit:
-            return
+        """Blue flags for every car: a car a lap (or more) up within BLUE_RANGE behind means let it through."""
         L = self.track.length
-        for car in self.cars:
-            if car is p or car.dnf or car.in_pit:
-                continue
-            ahead = car.distance - p.distance
-            if L - 260 < ahead < L - 25:
-                if self.blue_flag <= 0:
-                    self.message(f"BLAUE FLAGGE - lass {car.short} überrunden", (60, 140, 255), 2.0)
-                self.blue_flag = 1.0
-                return
+        racing = [c for c in self.cars if not (c.dnf or c.session_done or c.in_pit or c.frozen)]
+        for x in racing:
+            chaser, gap = None, self.BLUE_RANGE
+            for y in racing:
+                lead = y.distance - x.distance
+                if y is x or lead < L * 0.5:
+                    continue
+                behind = L - lead % L
+                if 5.0 < behind < gap:
+                    chaser, gap = y, behind
+            x.blue_for, x.blue_gap = chaser, gap
+        p = self.player
+        if p is None or p.session_done:
+            return
+        if p.blue_for is not None:
+            if self.blue_flag <= 0:
+                self.message(f"BLAUE FLAGGE - lass {p.blue_for.short} überrunden", (60, 140, 255), 2.0)
+            self.blue_flag = 1.0
+            if p.blue_gap < 160:
+                self._blue_ignored += 0.5
+            if self._blue_ignored >= 12.0:
+                self.stewards.penalty(p, 5.0, f"blaue Flaggen ignoriert ({p.blue_for.short})")
+                self._blue_ignored = 0.0
+            elif self._blue_ignored >= 6.0 and not self._blue_warned:
+                self._blue_warned = True
+                self.message("Blaue Flagge ignoriert - Verwarnung! Lass ihn vorbei", (255, 140, 30), 3.0)
+        else:
+            self._blue_ignored = max(0.0, self._blue_ignored - 0.5)
+            if self._blue_ignored <= 0:
+                self._blue_warned = False
+
+    def _yield_to_blue(self, car: Car, h: float) -> None:
+        """AI backmarker under a blue flag: lift a little and, once the lapping car is right behind, let it
+        through - the backmarker turns 'ghost' (see-through, no contact, ignored by the chaser's sensors)."""
+        chaser = car.blue_for
+        if chaser is None or car is self.player or self.rc.active or car.blue_gap > 140.0:
+            return
+        car.throttle = min(car.throttle, 0.85)
+        car.straight_mode = False
+        car.ghost_timer = max(car.ghost_timer, 0.5)
 
     def standings(self) -> list[Car]:
         def key(c: Car) -> tuple[float, int, float]:
@@ -1087,19 +1131,80 @@ class RaceSession(Session):
             plan = COMPOUND_ORDER[COMPOUND_ORDER.index(plan) - 1]
         return plan
 
-    def plan_pit(self, car: Car) -> str | None:
+    def pit_loss(self, car: Car, neutralised: bool = False) -> float:
+        """Seconds a stop costs compared with staying on track (pit lane at the limiter + standing still)."""
+        pit = self.track.pit
+        if pit is None:
+            return 25.0
+        race_speed = max(100.0, car.top_speed * 0.75)
+        loss = pit.length / SPEED_LIMIT - pit.length / race_speed + self.stop_time(car) + 2.0
+        if not neutralised:
+            return loss
+        return loss * (0.5 if self.rc.mode == "SC" else 0.65)
+
+    def _cumulative_cost(self, car: Car, compound: str, wear: float, rate: float, laps: int) -> list[float]:
+        """cost[k] = time lost over the next k laps on this set against brand-new softs, puncture risk included."""
+        lap = self._lap_estimate(car)
+        grip = COMPOUNDS[compound].grip / COMPOUNDS["soft"].grip
+        out = [0.0]
+        for _ in range(laps):
+            wear = min(1.0, wear + rate)
+            cliff = max(0.0, wear - 0.70) / 0.30
+            rel = grip * (1.0 - 0.12 * wear - 0.25 * cliff * cliff)
+            cost = lap * 0.35 * (1.0 - math.sqrt(max(0.0, rel)))
+            if wear > PUNCTURE_WEAR:
+                cost += 30.0 * (wear - PUNCTURE_WEAR) / (1.0 - PUNCTURE_WEAR)
+            out.append(out[-1] + cost)
+        return out
+
+    def _lap_estimate(self, car: Car) -> float:
+        return car.best_lap or self.track.length / max(100.0, car.top_speed * 0.6)
+
+    def _wear_rate(self, car: Car) -> float:
+        """Wear per lap: measured once the set has a couple of laps on it, a physical estimate before that."""
+        tyres = car.tyres
+        expected = 0.85 * self._lap_estimate(car) * tyres.wear_factor / tyres.compound.life
+        if tyres.laps >= 2 and tyres.wear > 0.04:
+            measured = tyres.wear / tyres.laps
+            return 0.5 * (expected + measured) if tyres.laps < 4 else measured
+        return expected
+
+    def plan_pit(self, car: Car, neutralised: bool = False) -> str | None:
+        """Strategy: the cheapest way to the flag (any number of stops, any compounds) is found with a small
+        dynamic programme. The car pits now only if the best plan that stops now beats the best plan that
+        stays out. A request at the line means one more lap on the old set; under SC/VSC the next pit entry
+        is used straight away and that stop is cheaper."""
         tyres = car.tyres
         remaining = self.total_laps - car.laps_done
-        if tyres is None or remaining <= 1 or tyres.wear < 0.25:
+        if tyres is None or tyres.laps < 2 or remaining < 2 or tyres.wear_factor <= 0:
             return None
-        rate = tyres.wear / max(1, tyres.laps)
-        if tyres.wear + rate * remaining <= 0.9 or tyres.wear + rate * 2 < 0.8:
-            return None
-        after = remaining - 1
-        for key in COMPOUND_ORDER:
-            if rate * tyres.compound.life / COMPOUNDS[key].life * after < 0.85:
-                return key
-        return "hard"
+        rate = self._wear_rate(car)
+        cur = tyres.compound
+        full = self.pit_loss(car)
+        first = self.pit_loss(car, neutralised)
+        fresh = {key: self._cumulative_cost(car, key, 0.0, rate * cur.life / COMPOUNDS[key].life, remaining)
+                 for key in COMPOUND_ORDER}
+        best = [0.0] * (remaining + 1)
+        opener = [""] * (remaining + 1)
+        for n in range(1, remaining + 1):
+            value, pick = float("inf"), ""
+            for key, cum in fresh.items():
+                for k in range(1, n + 1):
+                    c = cum[k] + (0.0 if k == n else full + best[n - k])
+                    if c < value:
+                        value, pick = c, key
+            best[n], opener[n] = value, pick
+        old = self._cumulative_cost(car, cur.key, tyres.wear, rate, remaining)
+        if neutralised and old[remaining] < full:
+            return None   # would make it to the flag fine - a "cheap" stop would only be a pace gamble
+        old_laps = 0 if neutralised else 1
+        now = old[old_laps] + first + best[remaining - old_laps]
+        later = min([old[remaining]] + [old[k] + full + best[remaining - k]
+                                        for k in range(old_laps + 1, remaining)])
+        margin = 0.5 + (sum(map(ord, car.name)) % 7) * 0.25
+        if now + margin < later:
+            return opener[remaining - old_laps]
+        return None
 
     def on_lap_completed(self, car: Car, lap_time: float) -> None:
         if car.session_done:

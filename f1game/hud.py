@@ -9,10 +9,11 @@ from typing import TYPE_CHECKING
 
 import pygame
 
-from .settings import (CYAN, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PURPLE, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE,
-                       YELLOW)
+from .settings import (CYAN, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PURPLE, PX_PER_S_TO_KMH,
+                       SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .tyres import COMPOUNDS
 from .i18n import tr
+from .user_settings import speed_in
 from .utils import draw_panel, draw_text, format_gap, format_time
 
 if TYPE_CHECKING:
@@ -42,6 +43,7 @@ class HUD:
 
     def __init__(self, fonts: Fonts) -> None:
         self.f = fonts
+        self.units = "kmh"
         self._minimap_cache: dict[str, pygame.Surface] = {}
         self._ram_mb = 0.0
         self._ram_checked = 0
@@ -65,6 +67,7 @@ class HUD:
         return self._ram_mb
 
     def draw_session(self, screen: pygame.Surface, s: "Session") -> None:
+        self.units = s.game.settings.units
         standings = s.standings()
         self._info_panel(screen, s, standings)
         self._timing_tower(screen, s, standings)
@@ -225,12 +228,6 @@ class HUD:
         pygame.draw.rect(screen, (255, 200, 30) if blink else (200, 150, 0), rect, border_radius=6)
         draw_text(screen, text, f.small_bold, (20, 15, 0), rect.center, anchor="center", shadow=False)
 
-    def _blue_flag(self, screen: pygame.Surface, s: "Session") -> None:
-        if getattr(s, "blue_flag", 0.0) <= 0 or int(pygame.time.get_ticks() / 250) % 2:
-            return
-        for x in (0, SCREEN_WIDTH - 10):
-            pygame.draw.rect(screen, (40, 120, 255), (x, 180, 10, 360))
-
     def _minimap(self, screen: pygame.Surface, s: "Session") -> None:
         box = pygame.Rect(SCREEN_WIDTH - 256, 16, 240, 170)
         key = s.track.definition.key
@@ -268,9 +265,9 @@ class HUD:
             if not lit:
                 col = tuple(c // 6 for c in col)
             pygame.draw.circle(screen, col, (x + 24 + i * 16.5, y + 16), 6)
-        speed = int(car.speed_kmh)
-        draw_text(screen, f"{speed}", f.big, WHITE, (x + 150, y + 34), anchor="topright")
-        draw_text(screen, "km/h", f.small, GREY, (x + 154, y + 58))
+        speed, unit = speed_in(car.speed_kmh, self.units)
+        draw_text(screen, f"{int(speed)}", f.big, WHITE, (x + 150, y + 34), anchor="topright")
+        draw_text(screen, unit, f.small, GREY, (x + 154, y + 58))
         pygame.draw.rect(screen, PANEL_LIGHT, (x + 206, y + 32, 58, 62), border_radius=8)
         draw_text(screen, car.gear, f.big, YELLOW, (x + 235, y + 63), anchor="center")
         bx = x + 18
@@ -300,13 +297,29 @@ class HUD:
         elif car.sliding:
             draw_text(screen, "SLIDE", f.small_bold, ORANGE, (x + 205, y + 100))
 
+    def _blue_flag(self, screen: pygame.Surface, s: "Session") -> None:
+        car = s.focus
+        chaser = getattr(car, "blue_for", None)
+        if chaser is None or s.kind != "race":
+            return
+        wave = int(pygame.time.get_ticks() / 250) % 2
+        if wave:
+            for x in (0, SCREEN_WIDTH - 10):
+                pygame.draw.rect(screen, (40, 120, 255), (x, 180, 10, 360))
+        rect = pygame.Rect(SCREEN_WIDTH // 2 - 150, 84, 300, 40)
+        draw_panel(screen, rect, (20, 70, 200) if wave else (30, 95, 235), 235)
+        pygame.draw.rect(screen, (40, 120, 255), (rect.x + 10, rect.y + 8, 30, 24))
+        draw_text(screen, f"BLAUE FLAGGE · {chaser.short}", self.f.small_bold, WHITE, (rect.x + 52, rect.centery),
+                  anchor="midleft", shadow=False)
+
     def _pit_overlay(self, screen: pygame.Surface, car: "Car") -> None:
         f = self.f
         if car.in_pit:
             cx = SCREEN_WIDTH // 2
             py = SCREEN_HEIGHT - 190
             draw_panel(screen, (cx - 150, py, 300, 70), (60, 45, 0), 220)
-            draw_text(screen, "PIT LIMITER  100 km/h", f.medium, (255, 210, 40), (cx, py + 20), anchor="center")
+            limit, unit = speed_in(100.0, self.units)
+            draw_text(screen, f"PIT LIMITER  {limit:.0f} {unit}", f.medium, (255, 210, 40), (cx, py + 20), anchor="center")
             sub = (f"Reifenwechsel ... {car.pit_stop_timer:3.1f}s" if car.pit_stop_timer > 0
                    else f"-> {COMPOUNDS[car.pit_compound].name}")
             draw_text(screen, sub, f.small_bold, WHITE, (cx, py + 50), anchor="center")
@@ -402,6 +415,8 @@ class HUD:
             if pending not in ("none", None):
                 hint = f"Anweisung: {COMPOUNDS[pending].name} ..."
             draw_text(screen, hint, f.tiny, (120, 200, 255), (x + 12, y + h - 68), shadow=False)
+        if car.profile.number:
+            title += f" · #{car.profile.number}"
         draw_text(screen, title[:28], f.tiny, GREY if car is s.player else WHITE, (x + 12, y + 10), shadow=False)
         if car is not s.player:
             sub = car.profile.team + (f" · KI {car.profile.brain}/{car.profile.checkpoint}" if not car.is_player else "")
@@ -453,8 +468,8 @@ class HUD:
         cy += 20
         gap, trend = self._gap_trend(s, car, standings)
         if s.kind == "race" and gap is not None:
-            tr = "" if trend is None else (f"  ({trend:+.1f}/Rd.)")
-            draw_text(screen, f"Vordermann: {gap:.2f}s{tr}", f.tiny, WHITE, (x + 12, cy), shadow=False)
+            trend_txt = "" if trend is None else (f"  ({trend:+.1f}/Rd.)")
+            draw_text(screen, f"Vordermann: {gap:.2f}s{trend_txt}", f.tiny, WHITE, (x + 12, cy), shadow=False)
             cy += 20
         info = []
         if car.pit_stops:
@@ -463,24 +478,27 @@ class HUD:
             info.append(f"Track Limits {car.tl_count}/{5}")
         if car.last_lap:
             info.append(f"Letzte {format_time(car.last_lap)[2:]}")
+        if car.vmax > 30:
+            vmax, unit = speed_in(car.vmax * PX_PER_S_TO_KMH, s.game.settings.units)
+            info.append(f"Vmax {vmax:.0f}")
         if info:
-            draw_text(screen, " · ".join(info)[:42], f.tiny, (180, 180, 190), (x + 12, cy), shadow=False)
+            draw_text(screen, " · ".join(tr(i) for i in info)[:42], f.tiny, (180, 180, 190), (x + 12, cy), shadow=False)
         msg, col = self._radio(s, car, forecast, remaining, gap, trend)
         ry = y + h - 50
         pygame.draw.rect(screen, (28, 30, 38), (x + 8, ry, w - 16, 42), border_radius=6)
         pygame.draw.rect(screen, col, (x + 8, ry, 3, 42), border_radius=2)
         draw_text(screen, "FUNK", f.tiny, GREY, (x + 18, ry + 4), shadow=False)
-        words, line, lines = msg.split(), "", []
+        words, line, lines = tr(msg).split(), "", []
         for word in words:
             trial = f"{line} {word}".strip()
-            if f.tiny.size(trial)[0] > w - 70 and line:
+            if f.tiny.size(trial)[0] > w - 84 and line:
                 lines.append(line)
                 line = word
             else:
                 line = trial
         lines.append(line)
         for k, ln in enumerate(lines[:2]):
-            draw_text(screen, ln, f.tiny, col, (x + 56, ry + 6 + k * 16), shadow=False)
+            draw_text(screen, ln, f.tiny, col, (x + 66, ry + 6 + k * 16), shadow=False)
 
     def _race_control(self, screen: pygame.Surface, s: "Session") -> None:
         log = s.stewards.log
@@ -619,8 +637,10 @@ class HUD:
         shade.fill((0, 0, 0, 160))
         screen.blit(shade, (0, 0))
         draw_text(screen, "PAUSE", self.f.huge, WHITE, (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 40), anchor="center")
-        draw_text(screen, "P: Weiter    ESC: Hauptmenü", self.f.medium, GREY,
+        draw_text(screen, "P: Weiter    R: Neustart    ESC: Hauptmenü", self.f.medium, GREY,
                   (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 30), anchor="center")
+        draw_text(screen, f"{s.title}  ·  {s.track.name}  ·  F12: Screenshot", self.f.small, (150, 150, 160),
+                  (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 90), anchor="center", shadow=False)
         pulse = 0.5 + 0.5 * math.sin(pygame.time.get_ticks() / 300)
         pygame.draw.rect(screen, F1_RED, (SCREEN_WIDTH // 2 - 60, SCREEN_HEIGHT // 2 + 60, 120 * pulse, 4))
 

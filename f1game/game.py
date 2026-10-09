@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import gc
+import time
 from typing import Callable, Protocol
 
 import pygame
 
 from .car_setup import CarSetup, load_setups, recommended, save_setups
 from .career import Career, migrate_legacy
-from .i18n import set_language
+from .i18n import set_language, tr
 from .records import Records
 from .championship import Championship
 from .garage import GarageScreen
 from .hud import HUD, Fonts
-from .profiles import BrainLibrary, Team, load_drivers, load_teams, player_profile
+from .profiles import DATA_DIR, BrainLibrary, Team, load_drivers, load_teams, player_profile
 from .tyres import COMPOUND_ORDER
 from .screens import AnalysisScreen, ChampionshipScreen, MainMenu, PodiumScreen, ResultsScreen, SettingsScreen, SetupScreen
 from .sessions import PracticeSession, QualifyingSession, RaceSession, Session, WeekendConfig
@@ -23,7 +24,7 @@ from .track import TRACK_DEFS, Track
 from .sound import SoundSystem
 from .training_screen import TrainingScreen
 from .user_settings import UserSettings
-from .utils import clear_render_caches, draw_text, vertical_gradient
+from .utils import clear_render_caches, draw_panel, draw_text, vertical_gradient
 
 
 class GameState(Protocol):
@@ -35,7 +36,7 @@ class GameState(Protocol):
 class Game:
 
     def __init__(self) -> None:
-        pygame.mixer.pre_init(22050, -16, 1, 512)
+        pygame.mixer.pre_init(22050, -16, 2, 512)
         pygame.init()
         pygame.display.set_caption("Gulivers Gieles F1 Game")
         self.settings = UserSettings.load()
@@ -61,28 +62,55 @@ class Game:
         self.career: Career | None = None
         self.records = Records()
         self.running = True
+        self.toast: tuple[str, int] | None = None
         self.state: GameState = MainMenu(self)
 
     def run(self) -> None:
         while self.running:
-            dt = min(self.clock.tick(FPS) / 1000.0, MAX_FRAME_DT)
+            dt = min(self.clock.tick(self.settings.fps or FPS) / 1000.0, MAX_FRAME_DT)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_F12:
+                    self.screenshot()
                 else:
                     if event.type == pygame.KEYDOWN and not isinstance(self.state, Session):
                         if event.key in (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT):
                             self.sound.ui("click")
                         elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                             self.sound.ui("confirm")
+                        elif event.key == pygame.K_ESCAPE:
+                            self.sound.ui("back")
                     self.state.handle_event(event)
             if isinstance(self.state, Session) and self.state.config.instant:
                 self._simulate_instant(self.state)
             else:
                 self.state.update(dt)
                 self.state.draw(self.screen)
+            self._draw_toast()
             pygame.display.flip()
         pygame.quit()
+
+    def screenshot(self) -> None:
+        folder = DATA_DIR / "screenshots"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"f1_{time.strftime('%Y%m%d_%H%M%S')}.png"
+        pygame.image.save(self.screen, str(path))
+        self.sound.ui("confirm")
+        self.toast = (f"Screenshot gespeichert: data/screenshots/{path.name}", pygame.time.get_ticks() + 2500)
+
+    def _draw_toast(self) -> None:
+        if self.toast is None:
+            return
+        text, until = self.toast
+        if pygame.time.get_ticks() > until:
+            self.toast = None
+            return
+        f = self.fonts.small_bold
+        w = f.size(tr(text))[0] + 40
+        rect = pygame.Rect((SCREEN_WIDTH - w) // 2, 14, w, 36)
+        draw_panel(self.screen, rect, (20, 22, 30), 230, border=(255, 200, 40))
+        draw_text(self.screen, text, f, WHITE, rect.center, anchor="center", shadow=False)
 
     def _simulate_instant(self, session: Session) -> None:
         session.time_scale = 8.0
@@ -240,6 +268,8 @@ class Game:
 
     def start_session(self, kind: str) -> None:
         assert self.config is not None
+        player = self.config.player
+        self.player_name = player.name if player is not None else self.settings.player_name
         self._loading_screen(kind)
         track = self.tracks[self.config.track_key]
         for other in self.tracks.values():

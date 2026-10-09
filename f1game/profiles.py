@@ -81,6 +81,7 @@ class DriverProfile:
     tyre_mgmt: float = 1.0
     rating: int = 0
     pool: bool = False
+    number: int = 0
 
 
 PLAYER_PROFILE = DriverProfile("Du (Spieler)", "YOU", "Player Racing", (0, 215, 255), (0, 230, 255))
