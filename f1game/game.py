@@ -341,7 +341,7 @@ class Game:
                 after, after_label = nxt, label
 
                 def nxt() -> None:
-                    self.state = PracticeAnalysisScreen(self, player, cfg.race_laps, after, after_label)
+                    self.state = PracticeAnalysisScreen(self, player, cfg.race_laps, after, after_label, session)
                 label = "zur Datenanalyse"
             self.state = ResultsScreen(self, "Ergebnis Freies Training", f"{track} · nach Bestzeit",
                                        ["POS", "FAHRER", "TEAM", "BESTZEIT", "ABSTAND", "RUNDEN"],
