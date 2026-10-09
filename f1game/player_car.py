@@ -134,7 +134,7 @@ class Player_Car(Car):
         use = self.lateral_use
         # front grip feel: full up to ~85% of the grip, then the wheel goes light (understeer)
         grip_feel = 1.0 if use < 0.85 else max(0.3, 1.0 - (use - 0.85) * 2.2)
-        torque = -self.steer_angle * (0.15 + 0.85 * speed) * grip_feel * 0.9
+        torque = -self.steer_angle * (0.2 + 0.9 * speed) * grip_feel
         # rear stepping out: the car's velocity points away from the nose -> the wheel turns into the slide
         slip = self.vel.dot(self.right) / 220.0 if v > 20 else 0.0
         torque += max(-0.6, min(0.6, slip)) * 0.8

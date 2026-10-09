@@ -153,6 +153,7 @@ class Car:
 
         self.frozen = False
         self.collide_cars = True
+        self.ghost_visual = False       # practice/qualifying: other cars are see-through and can't be hit
         self.blue_for: "Car | None" = None
         self.blue_gap = 0.0
         self.engine_factor = 1.0
@@ -211,6 +212,8 @@ class Car:
         self._rot_cache: dict[int, pygame.Surface] = {}
         self.vmax = 0.0
         self.lap_vmax = 0.0
+        self.at_grip_limit = False
+        self._tel = self._new_tel()
         self.lateral_use = 0.0          # share of the available cornering grip in use (force feedback)
         self.manual_gearbox = False     # sequential: the driver shifts, each gear has its own rev limiter
         self.manual_gear = 1
@@ -466,7 +469,9 @@ class Car:
 
         speed = max(abs(new_vf), 1.0)
         turn = sf.turn * (sf.brake_turn if braking_forward else 1.0)
-        k_max = min(math.tan(MAX_STEER_ANGLE) / WHEELBASE, grip * turn / (speed * speed))
+        k_geom, k_grip = math.tan(MAX_STEER_ANGLE) / WHEELBASE, grip * turn / (speed * speed)
+        k_max = min(k_geom, k_grip)
+        self.at_grip_limit = k_grip < k_geom
         yaw_rate = new_vf * self.steer_angle * k_max
         self.heading = wrap_angle(self.heading + (yaw_rate + self.spin) * dt)
         self.spin *= math.exp(-SPIN_DAMPING * dt)
@@ -479,6 +484,8 @@ class Car:
         self.vel = fwd2 * vf2 + right2 * vl2
         self.speed_fwd = vf2
         self.sliding = abs(vl2) > 60.0
+        if self.is_player and self.timing_started:
+            self._telemetry(dt, vf2)
         if vf2 > self.vmax:
             self.vmax = vf2
         if vf2 > self.lap_vmax:
@@ -561,6 +568,7 @@ class Car:
 
     def start_timing(self, now: float) -> None:
         self._lap_log_start = self._snapshot()
+        self._tel = self._new_tel()
         self.timing_started = True
         self.lap_start_time = now
         self.sectors = []
@@ -590,6 +598,53 @@ class Car:
         self.current_splits = {}
         session.on_lap_completed(self, lap)
 
+    @staticmethod
+    def _new_tel() -> dict:
+        return {"t": 0.0, "full": 0.0, "part": 0.0, "brake_t": 0.0, "coast": 0.0, "grass_t": 0.0, "slide_t": 0.0,
+                "under_t": 0.0, "over_t": 0.0, "lock_t": 0.0, "spin_t": 0.0, "kerb_t": 0.0, "straight_t": 0.0,
+                "speed_sum": 0.0, "steer_work": 0.0, "steer_prev": 0.0, "shifts": 0, "gear_prev": 1,
+                "sector_min": [999.0, 999.0, 999.0]}
+
+    def _telemetry(self, dt: float, v: float) -> None:
+        """Per-lap driving-style data of the player (practice analysis): pedals, slides, kerbs, smoothness."""
+        tel = self._tel
+        tel["t"] += dt
+        tel["speed_sum"] += v * dt
+        if self.throttle > 0.95:
+            tel["full"] += dt
+        elif self.throttle > 0.05:
+            tel["part"] += dt
+        if self.brake > 0.05:
+            tel["brake_t"] += dt
+        if self.throttle <= 0.05 and self.brake <= 0.05:
+            tel["coast"] += dt
+        if self.on_grass:
+            tel["grass_t"] += dt
+        elif abs(self.lateral) > self.track.half_width - 7:
+            tel["kerb_t"] += dt
+        if self.sliding:
+            tel["slide_t"] += dt
+            if self.brake > 0.5:
+                tel["lock_t"] += dt
+            else:
+                tel["over_t"] += dt
+        elif self.at_grip_limit and abs(self.steer_angle) > 0.65 and v > 120:
+            tel["under_t"] += dt        # lots of lock, but the front has run out of grip
+        if self.throttle > 0.9 and self.sliding and v < 250:
+            tel["spin_t"] += dt
+        if self.straight_mode:
+            tel["straight_t"] += dt
+        tel["steer_work"] += abs(self.steer_input - tel["steer_prev"])
+        tel["steer_prev"] = self.steer_input
+        gear = self.gear
+        if gear.isdigit() and int(gear) != tel["gear_prev"]:
+            tel["shifts"] += 1
+            tel["gear_prev"] = int(gear)
+        k = min(2, len(self.sectors))
+        kmh = v * PX_PER_S_TO_KMH
+        if 20 < kmh < tel["sector_min"][k]:
+            tel["sector_min"][k] = kmh
+
     def _snapshot(self) -> dict:
         t = self.tyres
         return {"wear": t.wear if t else 0.0, "compound": t.compound.key if t else "", "fuel": self.fuel,
@@ -600,7 +655,12 @@ class Car:
         now = self._snapshot()
         start = self._lap_log_start or now
         pitted = now["pits"] != start["pits"]
+        tel = self._tel
+        self._tel = self._new_tel()
         self.lap_log.append({
+            **{k: v for k, v in tel.items() if k not in ("steer_prev", "gear_prev")},
+            "sectors": list(self.last_sectors), "setup": dict(vars(self.setup)) if self.setup is not None else {},
+            "damage": self.damage.total, "wetness": self.track.wetness,
             "lap": len(self.lap_times), "time": lap, "valid": not self.lap_invalid, "compound": now["compound"],
             "wear": now["wear"], "wear_delta": None if pitted else now["wear"] - start["wear"],
             "fuel": now["fuel"], "fuel_used": None if pitted else start["fuel"] - now["fuel"],
@@ -617,6 +677,7 @@ class Car:
         screen_pos = self.pos - cam
         if not (-60 < screen_pos.x < surface.get_width() + 60 and -60 < screen_pos.y < surface.get_height() + 60):
             return
+        faded = self.is_ghost or self.ghost_visual
         key = int(round(-math.degrees(self.heading) / 3.0)) * 3 % 360
         img = self._rot_cache.get(key)
         if img is None:
@@ -624,9 +685,9 @@ class Car:
             self._rot_cache[key] = img
             self._rot_cache[key + 2000] = pygame.transform.rotozoom(self._shadow, key, 1.0)
         rect = img.get_rect(center=(round(screen_pos.x), round(screen_pos.y)))
-        if not self.is_ghost:
+        if not faded:
             surface.blit(self._rot_cache[key + 2000], rect.move(3, 4))
-        if self.is_ghost:
+        if faded:
             ghost = self._rot_cache.get(key + 1000)
             if ghost is None:
                 ghost = img.copy()
@@ -635,7 +696,7 @@ class Car:
             surface.blit(ghost, rect)
         else:
             surface.blit(img, rect)
-        if self.brake > 0.2 and self.speed_fwd > 5 and not self.is_ghost:
+        if self.brake > 0.2 and self.speed_fwd > 5 and not faded:
             rear = screen_pos - self.forward * (CAR_LENGTH / 2 - 1)
             pygame.draw.circle(surface, (255, 40, 40), rear, 2)
         if self.collision_flash > 0:

@@ -70,7 +70,7 @@ TUNING_HELP = {
                       "Tempo, leicht wenn die Front schiebt), das Lenkrad dreht beim Übersteuern ins Gegenlenken, "
                       "Schläge bei Kontakt, Rütteln auf Randsteinen und Kies, Zug bei kaputter Aufhängung. 0% = aus.",
     "Force Feedback umkehren": "Falls das Lenkrad in die falsche Richtung zieht (Kurve verstärkt statt zurückstellen): "
-                               "umkehren.",
+                               "umkehren. Moza-Wheelbases sind automatisch umgekehrt.",
     "Force Feedback testen": "ENTER: das Lenkrad zieht kurz nach rechts, dann nach links. Zieht es anders herum: "
                              "'Force Feedback umkehren' einschalten.",
     "Pedal-Achsen": "Gas und Bremse brauchen ZWEI getrennte Achsen, sonst kann man nicht gleichzeitig bremsen "
@@ -417,6 +417,7 @@ class ControlsScreen:
             p.ffb = round(max(0.0, min(1.0, p.ffb + 0.1 * delta)), 1)
         elif row == "Force Feedback umkehren":
             p.ffb_invert = not p.ffb_invert
+            p.ffb_checked = True
         elif row.endswith("kalibrieren"):
             self._pick_axis({"Lenkung": "steer", "Gaspedal": "throttle", "Bremspedal": "brake"}[row.split()[0]],
                             delta)
@@ -443,6 +444,7 @@ class ControlsScreen:
         c, joy = self.c, self.c.joystick
         if row == "Standard wiederherstellen" and joy is not None:
             c.profiles[joy.get_name()] = DeviceProfile.for_device(joy.get_name(), joy.get_numaxes())
+            c.profiles[joy.get_name()].apply_brand_defaults(joy.get_name())
             c.save()
         elif row == "Force Feedback testen":
             self.ffb_test = 1.6

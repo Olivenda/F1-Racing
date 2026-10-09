@@ -97,7 +97,17 @@ class DeviceProfile:
     rumble: float = 0.7             # vibration / force strength 0..1
     rotation: int = 0               # wheel: degrees lock-to-lock as set in the driver (0 = not a wheel)
     ffb: float = 0.7                # force feedback strength 0..1 (wheels with FFB motors)
-    ffb_invert: bool = False        # some drivers report the force direction mirrored
+    ffb_invert: bool = False        # some drivers report the force direction mirrored (Moza)
+    ffb_checked: bool = False       # the invert default for this brand has been applied once
+
+    def apply_brand_defaults(self, name: str) -> None:
+        """Moza bases (R3-R21) push the opposite way through SDL/DirectInput: their force runs inverted. Applied once,
+        afterwards the player's own choice in the settings sticks."""
+        if self.ffb_checked:
+            return
+        self.ffb_checked = True
+        if "moza" in name.lower():
+            self.ffb_invert = True
 
     @classmethod
     def for_device(cls, name: str, axes: int) -> "DeviceProfile":
@@ -123,7 +133,7 @@ class DeviceProfile:
     def from_json(cls, raw: dict) -> "DeviceProfile":
         prof = cls()
         for key in ("kind", "deadzone", "linearity", "saturation", "pedal_deadzone", "rumble", "rotation", "ffb",
-                    "ffb_invert"):
+                    "ffb_invert", "ffb_checked"):
             if key in raw:
                 setattr(prof, key, type(getattr(prof, key))(raw[key]))
         for key in AXES:
@@ -201,6 +211,7 @@ class Controls:
         name = joy.get_name()
         if name not in self.profiles:
             self.profiles[name] = DeviceProfile.for_device(name, joy.get_numaxes())
+        self.profiles[name].apply_brand_defaults(name)
         # a wheel always wins over a pad that happens to be plugged in as well
         if self.active not in self.joys or (self.profiles[name].kind == "wheel"
                                             and self.profile_of(self.active).kind != "wheel"):

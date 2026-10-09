@@ -1,0 +1,95 @@
+{
+ "enabled": true,
+ "devices": {
+  "Xbox 360 Controller": {
+   "kind": "gamepad",
+   "steer": {
+    "axis": 0,
+    "rest": 0.0,
+    "full": 1.0,
+    "device": "",
+    "low": null
+   },
+   "throttle": {
+    "axis": 5,
+    "rest": -1.0,
+    "full": 1.0,
+    "device": "",
+    "low": null
+   },
+   "brake": {
+    "axis": 4,
+    "rest": -1.0,
+    "full": 1.0,
+    "device": "",
+    "low": null
+   },
+   "buttons": {
+    "drs": 2,
+    "pit": 3,
+    "pause": 7,
+    "menu": 1,
+    "gear_down": 4,
+    "gear_up": 5,
+    "reset": 6,
+    "camera": 8,
+    "map": 9,
+    "view": -1,
+    "continue": 0
+   },
+   "deadzone": 0.06,
+   "linearity": 1.4,
+   "saturation": 1.0,
+   "pedal_deadzone": 0.04,
+   "rumble": 0.7,
+   "rotation": 0,
+   "ffb": 0.7,
+   "ffb_invert": false
+  }
+ },
+ "keyboard": {
+  "throttle": [
+   1073741906,
+   119
+  ],
+  "brake": [
+   1073741905,
+   115
+  ],
+  "left": [
+   1073741904,
+   97
+  ],
+  "right": [
+   1073741903,
+   100
+  ],
+  "gear_up": [
+   101
+  ],
+  "gear_down": [
+   113
+  ],
+  "drs": [
+   32
+  ],
+  "pit": [
+   98
+  ],
+  "reset": [
+   114
+  ],
+  "camera": [
+   107
+  ],
+  "view": [
+   118
+  ],
+  "map": [
+   109
+  ],
+  "pause": [
+   112
+  ]
+ }
+}

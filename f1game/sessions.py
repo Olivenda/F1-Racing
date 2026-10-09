@@ -114,6 +114,7 @@ REFUEL_KG_PER_S: float = 11.0
 
 class Session:
 
+    ghost_field: bool = False       # practice/qualifying: no car-to-car contact, every car drives alone
     kind: str = "session"
     title: str = "Session"
     fast_forward_scale: float = 4.0
@@ -192,6 +193,11 @@ class Session:
                 car = AI_Car(prof, self.track, net, engine_factor=self.config.difficulty * prof.pace)
                 car.grip_bonus = driver_grip(prof.pace)
                 car.apply_setup(ai_setup)
+            if self.ghost_field:
+                car.collide_cars = False
+                car.ghost_visual = not car.is_player
+                if isinstance(car, AI_Car):
+                    car.sees_others = False
             car.tyres = TyreSet(self.compound_for(car), self._wear_factor(car))
             car.damage.multiplier = 0.0 if self.config.damage == "off" else 1.0
             laps = max(1, self.config.race_laps)
@@ -1055,6 +1061,7 @@ class Session:
 
 
 class PracticeSession(Session):
+    ghost_field = True
     kind = "practice"
     title = "Freies Training"
 
@@ -1098,6 +1105,7 @@ class PracticeSession(Session):
 
 
 class QualifyingSession(Session):
+    ghost_field = True
     kind = "qualifying"
     title = "Qualifying"
     TIMED_LAPS: int = 3

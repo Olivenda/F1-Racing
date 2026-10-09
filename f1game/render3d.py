@@ -454,6 +454,10 @@ class Renderer3D:
         colors = {"body": body, "helmet": car.profile.helmet, "dark": _shade(body, 0.45), "carbon": (30, 30, 34),
                   "tyre": (22, 22, 24), "rim": rim, "visor": (12, 12, 16),
                   "accent": (min(255, body[0] + 70), min(255, body[1] + 70), min(255, body[2] + 70))}
+        if car.ghost_visual:
+            # practice/qualifying ghosts: washed out towards the fog so they read as see-through
+            colors = {k: (int(c[0] * 0.45 + FOG[0] * 0.55), int(c[1] * 0.45 + FOG[1] * 0.55),
+                          int(c[2] * 0.45 + FOG[2] * 0.55)) for k, c in colors.items()}
         near = depth < 700
         cam_l = ((self.cx - px) * fx + (self.cy - py) * fy, (self.cx - px) * rx + (self.cy - py) * ry)
         shadow = [self.to_cam(px + fx * lx + rx * ly, py + fy * lx + ry * ly, 0.2)
