@@ -6,6 +6,7 @@ import math
 from typing import TYPE_CHECKING, Sequence
 
 import pygame
+import pygame.gfxdraw
 from pygame.math import Vector2
 
 from .settings import SCREEN_HEIGHT, SCREEN_WIDTH, Color
@@ -159,6 +160,13 @@ class Renderer3D:
         self._ground_cache: dict[Color, pygame.Surface] = {}
         self.font: pygame.font.Font | None = None
         self.mode = 0
+        # anti-aliasing: "off", "edges" (smoothed polygon borders) or "high" (2x supersampling)
+        self.antialias = "edges"
+        self.ss = 1
+        self.aa = True
+        self._buf: pygame.Surface | None = None
+        self._scaled: dict[tuple[int, int], pygame.Surface] = {}
+        self._half_w, self._focal, self._hy = SCREEN_WIDTH / 2, FOCAL, HORIZON_Y
 
     @property
     def mode_name(self) -> str:
@@ -202,9 +210,19 @@ class Renderer3D:
         side = dx * self.rx + dy * self.ry
         return side, fwd * self.sp + up * self.cp, fwd * self.cp - up * self.sp
 
-    @staticmethod
-    def project(p: CamPoint) -> tuple[float, float]:
-        return SCREEN_WIDTH / 2 + FOCAL * p[0] / p[2], HORIZON_Y - FOCAL * p[1] / p[2]
+    def project(self, p: CamPoint) -> tuple[float, float]:
+        return self._half_w + self._focal * p[0] / p[2], self._hy - self._focal * p[1] / p[2]
+
+    def _big(self, img: pygame.Surface) -> pygame.Surface:
+        """Background image at supersampling size (cached per source image)."""
+        if self.ss == 1:
+            return img
+        key = (id(img), self.ss)
+        out = self._scaled.get(key)
+        if out is None:
+            out = pygame.transform.smoothscale_by(img, self.ss)
+            self._scaled[key] = out
+        return out
 
     def _clip(self, pts: Sequence[CamPoint]) -> list[CamPoint]:
         out: list[CamPoint] = []
@@ -230,7 +248,11 @@ class Renderer3D:
         if fog_depth is None:
             fog_depth = min(p[2] for p in pts)
         color = self.fog(color, fog_depth)
-        pygame.draw.polygon(surf, color, [self.project(p) for p in pts])
+        screen_pts = [self.project(p) for p in pts]
+        pygame.draw.polygon(surf, color, screen_pts)
+        if self.aa:
+            # blend the border into what is behind it: removes the stair steps on polygon edges
+            pygame.draw.aalines(surf, color, True, screen_pts)
 
     @staticmethod
     def fog(color: Color, depth: float) -> Color:
@@ -240,19 +262,43 @@ class Renderer3D:
     def draw(self, surf: pygame.Surface, track: "Track", cars: Sequence["Car"], target: "Car",
              racing_line: bool, label_font: pygame.font.Font,
              garages: Sequence[tuple[Vector2, float, Color, str]] = (), rain: float = 0.0) -> None:
+        self.ss = 2 if self.antialias == "high" else 1
+        self.aa = self.antialias == "edges"
+        out = surf
+        if self.ss > 1:
+            size = (SCREEN_WIDTH * self.ss, SCREEN_HEIGHT * self.ss)
+            if self._buf is None or self._buf.get_size() != size:
+                self._buf = pygame.Surface(size).convert()
+            surf = self._buf
+        self._half_w, self._focal, self._hy = SCREEN_WIDTH / 2 * self.ss, FOCAL * self.ss, HORIZON_Y * self.ss
+        labels = self._draw_world(surf, track, cars, target, racing_line, garages, rain)
+        if surf is not out:
+            try:
+                pygame.transform.smoothscale(surf, out.get_size(), out)
+            except (ValueError, pygame.error):
+                out.blit(pygame.transform.smoothscale(surf, out.get_size()), (0, 0))
+        for (x, y), car in labels:
+            txt = "DU" if car.is_player and car.short == "YOU" else car.short
+            img = label_font.render(tr(txt), True, (0, 230, 255) if car.is_player else (250, 250, 250))
+            out.blit(img, img.get_rect(midbottom=(x / self.ss, y / self.ss)))
+
+    def _draw_world(self, surf: pygame.Surface, track: "Track", cars: Sequence["Car"], target: "Car",
+                    racing_line: bool, garages: Sequence[tuple[Vector2, float, Color, str]],
+                    rain: float) -> list[tuple[tuple[float, float], "Car"]]:
         self._setup()
         d = track.definition
-        surf.blit(self.sky, (0, 0))
+        surf.blit(self._big(self.sky), (0, 0))
         if rain > 0.03:
-            self.rain_sky.set_alpha(int(255 * min(1.0, rain * 1.6)))
-            surf.blit(self.rain_sky, (0, 0))
+            rain_sky = self._big(self.rain_sky)
+            rain_sky.set_alpha(int(255 * min(1.0, rain * 1.6)))
+            surf.blit(rain_sky, (0, 0))
         ground = self._ground_cache.get(d.grass)
         if ground is None:
             ground = vertical_gradient((SCREEN_WIDTH, SCREEN_HEIGHT - int(HORIZON_Y) + 120),
                                        self.fog(d.grass, FAR * 0.9), d.grass)
             self._ground_cache[d.grass] = ground
-        horizon = HORIZON_Y - FOCAL * math.tan(self.pitch)
-        surf.blit(ground, (0, int(horizon)))
+        horizon = self._hy - self._focal * math.tan(self.pitch)
+        surf.blit(self._big(ground), (0, int(horizon)))
 
         n = track.n
         visible: list[tuple[float, int]] = []
@@ -356,10 +402,7 @@ class Renderer3D:
                     top = to_cam(car.pos.x, car.pos.y, 22)
                     if top[2] > NEAR:
                         labels.append((self.project(top), car))
-        for (x, y), car in labels:
-            txt = "DU" if car.is_player and car.short == "YOU" else car.short
-            img = label_font.render(tr(txt), True, (0, 230, 255) if car.is_player else (250, 250, 250))
-            surf.blit(img, img.get_rect(midbottom=(x, y)))
+        return labels
 
     def _draw_racing_line(self, surf: pygame.Surface, track: "Track", car: "Car") -> None:
         n = track.n
@@ -428,11 +471,14 @@ class Renderer3D:
                 return
             bx, by = self.project(base)
             tx, ty = self.project(top)
-            trunk_w = max(1, int(FOCAL * 2.5 / base[2]))
+            trunk_w = max(1, int(self._focal * 2.5 / base[2]))
             pygame.draw.line(surf, self.fog((90, 60, 35), base[2]), (bx, by), (tx, ty), trunk_w)
-            rad = max(2, int(FOCAL * r / top[2]))
-            pygame.draw.circle(surf, self.fog(_shade(col, 0.7), top[2]), (tx, ty + rad * 0.15), rad)
-            pygame.draw.circle(surf, self.fog(col, top[2]), (tx - rad * 0.15, ty), int(rad * 0.85))
+            rad = max(2, int(self._focal * r / top[2]))
+            for (cx, cy), cr, cc in (((tx, ty + rad * 0.15), rad, self.fog(_shade(col, 0.7), top[2])),
+                                     ((tx - rad * 0.15, ty), int(rad * 0.85), self.fog(col, top[2]))):
+                pygame.draw.circle(surf, cc, (cx, cy), cr)
+                if self.aa:
+                    pygame.gfxdraw.aacircle(surf, int(cx), int(cy), cr, cc)
 
     def _draw_box_world(self, surf: pygame.Surface, box: tuple[float, ...], color: Color) -> None:
         x0, x1, y0, y1, z0, z1 = box

@@ -15,6 +15,7 @@ ASSIST_NAMES = ["Aus", "Mittel (Stabilität + Bremslinie)", "Voll (+ automatisch
 UNITS = {"kmh": ("km/h", 1.0), "mph": ("mph", 0.621371)}
 FPS_OPTIONS = [30, 60, 120, 144]
 EFFECT_LEVELS = {"off": "Aus", "low": "Niedrig", "high": "Hoch"}
+ANTIALIAS_LEVELS = {"off": "Aus", "edges": "Kanten glätten", "high": "Hoch (2x Supersampling)"}
 GEARBOX_MODES = {"auto": "Automatik", "manual": "Sequenziell (selbst schalten)"}
 
 
@@ -41,6 +42,9 @@ class UserSettings:
     effects: str = "high"
     weather: str = "dynamic"
     gearbox: str = "auto"
+    antialias: str = "edges"
+    net_address: str = ""
+    net_port: int = 56543
 
     @property
     def tyre_wear_factor(self) -> float:
@@ -66,10 +70,16 @@ class UserSettings:
             settings.units = "kmh"
         if settings.effects not in EFFECT_LEVELS:
             settings.effects = "high"
+        if settings.antialias not in ANTIALIAS_LEVELS:
+            settings.antialias = "edges"
         if settings.gearbox not in GEARBOX_MODES:
             settings.gearbox = "auto"
         if settings.weather not in ("dry", "dynamic", "wet"):
             settings.weather = "dynamic"
+        if not isinstance(settings.net_port, int) or not 1024 <= settings.net_port <= 65535:
+            settings.net_port = 56543
+        if not isinstance(settings.net_address, str):
+            settings.net_address = ""
         if settings.fps not in FPS_OPTIONS:
             settings.fps = 60
         settings.assists = max(0, min(2, int(settings.assists)))

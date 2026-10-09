@@ -75,6 +75,43 @@ EXACT: dict[str, str] = {
     "Schaden": "Damage", "Reifenverschleiß": "Tyre wear", "Safety Car": "Safety car",
     "TV-Regie (Zuschauer)": "TV director (spectator)", "FPS anzeigen": "Show FPS", "Vollbild": "Fullscreen",
     "Einheiten": "Units", "Bildrate": "Frame rate", "Partikel & Effekte": "Particles & effects",
+    "Kantenglättung": "Anti-aliasing", "Kanten glätten": "Smooth edges",
+    "Hoch (2x Supersampling)": "High (2x supersampling)",
+    # online multiplayer
+    "ONLINE-MEHRSPIELER": "ONLINE MULTIPLAYER",
+    "Über das Internet: Spiel hosten (Port-Forwarding) oder beitreten":
+        "Over the internet: host a game (port forwarding) or join one",
+    "Zwei Fahrer über das Internet gegen das KI-Feld": "Two drivers over the internet against the AI field",
+    "Rolle": "Role", "Adresse": "Address", "HOST STARTEN": "START HOSTING", "VERBINDEN": "CONNECT",
+    "Host (Spiel eröffnen)": "Host (open a game)", "Beitreten": "Join",
+    "ESC bricht ab": "ESC cancels",
+    "SO GEHT'S (HOST)": "HOW IT WORKS (HOST)", "SO GEHT'S (BEITRETEN)": "HOW IT WORKS (JOIN)",
+    "2. Port wie beim Host einstellen.": "2. Set the same port as the host.",
+    "1. Adresse des Hosts eingeben: seine öffentliche IP (oder lokale IP im selben Netzwerk).":
+        "1. Enter the host's address: their public IP (or local IP on the same network).",
+    "3. VERBINDEN - der Host wählt Strecke und Modus, du fährst das Auto seines Teamkollegen.":
+        "3. CONNECT - the host picks track and mode, you drive their team-mate's car.",
+    "Dein Setup aus der Garage, deine Fahrhilfen, dein Getriebe und dein Lenkrad werden verwendet.":
+        "Your garage setup, your assists, your gearbox and your wheel are used.",
+    "3. Deinem Mitspieler deine öffentliche IP geben (z.B. auf whatismyip.com nachsehen). Im selben Netzwerk "
+    "reicht die lokale IP unten.":
+        "3. Give your friend your public IP (look it up e.g. on whatismyip.com). On the same network the local "
+        "IP below is enough.",
+    "4. HOST STARTEN, warten bis er verbunden ist, dann Strecke und Modus wählen.":
+        "4. START HOSTING, wait until they are connected, then pick track and mode.",
+    "LOKALE IP-ADRESSEN DIESES PCS": "LOCAL IP ADDRESSES OF THIS PC",
+    "Pfeile wählen · Tippen zum Eingeben · ENTER bestätigen · ESC zurück":
+        "Arrows select · type to enter · ENTER confirm · ESC back",
+    "ONLINE  ·  VERBUNDEN": "ONLINE  ·  CONNECTED",
+    "G: Garage (Setup für die nächste Strecke)  ·  ESC: Verbindung trennen":
+        "G: garage (setup for the next track)  ·  ESC: disconnect",
+    "Adresse des Hosts eingeben": "Enter the host's address",
+    "Port muss zwischen 1024 und 65535 liegen": "Port must be between 1024 and 65535",
+    "Verbindung getrennt": "Disconnected", "Der Mitspieler hat das Spiel verlassen": "The other player left the game",
+    "Ungültige Daten empfangen - Verbindung getrennt": "Invalid data received - disconnected",
+    "Ungültige Session vom Host": "Invalid session from the host", "Andere Spielversion": "Different game version",
+    "Abgelehnt": "Rejected", "Mitspieler getrennt - die KI übernimmt sein Auto":
+        "Other player disconnected - the AI takes over their car",
     "Bremsspuren": "Skid marks",
     "Tippen zum Ändern, Rücktaste löscht. Erscheint in Zeitentabellen und auf dem Podium.":
         "Type to change, backspace deletes. Shown in timing tables and on the podium.",
@@ -587,6 +624,137 @@ EXACT: dict[str, str] = {
     "Planke fast am Limit! Randsteine meiden, sonst Disqualifikation.":
         "Plank almost at the limit! Stay off the kerbs or face disqualification.",
     "Kein Benzin mehr": "Out of fuel",
+    # ---------------------------------------------------------------- wheel hub, wizard, keybinds, force feedback
+    "Wheelbase kalibrieren (Assistent)": "Calibrate wheelbase (wizard)", "Tastenbelegung": "Keybinds",
+    "Feineinstellung": "Fine tuning", "WHEELBASE-KALIBRIERUNG": "WHEELBASE CALIBRATION",
+    "Schritt für Schritt: Mitte, linker und rechter Anschlag, Drehbereich und Lenkwinkel, Gaspedal, Bremspedal - "
+    "danach Probefahrt mit Live-Anzeige. Funktioniert auch für Gamepads.":
+        "Step by step: centre, left and right end stop, rotation and steering lock, throttle, brake - then a test "
+        "drive with live display. Works for gamepads too.",
+    "Alle Aktionen in einer Tabelle: Knopf am Lenkrad/Controller und Taste auf der Tastatur nebeneinander. "
+    "Links/rechts wählt die Spalte, ENTER belegt neu.":
+        "Every action in one table: wheel/controller button and keyboard key side by side. Left/right picks the "
+        "column, ENTER rebinds.",
+    "Gerät wählen, Lenkbereich, Totzonen, Linearität, Vibration und einzelne Achsen neu kalibrieren oder von Hand "
+    "wählen.": "Pick the device, steering range, deadzones, linearity, vibration, force feedback, and recalibrate or "
+               "hand-pick single axes.",
+    "Alles wird automatisch in data/controls.json gespeichert (pro Gerät).":
+        "Everything is saved automatically in data/controls.json (per device).",
+    "Drehbereich": "Rotation", "Lenkwinkel von Anschlag zu Anschlag, wie im Lenkrad-Treiber eingestellt (G HUB, "
+    "Thrustmaster Control Panel, Fanatec, Moza Pit House). Meist 900°.":
+        "Steering angle lock to lock, as set in the wheel driver (G HUB, Thrustmaster Control Panel, Fanatec, Moza "
+        "Pit House). Usually 900°.",
+    "Force Feedback": "Force feedback", "Force Feedback umkehren": "Invert force feedback",
+    "Force Feedback testen": "Test force feedback", "... läuft ...": "... running ...", "aktiv": "active",
+    "kein FFB-Motor erkannt - nur Vibration": "no FFB motor detected - vibration only",
+    "Echte Lenkkräfte über den Motor des Lenkrads: Rückstellkraft der Vorderreifen (schwerer mit Tempo, leicht wenn "
+    "die Front schiebt), das Lenkrad dreht beim Übersteuern ins Gegenlenken, Schläge bei Kontakt, Rütteln auf "
+    "Randsteinen und Kies, Zug bei kaputter Aufhängung. 0% = aus.":
+        "Real steering forces through the wheel's motor: self-aligning torque of the front tyres (heavier with "
+        "speed, light when the front washes out), the wheel turns into the counter-steer when the rear steps out, "
+        "jolts on contact, rumble on kerbs and gravel, a pull from broken suspension. 0% = off.",
+    "Falls das Lenkrad in die falsche Richtung zieht (Kurve verstärkt statt zurückstellen): umkehren. "
+    "Moza-Wheelbases sind automatisch umgekehrt.":
+        "If the wheel pulls the wrong way (into the corner instead of back to centre): invert. Moza wheelbases are "
+        "inverted automatically.",
+    "ENTER: das Lenkrad zieht kurz nach rechts, dann nach links. Zieht es anders herum: 'Force Feedback umkehren' "
+    "einschalten.": "ENTER: the wheel pulls briefly right, then left. If it goes the other way: turn on 'Invert "
+                    "force feedback'.",
+    "1 · GERÄT": "1 · DEVICE", "2 · MITTELSTELLUNG": "2 · CENTRE", "3 · LINKER ANSCHLAG": "3 · LEFT END STOP",
+    "4 · RECHTER ANSCHLAG": "4 · RIGHT END STOP", "5 · DREHBEREICH & LENKWINKEL": "5 · ROTATION & STEERING LOCK",
+    "6 · GASPEDAL": "6 · THROTTLE", "7 · BREMSPEDAL": "7 · BRAKE", "8 · PROBEFAHRT": "8 · TEST DRIVE",
+    "Wähle mit links/rechts dein Lenkrad (oder Gamepad). Gerätetyp mit hoch/runter. ENTER = weiter.":
+        "Pick your wheel (or gamepad) with left/right. Device type with up/down. ENTER = next.",
+    "Lenkrad GERADE halten und alle Pedale LOSLASSEN. Wird übernommen, sobald alles ruhig ist (oder ENTER).":
+        "Hold the wheel STRAIGHT and RELEASE all pedals. Taken as soon as everything is still (or ENTER).",
+    "Lenkrad ganz nach LINKS bis zum Anschlag drehen und halten.": "Turn the wheel fully LEFT to the end stop and hold.",
+    "Lenkrad ganz nach RECHTS bis zum Anschlag drehen und halten.":
+        "Turn the wheel fully RIGHT to the end stop and hold.",
+    "Hoch/runter wählt die Zeile, links/rechts ändert. Drehbereich = Einstellung im Lenkrad-Treiber. Volleinschlag = "
+    "bei welchem Lenkradwinkel die Vorderräder voll eingeschlagen sind.":
+        "Up/down picks the row, left/right changes it. Rotation = the setting in the wheel driver. Full lock = the "
+        "wheel angle at which the front wheels are fully turned.",
+    "Gaspedal VOLL durchtreten und halten (Gamepad: Gas-Trigger).": "Press the throttle FULLY and hold (gamepad: "
+                                                                    "throttle trigger).",
+    "Bremspedal VOLL durchtreten und halten (Gamepad: Brems-Trigger).": "Press the brake FULLY and hold (gamepad: "
+                                                                        "brake trigger).",
+    "Lenken, Gas geben, bremsen - alle Balken müssen passen. ENTER speichert, RÜCKTASTE geht einen Schritt zurück.":
+        "Steer, accelerate, brake - every bar must follow. ENTER saves, BACKSPACE goes one step back.",
+    "Ruhig halten ...": "Hold still ...", "Halten ...": "Hold ...", "weiter ...": "further ...",
+    "Erst loslassen / Lenkrad in die Mitte ...": "Release first / wheel back to centre ...",
+    "Drehbereich (Treiber)": "Rotation (driver)", "Volleinschlag bei": "Full lock at",
+    "Tipp: 900° Drehbereich, Volleinschlag 360-540° fühlt sich wie ein F1-Auto an.":
+        "Tip: 900° rotation with full lock at 360-540° feels like an F1 car.",
+    "Gas und Bremse auf getrennten Achsen - gleichzeitig nutzbar.":
+        "Throttle and brake on separate axes - usable at the same time.",
+    "Kein Lenkrad oder Controller gefunden.": "No wheel or controller found.",
+    "Kalibrierung gespeichert.": "Calibration saved.",
+    "Gerät getrennt - Kalibrierung abgebrochen.": "Device disconnected - calibration cancelled.",
+    "Keine Bewegung erkannt - bitte weiter drehen/drücken.": "No movement detected - turn/press further please.",
+    "Gas und Bremse liegen auf DERSELBEN Achse (kombinierte Pedale) - im Lenkrad-Treiber auf getrennte Achsen "
+    "umstellen!": "Throttle and brake are on the SAME axis (combined pedals) - switch the wheel driver to separate "
+                  "axes!",
+    "* = Achse eines anderen Geräts (z.B. Pedalbox)": "* = axis of another device (e.g. pedal box)",
+    "Kein Lenkrad/Controller angeschlossen - Tastatur aktiv.": "No wheel/controller connected - keyboard active.",
+    "kalibriert": "calibrated", "KOMBINIERT (eine Achse)": "COMBINED (one axis)", "getrennt": "separate",
+    "AKTION": "ACTION", "LENKRAD / CONTROLLER": "WHEEL / CONTROLLER", "TASTATUR": "KEYBOARD",
+    "Lenkachse": "steering axis", "... drücken ...": "... press ...",
+    "Controller-Tasten zurücksetzen": "Reset controller buttons",
+    "Lenkung und Pedale sind Achsen: ENTER startet den Kalibrier-Assistenten für diese Achse.":
+        "Steering and pedals are axes: ENTER starts the calibration wizard for this axis.",
+    "ESC und ENTER sind auf der Tastatur fest belegt.": "ESC and ENTER are fixed on the keyboard.",
+    "ENTER, dann den Knopf am Lenkrad/Controller bzw. die Taste drücken. Jeder Knopf / jede Taste macht nur eine "
+    "Sache - die alte Belegung wird entfernt. ENTF löscht. Im Splitscreen fährt Spieler 1 mit diesen Tasten (ohne "
+    "Pfeile), Spieler 2 mit den Pfeiltasten.":
+        "ENTER, then press the wheel/controller button or the key. Every button / key does one thing only - the old "
+        "binding is removed. DEL clears. In split screen player 1 drives with these keys (without arrows), player 2 "
+        "with the arrow keys.",
+    "Pfeile wählen · ENTER öffnen · ESC zurück": "Arrows select · ENTER open · ESC back",
+    "Pfeile hoch/runter Aktion · links/rechts Spalte · ENTER neu belegen · ENTF löschen · ESC zurück":
+        "Up/down action · left/right column · ENTER rebind · DEL clear · ESC back",
+    "Pfeile wählen · links/rechts ändern · ENTER kalibrieren · ESC zurück":
+        "Arrows select · left/right change · ENTER calibrate · ESC back",
+    "ENTER übernehmen · RÜCKTASTE Schritt zurück · TAB überspringen · ESC abbrechen":
+        "ENTER accept · BACKSPACE step back · TAB skip · ESC cancel",
+    # ---------------------------------------------------------------- practice analysis tabs
+    "Übersicht": "Overview", "Sektoren": "Sectors", "Fahrstil": "Driving style", "Setup & Auto": "Setup & car",
+    "Rennstrategie": "Race strategy", "Gerade-Modus": "Straight mode", "Position": "Position", "KURVEN-MIN. S1/S2/S3": "CORNER MIN. S1/S2/S3",
+    "Keine vollständige Runde mit Sektorzeiten.": "No complete lap with sector times.", "Ideale Runde": "Ideal lap",
+    "Zeitverlust": "Time loss", "VERGLEICH MIT DEM FELD": "COMPARISON WITH THE FIELD",
+    "ZEITENLISTE TRAINING · SPEEDTRAP": "PRACTICE TIMES · SPEED TRAP",
+    "PEDALE & ZEITANTEILE (ALLE RUNDEN)": "PEDALS & TIME SHARES (ALL LAPS)", "Vollgas": "Full throttle",
+    "Teilgas": "Part throttle", "Rollen": "Coasting", "Rutschen / Übersteuern": "Sliding / oversteer",
+    "Untersteuern": "Understeer", "Blockierende Räder": "Locked wheels", "Durchdrehende Räder": "Wheelspin",
+    "Auf Randsteinen": "On the kerbs", "Neben der Strecke": "Off track", "VOLLGAS": "FULL", "BREMSE": "BRAKE",
+    "ROLLEN": "COAST", "RUTSCHEN": "SLIDE", "NEBEN": "OFF", "LENKUNRUHE": "STEER NOISE",
+    "TIPPS ZUM FAHRSTIL": "DRIVING TIPS", "Noch keine Daten.": "No data yet.",
+    "Blockierende Räder beim Bremsen: Bremse dosieren und früher bremsen - kostet Reifen und Zeit.":
+        "Locking wheels under braking: modulate the brake and brake earlier - it costs tyres and time.",
+    "Durchdrehende Räder am Kurvenausgang: sanfter ans Gas, Lenkung zuerst öffnen.":
+        "Wheelspin on corner exit: smoother on the throttle, unwind the steering first.",
+    "Zu oft neben der Strecke: Track Limits, Planke und Unterboden leiden.":
+        "Too often off track: track limits, plank and floor suffer.",
+    "Unruhige Lenkung: weniger Korrekturen, eine saubere Linie fahren.":
+        "Busy steering: fewer corrections, drive one clean line.",
+    "Sauberer Fahrstil - weiter so!": "Clean driving - keep it up!",
+    "GEFAHRENES SETUP": "SETUP USED", "neutral": "neutral",
+    "WAS DIE DATEN ÜBER DAS SETUP SAGEN": "WHAT THE DATA SAYS ABOUT THE SETUP",
+    "Noch keine Daten - fahre ein paar Runden.": "No data yet - drive a few laps.",
+    "Balance passt: kaum Unter- oder Übersteuern.": "Balance is fine: hardly any under- or oversteer.",
+    "Sehr schnell auf der Geraden, aber wenig Grip: mehr Flügel kostet kaum Zeit.":
+        "Very fast on the straights but little grip: more wing costs hardly any time.",
+    "Hoher Reifenverschleiß: Reifendruck +1 oder Federung weicher, weniger rutschen.":
+        "High tyre wear: tyre pressure +1 or softer suspension, slide less.",
+    "Planke hat Reserve: Bodenfreiheit -1 bringt mehr Abtrieb.": "The plank has margin: ride height -1 adds downforce.",
+    "Viel auf den Randsteinen: schadet der Planke und dem Unterboden.":
+        "A lot of time on the kerbs: hurts the plank and the floor.",
+    "Schäden": "Damage", "ZUSTAND DES AUTOS NACH DEM TRAINING": "CAR CONDITION AFTER PRACTICE",
+    "Zu wenig Daten für eine Rennsimulation - fahre ein paar Runden am Stück.":
+        "Not enough data for a race simulation - drive a few laps in a row.",
+    "kein Stopp": "no stop", "schnellste": "fastest", "Empfehlung": "Recommendation", "STRATEGIE": "STRATEGY",
+    "Wechselhaft gemeldet - Intermediates bereithalten, die Strategie kann kippen.":
+        "Changeable weather forecast - keep intermediates ready, the strategy may flip.",
+    "Regenrennen erwartet - Wets/Intermediates.": "Wet race expected - wets/intermediates.",
     # ---------------------------------------------------------------- practice data analysis
     "DATENANALYSE · FREIES TRAINING": "DATA ANALYSIS · FREE PRACTICE", "zur Datenanalyse": "to data analysis",
     "RD.": "LAP", "ZEIT": "TIME", "VERSCHL.": "WEAR", "SPRIT": "FUEL", "PLANKE": "PLANK", "VMAX": "VMAX",
@@ -915,6 +1083,58 @@ TEMPLATES: list[tuple[str, str]] = [
     ("DISQUALIFIZIERT - {}", "DISQUALIFIED - {}"),
     ("Planke {#} mm abgenutzt (max. {#} mm)", "plank worn {} mm (max. {} mm)"),
     ("DISQUALIFIKATION (Planke): {}", "DISQUALIFIED (plank): {}"),
+    # wheel hub / wizard / keybinds / force feedback
+    ("{} · gespeichert in data/controls.json", "{} · saved in data/controls.json"),
+    ("Gerät: {} ({})", "Device: {} ({})"), ("Lenkung: {}", "Steering: {}"), ("Pedale: {}", "Pedals: {}"),
+    ("Drehbereich {#}° · Volleinschlag bei {#}°", "Rotation {}° · full lock at {}°"),
+    ("Force Feedback: {}", "Force feedback: {}"), ("aktiv ({#}%)", "active ({}%)"),
+    ("{#}%  (Volleinschlag bei {#}°)", "{}%  (full lock at {}°)"), ("{#}%  ({})", "{}%  ({})"),
+    ("Gerätetyp: {}  (hoch/runter)", "Device type: {}  (up/down)"), ("{#} Achsen · {#} Knöpfe", "{} axes · {} buttons"),
+    ("Erkannt: {}", "Detected: {}"), ("{} · Achse {#}", "{} · axis {}"), ("{#}°  (± {#}°)", "{}°  (± {}°)"),
+    ("Lenkung im Spiel {#}%", "In-game steering {}%"),
+    ("Achse {#}", "Axis {}"),
+    # online multiplayer
+    ("1. Im Router eine Portweiterleitung (Port-Forwarding) anlegen: TCP-Port {#} an diesen PC.",
+     "1. In your router, add a port forwarding rule: TCP port {} to this PC."),
+    ("2. Die Windows-Firewall fragt beim ersten Start - Zugriff erlauben (oder TCP {#} freigeben).",
+     "2. Windows Firewall asks on the first start - allow access (or open TCP {})."),
+    ("Hinweis: Ports gehen nur bis 65535 - Standard ist {#}.", "Note: ports only go up to 65535 - the default is {}."),
+    ("Warte auf Mitspieler an Port {#}{}", "Waiting for the other player on port {}{}"),
+    ("Verbinde mit {} ...", "Connecting to {} ..."), ("Keine Verbindung zu {} ({})", "Could not connect to {} ({})"),
+    ("Port {#} nicht verfügbar ({})", "Port {} not available ({})"),
+    ("Warte, bis der Host die Session startet{}", "Waiting for the host to start the session{}"),
+    ("Gewählt: {}", "Selected: {}"), ("{} · {} · {#} Runden", "{} · {} · {} laps"),
+    ("Online mit {}", "Online with {}"),
+    # practice analysis
+    ("P{#} von {#} · {#}s auf {}", "P{} of {} · {}s to {}"), ("P{#} von {#} · Tagesbestzeit!", "P{} of {} · fastest today!"),
+    ("Links/rechts Tabs · ENTER {} · G Garage · Pfeile blättern · ESC Menü",
+     "Left/right tabs · ENTER {} · G garage · arrows scroll · ESC menu"),
+    ("SEKTOR {#}", "SECTOR {}"), ("Sektor {#}", "Sector {}"),
+    ("{}  (Bestzeit {} - {#}s liegen noch drin)", "{}  (best {} - {}s still to find)"),
+    ("du {#} · Bestwert {#} ({}) · {#}s", "you {} · best {} ({}) · {}s"),
+    ("am meisten in Sektor {#} ({#}s) - Bremspunkte und Kurvenausgang prüfen",
+     "most in sector {} ({}s) - check braking points and corner exits"),
+    ("{#}s gesamt · {#}s pro Runde", "{}s total · {}s per lap"), ("Schaltvorgänge: {#} pro Runde", "Gear shifts: {} per lap"),
+    ("{#}% Rollen ohne Gas und Bremse - später bremsen, früher wieder ans Gas.",
+     "{}% coasting without throttle or brake - brake later, get back on the throttle earlier."),
+    ("Sprit beim Start: Renndistanz {#} Rd.", "Fuel at the start: race distance {} laps"),
+    ("Aero-Balance: {} ({#})", "Aero balance: {} ({})"),
+    ("Untersteuern ({#}% der Zeit): Frontflügel +1/+2 oder Heckflügel -1, Federung weicher.",
+     "Understeer ({}% of the time): front wing +1/+2 or rear wing -1, softer suspension."),
+    ("Übersteuern ({#}% der Zeit): Heckflügel +1 oder Frontflügel -1, früher und sanfter ans Gas.",
+     "Oversteer ({}% of the time): rear wing +1 or front wing -1, earlier and smoother on the throttle."),
+    ("Topspeed nur Platz {#}/{#}: weniger Heckflügel oder längere Übersetzung.",
+     "Top speed only {}/{}: less rear wing or longer gearing."),
+    ("Planke {#} mm im Rennen: Bodenfreiheit um mind. {#} erhöhen!", "Plank {} mm in the race: raise ride height by at least {}!"),
+    ("Schäden am Auto: {}", "Damage to the car: {}"), ("Sprit fürs Rennen: Renndistanz {#} Runden.",
+                                                      "Fuel for the race: race distance {} laps."),
+    ("{#} mm abgenutzt (Limit {#} mm)", "{} mm worn (limit {} mm)"), ("{} · {#}% abgefahren · {#} Rd.", "{} · {}% worn · {} laps"),
+    ("{#} kg übrig · {#} kg/Rd. nominal", "{} kg left · {} kg/lap nominal"), ("{#}% nass", "{}% wet"),
+    ("RENNSIMULATION · {#} RUNDEN · Boxenstopp kostet ~{#}s", "RACE SIMULATION · {} LAPS · a pit stop costs ~{}s"),
+    ("{#} Stopp(s)", "{} stop(s)"), ("Runde {#} -> {}", "lap {} -> {}"),
+    ("Start auf {} · Stopp: {}", "Start on {} · stop: {}"), ("Start auf {} · durchfahren", "Start on {} · no stop"),
+    ("Renndistanz {#} Runden tanken (Garage)", "fuel race distance {} laps (garage)"),
+    ("~{#} mm im Rennen (Limit {#} mm)", "~{} mm in the race (limit {} mm)"),
     ("{} · {#} Runden · Hochrechnung auf {#} Rennrunden", "{} · {} laps · projected to {} race laps"),
     ("Ø {} · Bestzeit {} · Streuung {#}s", "avg {} · best {} · spread {}s"), ("Reifen {}", "Tyres {}"),
     ("{#}% pro Runde -> hält ~{#} Rd. ({})", "{}% per lap -> lasts ~{} laps ({})"),

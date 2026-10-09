@@ -37,14 +37,15 @@
     "view": -1,
     "continue": 0
    },
-   "deadzone": 0.06,
-   "linearity": 1.4,
+   "deadzone": 0.3,
+   "linearity": 1.8,
    "saturation": 1.0,
-   "pedal_deadzone": 0.04,
-   "rumble": 0.7,
+   "pedal_deadzone": 0.06,
+   "rumble": 1.0,
    "rotation": 0,
    "ffb": 0.7,
-   "ffb_invert": false
+   "ffb_invert": false,
+   "ffb_checked": true
   }
  },
  "keyboard": {

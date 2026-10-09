@@ -13,7 +13,7 @@ from .championship import FORMATS, Championship
 from .profiles import recording_stats
 from .sound import VOLUMES
 from .tyres import ALL_COMPOUNDS, COMPOUND_ORDER, COMPOUNDS
-from .user_settings import ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, GEARBOX_MODES, TYRE_WEAR_MODES, UNITS, speed_in
+from .user_settings import ANTIALIAS_LEVELS, ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, GEARBOX_MODES, TYRE_WEAR_MODES, UNITS, speed_in
 from .settings import (CYAN, DIFFICULTY_LEVELS, F1_RED, GREEN, GREY, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .track import TRACK_DEFS
@@ -94,6 +94,7 @@ class MainMenu:
         ("EINZELSPIELER", "Fahre selbst ein Rennwochenende gegen die KI"),
         ("KARRIERE", "Fahrer-Karriere mit Verträgen & Rivalen oder eigenes Team als Teamchef"),
         ("WELTMEISTERSCHAFT", "Saison über alle Strecken mit WM-Punkten, Fahrer- und Teamwertung"),
+        ("ONLINE-MEHRSPIELER", "Über das Internet: Spiel hosten (Port-Forwarding) oder beitreten"),
         ("ZUSCHAUER-RENNEN", "Nur KI-Fahrer - lehn dich zurück, TV-Regie inklusive"),
         ("KI-TRAINING", "Neuronale Netze live trainieren oder deinen Klon erzeugen"),
         ("EINSTELLUNGEN", "Name, Fahrhilfen, Ansicht, Schaden, Reifen, Sound, Vollbild"),
@@ -123,6 +124,8 @@ class MainMenu:
                 self.game.open_setup(spectator=False)
             elif choice == "ZUSCHAUER-RENNEN":
                 self.game.open_setup(spectator=True)
+            elif choice == "ONLINE-MEHRSPIELER":
+                self.game.open_online()
             elif choice == "WELTMEISTERSCHAFT":
                 self.game.open_championship()
             elif choice == "KARRIERE":
@@ -153,16 +156,16 @@ class MainMenu:
                   (114, 205))
 
         for i, (label, sub) in enumerate(self.ITEMS):
-            y = 238 + i * 63
+            y = 236 + i * 56
             selected = i == self.sel
             slide = 18 if selected else 0
             w = 470 if selected else 430
             col = F1_RED if selected else PANEL_LIGHT
-            pygame.draw.polygon(screen, col, [(60 + slide, y), (60 + slide + w, y), (40 + slide + w, y + 55),
-                                              (40 + slide, y + 55)])
-            draw_text(screen, label, f.large, WHITE, (80 + slide, y + 6))
+            pygame.draw.polygon(screen, col, [(60 + slide, y), (60 + slide + w, y), (40 + slide + w, y + 51),
+                                              (40 + slide, y + 51)])
+            draw_text(screen, label, f.large, WHITE, (80 + slide, y + 2))
             if sub:
-                draw_text(screen, sub, f.tiny, (235, 235, 235) if selected else GREY, (82 + slide, y + 37),
+                draw_text(screen, sub, f.tiny, (235, 235, 235) if selected else GREY, (82 + slide, y + 34),
                           shadow=False)
 
         self._draw_showcase(screen)
@@ -231,6 +234,11 @@ class SetupScreen:
         return self.game.menu_choice
 
     @property
+    def online(self) -> bool:
+        net = self.game.net
+        return not self.spectator and net is not None and net.role == "host" and net.connected
+
+    @property
     def max_opponents(self) -> int:
         n = len(self.game.drivers)
         return n if self.spectator else max(1, n - 1)
@@ -252,7 +260,7 @@ class SetupScreen:
             self.c["team"] = (self.c["team"] + delta) % max(1, len(self.game.teams))
         elif row == "Startreifen":
             self.c["tyre"] = (self.c["tyre"] + delta) % len(ALL_COMPOUNDS)
-        elif row == "Spieler":
+        elif row == "Spieler" and not self.online:
             self.c["players"] = 2 if self.c.get("players", 1) == 1 else 1
 
     def handle_event(self, event: pygame.event.Event) -> None:
@@ -328,6 +336,8 @@ class SetupScreen:
         if row == "Dein Team":
             return self.game.teams[self.c["team"]].name if self.game.teams else "Referenzauto"
         if row == "Spieler":
+            if self.online:
+                return f"Online mit {self.game.net.remote_name}"
             return "2 Spieler (Splitscreen)" if self.c.get("players", 1) == 2 else "1 Spieler"
         if row == "Startreifen":
             comp = COMPOUNDS[ALL_COMPOUNDS[self.c["tyre"]]]
@@ -478,7 +488,7 @@ class SetupScreen:
 class SettingsScreen:
 
     ROWS = ["Sprache", "Spielername", "Lenkrad & Controller", "Fahrhilfen", "Ansicht", "Schaden", "Reifenverschleiß", "Wetter", "Getriebe", "Safety Car",
-            "TV-Regie (Zuschauer)", "Sound", "Einheiten", "Partikel & Effekte", "Bildrate", "FPS anzeigen",
+            "TV-Regie (Zuschauer)", "Sound", "Einheiten", "Partikel & Effekte", "Kantenglättung", "Bildrate", "FPS anzeigen",
             "Vollbild", "ZURÜCK"]
     HELP = {
         "Spielername": "Tippen zum Ändern, Rücktaste löscht. Erscheint in Zeitentabellen und auf dem Podium.",
@@ -540,6 +550,7 @@ class SettingsScreen:
             "FPS anzeigen": "An" if st.show_fps else "Aus",
             "Einheiten": UNITS[st.units][0],
             "Partikel & Effekte": EFFECT_LEVELS[st.effects],
+            "Kantenglättung": ANTIALIAS_LEVELS[st.antialias],
             "Bildrate": f"{st.fps} FPS",
             "Vollbild": "An" if st.fullscreen else "Aus",
         }.get(row, "")
@@ -585,6 +596,9 @@ class SettingsScreen:
         elif row == "Partikel & Effekte":
             keys = list(EFFECT_LEVELS)
             st.effects = keys[(keys.index(st.effects) + delta) % len(keys)]
+        elif row == "Kantenglättung":
+            keys = list(ANTIALIAS_LEVELS)
+            st.antialias = keys[(keys.index(st.antialias) + delta) % len(keys)]
         elif row == "Bildrate":
             st.fps = FPS_OPTIONS[(FPS_OPTIONS.index(st.fps) + delta) % len(FPS_OPTIONS)]
         elif row == "Vollbild":

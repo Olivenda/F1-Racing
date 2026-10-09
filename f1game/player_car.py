@@ -44,6 +44,7 @@ class Player_Car(Car):
         self.slot = 0               # split-screen player number (0 = player 1)
         self.shift_flash = 0.0
         self.keyset = "all"         # "all", "wasd" or "arrows"
+        self.remote = None          # online guest's car on the host: net.RemoteInput instead of local controls
 
     def set_assists(self, level: int) -> None:
         self.assist_level = level
@@ -59,7 +60,7 @@ class Player_Car(Car):
         if self.autopilot is not None:
             self.throttle, self.brake, self.steer_input = self.autopilot.update(dt, session.cars, self.track)
             return
-        controls = session.game.controls
+        controls = self.remote if self.remote is not None else session.game.controls
         up, down, left, right = self.held_keys(controls)
         self.throttle = 1.0 if up else 0.0
         self.brake = 1.0 if down else 0.0
@@ -100,11 +101,15 @@ class Player_Car(Car):
 
     def held_keys(self, controls) -> tuple[bool, bool, bool, bool]:
         """(throttle, brake, left, right) from this player's keys (rebindable, see Controls.keys)."""
+        if self.remote is not None:
+            return self.remote.keys
         pressed = pygame.key.get_pressed()
         binds = controls.driving_keys(self.keyset)
         return tuple(any(pressed[k] for k in binds[a]) for a in ("throttle", "brake", "left", "right"))
 
     def throttle_held(self, controls) -> bool:
+        if self.remote is not None:
+            controls = self.remote
         return self.held_keys(controls)[0] or controls.throttle_held(self.slot)
 
     def _feedback(self, controls, dt: float = 1 / 120) -> None:

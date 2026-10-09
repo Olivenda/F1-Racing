@@ -307,6 +307,7 @@ class Track:
                 inner_i = self.center[i] + self.normals[i] * (side * (self.half_width - 6))
                 inner_j = self.center[j] + self.normals[j] * (side * (self.half_width - 6))
                 pygame.draw.polygon(surf, col, [inner_i, inner_j, edge[j], edge[i]])
+                pygame.draw.aaline(surf, col, inner_i, inner_j)
 
         line_l, line_r = self._edge_points(self.half_width - 1)
         for edge in (line_l, line_r):
@@ -314,6 +315,9 @@ class Track:
                 a, b = edge[i], edge[(i + 1) % self.n]
                 if a is not None and b is not None:
                     pygame.draw.line(surf, (235, 235, 235), a, b, 2)
+        # smooth both borders of the white lines (the asphalt edge sits under the outer one)
+        for dist in (self.half_width, self.half_width - 2):
+            self._aa_edge(surf, (235, 235, 235), dist, line_l, line_r)
 
         wall_l, wall_r = self.wall_edges
         for edge in (wall_l, wall_r):
@@ -323,9 +327,28 @@ class Track:
                     col = d.wall_a if (i // 3) % 2 == 0 else d.wall_b
                     pygame.draw.line(surf, (20, 20, 20), a, b, 7)
                     pygame.draw.line(surf, col, a, b, 4)
+        for dist in (self.wall_limit - 1.5, self.wall_limit + 5.5):
+            self._aa_edge(surf, (20, 20, 20), dist, wall_l, wall_r)
 
         self._render_start_and_grid(surf)
         return surf
+
+    def _aa_edge(self, surf: pygame.Surface, color: Color, dist: float, mask_l: list[Vector2 | None],
+                 mask_r: list[Vector2 | None]) -> None:
+        """Anti-aliased polyline on both sides of the track at a lateral distance, broken where the mask edge
+        folds away (None), so the borders of the pre-rendered map are not jagged."""
+        for side, mask in ((-1, mask_l), (1, mask_r)):
+            run: list[Vector2] = []
+            closed = all(p is not None for p in mask)
+            for i in range(self.n):
+                if mask[i] is None:
+                    if len(run) > 1:
+                        pygame.draw.aalines(surf, color, False, run)
+                    run = []
+                    continue
+                run.append(self.center[i] + self.normals[i] * (side * dist))
+            if len(run) > 1:
+                pygame.draw.aalines(surf, color, closed, run)
 
     @staticmethod
     def _speckle(surf: pygame.Surface, rng: random.Random, base: Color, count: int, spread: int) -> None:
@@ -350,7 +373,9 @@ class Track:
             side = -1.0 if bend.dot(self.normals[i]) > 0 else 1.0
             ni, nj = self.normals[i] * side, self.normals[j] * side
             ci, cj = self.center[i], self.center[j]
-            pygame.draw.polygon(surf, sand, [ci + ni * inner, cj + nj * inner, cj + nj * outer, ci + ni * outer])
+            quad = [ci + ni * inner, cj + nj * inner, cj + nj * outer, ci + ni * outer]
+            pygame.draw.polygon(surf, sand, quad)
+            pygame.draw.aalines(surf, sand, True, quad)
             for _ in range(6):
                 u, v = rng.uniform(inner, outer), rng.random()
                 p = ci + (cj - ci) * v + ni * u

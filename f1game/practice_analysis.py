@@ -18,6 +18,7 @@ import pygame
 
 from .car import PLANK_LIMIT_MM
 from .car_setup import CarSetup
+from .i18n import tr
 from .pitlane import SPEED_LIMIT
 from .race_control import PUNCTURE_WEAR
 from .settings import (CYAN, GREEN, GREY, PANEL, PANEL_LIGHT, PURPLE, PX_PER_S_TO_KMH, SCREEN_HEIGHT, SCREEN_WIDTH,
@@ -162,10 +163,10 @@ class PracticeAnalysisScreen:
             return [("Noch keine Daten - fahre ein paar Runden.", GREY)]
         notes: list[tuple[str, tuple[int, int, int]]] = []
         under, over = _pct(st["under_t"], t), _pct(st["over_t"], t)
-        if under > 3.0 and under > over * 1.5:
+        if under > 6.0 and under > over * 1.5:
             notes.append((f"Untersteuern ({under:.1f}% der Zeit): Frontflügel +1/+2 oder Heckflügel -1, Federung "
                           "weicher.", YELLOW))
-        elif over > 3.0 and over > under * 1.5:
+        elif over > 4.0 and over > under * 1.5:
             notes.append((f"Übersteuern ({over:.1f}% der Zeit): Heckflügel +1 oder Frontflügel -1, früher und "
                           "sanfter ans Gas.", YELLOW))
         else:
@@ -600,7 +601,8 @@ class PracticeAnalysisScreen:
             draw_text(screen, "schnellste" if k == 0 else f"+{total - best:.1f}s", f.mono,
                       GREEN if k == 0 else GREY, (box.x + 960, y + 4), shadow=False)
         plan = self.strategies[0][1]
-        stops_txt = ", ".join(f"Runde {sum(length for _, length in plan[:k + 1])} -> {COMPOUNDS[c].name}"
+        # translated piece by piece: the joined list would not match a translation template as a whole
+        stops_txt = ", ".join(tr(f"Runde {sum(length for _, length in plan[:k + 1])} -> {COMPOUNDS[c].name}")
                               for k, (c, _) in enumerate(plan[1:]))
         lines = [("Empfehlung", f"Start auf {COMPOUNDS[plan[0][0]].name}" +
                   (f" · Stopp: {stops_txt}" if stops_txt else " · durchfahren"), GREEN),

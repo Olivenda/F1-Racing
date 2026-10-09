@@ -163,6 +163,12 @@ class Session:
         track.wetness = self.weather.wetness
         self._frame_dt = 0.0
         self._weather_note = ""
+        net = getattr(game, "net", None)
+        # online: "host" simulates and the guest drives player2, "client" only mirrors the host
+        self.net_role = net.role if net is not None and net.connected and config.player2 is not None else None
+        self.online = self.net_role is not None
+        self.host_paused = False
+        self.host_finished = False
         if config.objective and config.player is not None:
             self.message(f"TEAMZIEL: {config.objective}", (255, 200, 40), 5.0)
 
@@ -187,6 +193,20 @@ class Session:
                 car.apply_setup(self.game.setup_for(self.track))
                 car.slot = 1
                 car.manual_gearbox = self.config.gearbox == "manual"
+                if self.net_role is not None:
+                    # online guest: their own assists, gearbox and garage setup
+                    net = self.game.net
+                    if self.net_role == "host":
+                        car.remote = net.remote_input
+                        car.set_assists(net.remote_assists)
+                        car.manual_gearbox = net.remote_gearbox == "manual"
+                        setup = net.remote_setup(self.track.definition.key)
+                    else:
+                        car.set_assists(self.game.settings.assists)
+                        car.manual_gearbox = self.game.settings.gearbox == "manual"
+                        setup = None
+                    car.apply_setup(setup or (self.game.setup_for(self.track) if self.net_role == "client"
+                                              else recommended(self.track)))
                 self.player2 = car
             else:
                 net = self.game.brains.network(prof.brain, prof.checkpoint)
@@ -206,7 +226,15 @@ class Session:
             self.cars.append(car)
         self.cam_index = self.cars.index(self.player) if self.player is not None else 0
         self.pit_menus = {p: (self.pit_menu if p is self.player else PitMenu()) for p in self.players}
-        if self.player2 is not None:
+        if self.net_role == "client":
+            # the guest's own car is "the player" here; the host's car is just another (human) car
+            self.player, self.player2 = self.player2, None
+            self.cam_index = self.cars.index(self.player)
+            self.pit_menus = {self.player: self.pit_menu}
+            self.game.controls.assign_players(1)
+        elif self.online:
+            self.game.controls.assign_players(1)
+        elif self.player2 is not None:
             # split screen: each player drives on their half of the keyboard, plus a controller if there is one
             self.game.controls.assign_players(2)
             assert self.player is not None
@@ -241,7 +269,7 @@ class Session:
         return self.cars[self.cam_index]
 
     def compound_for(self, car: Car) -> str:
-        if car.profile is self.config.player:
+        if car.profile is self.config.player or car.profile is self.config.player2:
             return self.config.start_compound
         return Weather.best_compound(self.weather.wetness) or "medium"
 
@@ -322,7 +350,8 @@ class Session:
             # player 2's keys only drive their own car
             if key not in (pygame.K_SPACE, pygame.K_b, pygame.K_r, pygame.K_e, pygame.K_q):
                 return
-        if self.player2 is not None and (pygame.K_0 <= key <= pygame.K_9 or key in (pygame.K_c, pygame.K_m)):
+        if self.player2 is not None and not self.online and \
+                (pygame.K_0 <= key <= pygame.K_9 or key in (pygame.K_c, pygame.K_m)):
             return  # split screen: the cameras stay on the two players
         if self.spectator and key in (pygame.K_UP, pygame.K_DOWN):
             order = self.standings()
@@ -418,7 +447,9 @@ class Session:
 
     def _route(self, event: pygame.event.Event) -> tuple[Player_Car | None, pygame.event.Event]:
         """Which player a key press belongs to (split screen), and the key in player 1's terms."""
-        if self.player2 is None:
+        if getattr(event, "net_remote", False):
+            return self.player2, event
+        if self.player2 is None or self.online:
             return self.player, event
         if getattr(event, "from_joystick", False):
             slot = getattr(event, "player_slot", 0)
@@ -928,7 +959,7 @@ class Session:
             self._draw_overview(screen)
             self._draw_overlays(screen)
             return
-        if self.player2 is not None:
+        if self.player2 is not None and not self.online:
             self._draw_split(screen)
             return
         self._draw_view(screen)
@@ -957,6 +988,7 @@ class Session:
 
     def _draw_view(self, screen: pygame.Surface, rain: bool = True) -> None:
         if self.view3d:
+            self.r3d.antialias = self.game.settings.antialias
             self.r3d.draw(screen, self.track, self.cars + self.extra_objects(), self.cars[self.cam_index],
                           self.show_brake_line,
                           self.game.fonts.tiny, self.garages(), rain=self.weather.rain)
@@ -992,7 +1024,7 @@ class Session:
             if not (0 < sp.x < SCREEN_WIDTH and 0 < sp.y < SCREEN_HEIGHT):
                 continue
             col = (0, 230, 255) if car.is_player else WHITE
-            img = self._label(("DU" if car is self.player and self.player2 is None else car.short)
+            img = self._label(("DU" if car is self.player and (self.player2 is None or self.online) else car.short)
                               if car.is_player else car.short, col)
             screen.blit(img, img.get_rect(midbottom=(sp.x, sp.y - 20)))
             if self.show_ai_info and isinstance(car, AI_Car):
@@ -1118,7 +1150,7 @@ class QualifyingSession(Session):
         self.message("Die Bestzeit bestimmt deinen Startplatz", (180, 180, 180), 3.5)
 
     def compound_for(self, car: Car) -> str:
-        if car.profile is self.config.player:
+        if car.profile is self.config.player or car.profile is self.config.player2:
             return self.config.start_compound
         return Weather.best_compound(self.weather.wetness) or "soft"
 
@@ -1218,7 +1250,7 @@ class RaceSession(Session):
                 continue
             if p.throttle_held(self.game.controls):
                 p.launch_spin = 1.2
-                who = "" if self.player2 is None else f"{p.short}: "
+                who = "" if self.player2 is None or (self.online and p is self.player) else f"{p.short}: "
                 self.message(f"{who}ZU FRÜH GAS - Räder drehen durch!", (255, 140, 30), 2.5)
             elif p is self.player:
                 self._await_reaction = True
@@ -1494,7 +1526,7 @@ class RaceSession(Session):
             self._check_blue_flag()
             p = order.index(self.player) + 1 if self.player is not None else 0
             if self.player is not None and p != self._player_pos and self.player.finish_time is None:
-                who = "" if self.player2 is None else f"{self.player.short}: "
+                who = "" if self.player2 is None or self.online else f"{self.player.short}: "
                 self.message(f"{who}P{p}", GREEN if p < self._player_pos else (255, 90, 90), 1.5)
             self._player_pos = p
             self._last_order = order

@@ -628,7 +628,7 @@ class Car:
                 tel["lock_t"] += dt
             else:
                 tel["over_t"] += dt
-        elif self.at_grip_limit and abs(self.steer_angle) > 0.65 and v > 120:
+        elif self.at_grip_limit and abs(self.steer_angle) > 0.85 and v > 120:
             tel["under_t"] += dt        # lots of lock, but the front has run out of grip
         if self.throttle > 0.9 and self.sliding and v < 250:
             tel["spin_t"] += dt

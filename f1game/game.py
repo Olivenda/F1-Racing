@@ -26,6 +26,7 @@ from .track import TRACK_DEFS, Track
 from .sound import SoundSystem
 from .training_screen import TrainingScreen
 from .user_settings import UserSettings
+from .net import NetPlay
 from .utils import clear_render_caches, draw_panel, draw_text, vertical_gradient
 
 
@@ -66,6 +67,7 @@ class Game:
         self.records = Records()
         self.running = True
         self.toast: tuple[str, int] | None = None
+        self.net: NetPlay | None = None          # online multiplayer link (net.py)
         self.state: GameState = MainMenu(self)
 
     def run(self) -> None:
@@ -79,6 +81,14 @@ class Game:
                                   pygame.JOYDEVICEREMOVED):
                     events.extend(self.controls.translate(event, in_session))
             events.extend(self.controls.menu_stick(dt, in_session))
+            net = self.net
+            if net is not None:
+                net.poll(dt)
+                net = self.net
+            if net is not None and net.role == "client" and net.waiting_session is not None:
+                self._net_start(net.waiting_session)
+                in_session = isinstance(self.state, Session)
+            guest = net is not None and net.role == "client" and in_session and self.state.online
             if not in_session or self.state.paused or self.state.finished or                     not any(p.autopilot is None for p in self.state.players):
                 self.controls.ffb_idle()
             for event in events:
@@ -90,6 +100,9 @@ class Game:
                     if mapped != event.key:
                         event = pygame.event.Event(pygame.KEYDOWN, key=mapped, mod=event.mod, unicode="",
                                                    scancode=0)
+                if guest and event.type == pygame.KEYDOWN and self.state is not None and \
+                        self.net.forward_key(self.state, event):
+                    continue        # driving keys are handled by the host's simulation
                 if event.type == pygame.QUIT:
                     self.running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_F12:
@@ -106,7 +119,13 @@ class Game:
             if isinstance(self.state, Session) and self.state.config.instant:
                 self._simulate_instant(self.state)
             else:
-                self.state.update(dt)
+                if guest and self.net is not None and isinstance(self.state, Session) and self.state.online:
+                    self.net.client_frame(self.state, dt)
+                else:
+                    self.state.update(dt)
+                if self.net is not None and self.net.role == "host":
+                    self.net.host_tick(dt)
+                    self.net.host_lobby(self)
                 self.state.draw(self.screen)
             self._draw_toast()
             pygame.display.flip()
@@ -119,6 +138,68 @@ class Game:
         pygame.image.save(self.screen, str(path))
         self.sound.ui("confirm")
         self.toast = (f"Screenshot gespeichert: data/screenshots/{path.name}", pygame.time.get_ticks() + 2500)
+
+    def toast_text(self, text: str, ms: int = 3000) -> None:
+        self.toast = (text, pygame.time.get_ticks() + ms)
+
+    # ------------------------------------------------------------------ online multiplayer
+    def open_online(self) -> None:
+        from .net_screen import NetLobbyScreen
+        self.state = NetLobbyScreen(self)
+
+    def _net_start(self, msg: dict) -> None:
+        """Guest: the host started a session - build the same one locally."""
+        from .net import dec
+        net = self.net
+        assert net is not None
+        net.waiting_session = None
+        net.snapshots.clear()
+        kind = msg.get("kind")
+        try:
+            cfg = dec(msg.get("cfg"))
+        except (ValueError, TypeError, KeyError):
+            cfg = None
+        if kind not in ("practice", "qualifying", "race") or not isinstance(cfg, WeekendConfig) or \
+                cfg.track_key not in self.tracks or cfg.player is None or cfg.player2 is None:
+            net.error = "Ungültige Session vom Host"
+            net.close()
+            self.on_net_lost(net)
+            return
+        cfg.view3d = self.settings.view3d
+        cfg.auto_camera = False
+        cfg.championship, cfg.career, cfg.instant = None, False, False
+        self.config = cfg
+        self.start_session(kind, from_net=True)
+        session = self.state
+        if isinstance(session, Session):
+            order = msg.get("order")
+            names = [c.name for c in session.cars]
+            if isinstance(order, list) and sorted(order) == sorted(names):
+                session.cars.sort(key=lambda c: order.index(c.name))
+                if session.player is not None:
+                    session.cam_index = session.cars.index(session.player)
+        self.player_name = self.settings.player_name
+
+    def on_net_lost(self, net) -> None:
+        if net is not self.net:
+            return
+        self.net = None
+        state = self.state
+        text = net.error or "Verbindung getrennt"
+        self.toast_text(text, 6000)
+        if isinstance(state, Session) and state.online:
+            if net.role == "host":
+                p2 = state.player2
+                if p2 is not None:
+                    p2.remote = None
+                    state.enable_player_autopilot(p2)
+                    state.message("Mitspieler getrennt - die KI übernimmt sein Auto", (255, 140, 30), 5.0)
+            else:
+                self.go_to_menu()
+                self.toast_text(text, 6000)
+        elif net.role == "client" and net.was_connected:
+            self.go_to_menu()
+            self.toast_text(text, 6000)
 
     def _draw_toast(self) -> None:
         if self.toast is None:
@@ -164,6 +245,9 @@ class Game:
         draw_text(self.screen, "ESC: abbrechen", f.tiny, GREY, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 24), anchor="center")
 
     def go_to_menu(self) -> None:
+        if self.net is not None:
+            self.net.close()
+            self.net = None
         self.sound.stop()
         self.controls.stop_rumble()
         self.controls.assign_players(1)
@@ -244,6 +328,8 @@ class Game:
 
     def save_setups(self) -> None:
         save_setups(self.setups)
+        if self.net is not None and self.net.role == "client" and self.net.connected:
+            self.net.send({"t": "setups", "setups": {k: vars(s) for k, s in self.setups.items()}})
 
     def open_garage(self, track_key: str, team: Team | None, on_done: Callable[[], None]) -> None:
         self.state = GarageScreen(self, self.tracks[track_key], team, on_done)
@@ -277,7 +363,16 @@ class Game:
         name = championship.player_name if championship is not None else st.player_name
         player = None if spectator else player_profile(team, name)
         player2 = None
-        if player is not None and championship is None and c.get("players", 1) == 2:
+        online = self.net is not None and self.net.role == "host" and self.net.connected
+        if player is not None and championship is None and online:
+            # online: the guest drives the team-mate's car
+            guest = self.net.remote_name or "Gast"
+            if guest == name:
+                guest += " (2)"
+            player2 = replace(player_profile(team, guest), short=_short_name(guest, "P2"), helmet=(255, 200, 40))
+            player = replace(player, short=_short_name(name, "P1"))
+            profiles = profiles[:max(1, len(profiles) - 1)]
+        elif player is not None and championship is None and c.get("players", 1) == 2:
             # player 2 drives the team-mate's car
             player2 = replace(player_profile(team, "Spieler 2"), short="SP2", helmet=(255, 200, 40))
             player = replace(player, short="SP1")
@@ -298,7 +393,13 @@ class Game:
             [d for d in self.drivers if not (d.pool and d.team == team.name)]
         return pool[:opponents]
 
-    def start_session(self, kind: str) -> None:
+    def start_session(self, kind: str, from_net: bool = False) -> None:
+        if self.net is not None and self.net.role == "client" and not from_net:
+            # online guest: the host decides when the next session starts
+            from .net_screen import NetWaitScreen
+            self.sound.stop()
+            self.state = NetWaitScreen(self)
+            return
         assert self.config is not None
         player = self.config.player
         self.player_name = player.name if player is not None else self.settings.player_name
@@ -310,6 +411,8 @@ class Game:
         cls: type[Session] = {"practice": PracticeSession, "qualifying": QualifyingSession,
                               "race": RaceSession}[kind]
         self.state = cls(self, track, self.config)
+        if self.net is not None and self.net.role == "host" and self.net.connected and self.state.online:
+            self.net.host_started(self.state, kind)
 
     def _loading_screen(self, kind: str) -> None:
         assert self.config is not None
@@ -372,3 +475,9 @@ class Game:
             def analysis() -> None:
                 self.state = AnalysisScreen(self, session, nxt, label)
             self.state = PodiumScreen(self, session, analysis, "zur Rennanalyse")
+
+
+def _short_name(name: str, fallback: str) -> str:
+    """Three-letter tag for the timing tower from a player name."""
+    letters = "".join(ch for ch in name if ch.isalpha())
+    return letters[:3].upper() if len(letters) >= 2 else fallback
