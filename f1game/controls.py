@@ -19,6 +19,8 @@ CONTROLS_FILE = DATA_DIR / "controls.json"
 
 # in-race actions that can sit on a button; each one is delivered as the keyboard key the session already knows
 ACTIONS: dict[str, tuple[str, int]] = {
+    "gear_up": ("Hochschalten", pygame.K_e),
+    "gear_down": ("Runterschalten", pygame.K_q),
     "drs": ("Gerade-Modus / DRS", pygame.K_SPACE),
     "pit": ("Boxenstopp anfordern", pygame.K_b),
     "pause": ("Pause", pygame.K_p),
@@ -30,11 +32,27 @@ ACTIONS: dict[str, tuple[str, int]] = {
     "continue": ("Weiter / Training beenden", pygame.K_RETURN),
 }
 AXES: dict[str, str] = {"steer": "Lenkung", "throttle": "Gaspedal", "brake": "Bremspedal"}
+
+# keyboard: driving keys (held) and in-race actions (pressed); each action is delivered as its default key
+KEY_DRIVE: dict[str, tuple[str, list[int]]] = {
+    "throttle": ("Gas", [pygame.K_UP, pygame.K_w]),
+    "brake": ("Bremse", [pygame.K_DOWN, pygame.K_s]),
+    "left": ("Links lenken", [pygame.K_LEFT, pygame.K_a]),
+    "right": ("Rechts lenken", [pygame.K_RIGHT, pygame.K_d]),
+}
+KEY_ACTIONS = ("gear_up", "gear_down", "drs", "pit", "reset", "camera", "view", "map", "pause")
+ARROWS = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT)
+
+
+def default_keys() -> dict[str, list[int]]:
+    keys = {k: list(v[1]) for k, v in KEY_DRIVE.items()}
+    keys.update({a: [ACTIONS[a][1]] for a in KEY_ACTIONS})
+    return keys
 DEVICE_KINDS = {"wheel": "Lenkrad + Pedale", "gamepad": "Gamepad"}
 
 # XInput layout as SDL reports it on Windows (Xbox pads and most PC gamepads)
-_PAD_BUTTONS = {"drs": 2, "pit": 3, "pause": 7, "menu": 1, "camera": 4, "view": 5, "reset": 6, "map": 9,
-                "continue": 0}
+_PAD_BUTTONS = {"drs": 2, "pit": 3, "pause": 7, "menu": 1, "gear_down": 4, "gear_up": 5, "reset": 6, "camera": 8,
+                "map": 9, "view": -1, "continue": 0}
 _WHEEL_HINTS = ("wheel", "g29", "g920", "g923", "g27", "g25", "t300", "t150", "tmx", "t248", "t-gt", "fanatec",
                 "csl", "clubsport", "podium", "moza", "simucube", "thrustmaster", "lenkrad", "racing", "dd1", "dd2",
                 "r5", "r9", "r12", "r16", "r21", "sim")
@@ -47,9 +65,10 @@ class AxisBinding:
     axis: int = -1
     rest: float = 0.0
     full: float = 1.0
+    device: str = ""        # another device's name (separate pedal box); "" = the wheel/pad itself
 
-    def read(self, joy: "pygame.joystick.JoystickType") -> float | None:
-        if self.axis < 0 or self.axis >= joy.get_numaxes():
+    def read(self, joy: "pygame.joystick.JoystickType | None") -> float | None:
+        if joy is None or self.axis < 0 or self.axis >= joy.get_numaxes():
             return None
         span = self.full - self.rest
         if abs(span) < 1e-3:
@@ -80,7 +99,7 @@ class DeviceProfile:
                        throttle=AxisBinding(min(1, axes - 1), 1.0, -1.0) if axes > 1 else AxisBinding(-1),
                        brake=AxisBinding(min(2, axes - 1), 1.0, -1.0) if axes > 2 else AxisBinding(-1),
                        buttons={"drs": 0, "pit": 1, "pause": 9, "camera": 2, "view": 3, "reset": 8,
-                                "map": -1, "continue": 6, "menu": 7},
+                                "map": -1, "continue": 6, "menu": 7, "gear_up": 4, "gear_down": 5},
                        deadzone=0.0, linearity=1.0, saturation=0.5, pedal_deadzone=0.02, rumble=0.8)
         prof = cls()
         if axes < 6:  # simple pads without analog triggers: right stick Y as combined throttle/brake
@@ -101,9 +120,15 @@ class DeviceProfile:
             if isinstance(raw.get(key), dict):
                 b = raw[key]
                 setattr(prof, key, AxisBinding(int(b.get("axis", -1)), float(b.get("rest", 0.0)),
-                                               float(b.get("full", 1.0))))
+                                               float(b.get("full", 1.0)), str(b.get("device", ""))))
         if isinstance(raw.get("buttons"), dict):
-            prof.buttons = {k: int(v) for k, v in raw["buttons"].items() if k in ACTIONS}
+            saved = {k: int(v) for k, v in raw["buttons"].items() if k in ACTIONS}
+            # actions added in later versions keep their default button if it is still free
+            used = set(saved.values())
+            for action, button in prof.buttons.items():
+                if action not in saved:
+                    saved[action] = button if button not in used else -1
+            prof.buttons = saved
         if prof.kind not in DEVICE_KINDS:
             prof.kind = "gamepad"
         return prof
@@ -125,7 +150,10 @@ class Controls:
         self._nav_timer = 0.0
         self._rumble_until: dict[int, int] = {}
         self.slot_map: dict[int, int | None] | None = None   # split-screen: player slot -> device
+        self.keys: dict[str, list[int]] = default_keys()
+        self._remap: dict[int, int | None] = {}
         self._load()
+        self._build_remap()
         for k in range(pygame.joystick.get_count()):
             self._add(k)
 
@@ -139,10 +167,14 @@ class Controls:
             if isinstance(data, dict):
                 self.profiles[name] = DeviceProfile.from_json(data)
         self.enabled = bool(raw.get("enabled", True))
+        for action, keys in raw.get("keyboard", {}).items():
+            if action in self.keys and isinstance(keys, list):
+                self.keys[action] = [int(k) for k in keys]
 
     def save(self) -> None:
         CONTROLS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        data = {"enabled": self.enabled, "devices": {n: p.to_json() for n, p in self.profiles.items()}}
+        data = {"enabled": self.enabled, "devices": {n: p.to_json() for n, p in self.profiles.items()},
+                "keyboard": self.keys}
         CONTROLS_FILE.write_text(json.dumps(data, indent=1), encoding="utf-8")
 
     # ------------------------------------------------------------------ devices
@@ -215,6 +247,55 @@ class Controls:
         prof = self._device(slot)[1]
         return prof.kind if prof is not None else ""
 
+    # ------------------------------------------------------------------ keyboard bindings
+    def bind_key(self, action: str, key: int) -> None:
+        """One key does one thing: it is taken away from whatever else had it."""
+        for other in self.keys.values():
+            if key in other:
+                other.remove(key)
+        self.keys[action] = [key]
+        self._build_remap()
+        self.save()
+
+    def reset_keys(self) -> None:
+        self.keys = default_keys()
+        self._build_remap()
+        self.save()
+
+    def _build_remap(self) -> None:
+        """Pressed key -> the default key the session understands (None = swallow: the key was moved away)."""
+        remap: dict[int, int | None] = {}
+        for action in KEY_ACTIONS:
+            for k in self.keys[action]:
+                remap[k] = ACTIONS[action][1]
+        bound = {k for keys in self.keys.values() for k in keys}
+        for action in KEY_ACTIONS:
+            canonical = ACTIONS[action][1]
+            if canonical not in remap and canonical in bound:
+                remap[canonical] = None   # now a driving key
+            elif canonical not in remap:
+                remap[canonical] = None   # the action lives on another key now
+        self._remap = {k: v for k, v in remap.items() if v != k}
+
+    def session_key(self, key: int) -> int | None:
+        return self._remap.get(key, key)
+
+    def driving_keys(self, keyset: str = "all") -> dict[str, list[int]]:
+        """Held keys for throttle/brake/left/right. Split screen: player 1 without arrows, player 2 arrows."""
+        if keyset == "arrows":
+            return dict(zip(KEY_DRIVE, ([k] for k in ARROWS)))
+        out = {a: list(self.keys[a]) for a in KEY_DRIVE}
+        if keyset == "wasd":
+            out = {a: [k for k in keys if k not in ARROWS] for a, keys in out.items()}
+        return out
+
+    def _joy_named(self, name: str) -> "pygame.joystick.JoystickType | None":
+        return next((j for j in self.joys.values() if j.get_name() == name), None)
+
+    def axis_device(self, binding: AxisBinding, joy: "pygame.joystick.JoystickType | None"
+                    ) -> "pygame.joystick.JoystickType | None":
+        return self._joy_named(binding.device) if binding.device else joy
+
     def cycle_device(self) -> None:
         ids = list(self.joys)
         if not ids:
@@ -227,7 +308,7 @@ class Controls:
         joy, prof = self._device(slot)
         if joy is None or prof is None:
             return None
-        v = prof.steer.read(joy)
+        v = prof.steer.read(self.axis_device(prof.steer, joy))
         if v is None:
             return None
         sign = 1.0 if v >= 0 else -1.0
@@ -243,6 +324,9 @@ class Controls:
         if joy is None or prof is None:
             return None
         binding = getattr(prof, which)
+        joy = self.axis_device(binding, joy)
+        if joy is None:
+            return None
         if abs(binding.rest) > 0.9 and binding.axis < joy.get_numaxes() and joy.get_axis(binding.axis) == 0.0:
             # SDL reports 0.0 for triggers/pedals until their first motion event - that is "released", not half
             return 0.0

@@ -211,6 +211,8 @@ class Car:
         self._rot_cache: dict[int, pygame.Surface] = {}
         self.vmax = 0.0
         self.lap_vmax = 0.0
+        self.manual_gearbox = False     # sequential: the driver shifts, each gear has its own rev limiter
+        self.manual_gear = 1
 
     @property
     def forward(self) -> Vector2:
@@ -269,10 +271,46 @@ class Car:
     def speed_kmh(self) -> float:
         return abs(self.speed_fwd) * PX_PER_S_TO_KMH
 
+    def gear_range(self, gear: int) -> tuple[float, float]:
+        """Road speed (px/s) at the bottom and at the rev limiter of a gear."""
+        bounds = (0.0,) + GEAR_THRESHOLDS + (TOP_SPEED * 1.25,)
+        gear = max(1, min(len(bounds) - 1, gear))
+        return bounds[gear - 1], bounds[gear] * 1.04
+
+    @property
+    def max_gear(self) -> int:
+        return len(GEAR_THRESHOLDS) + 1
+
+    def shift(self, delta: int) -> bool:
+        """Sequential shift. A downshift that would over-rev the engine is refused."""
+        new = max(1, min(self.max_gear, self.manual_gear + delta))
+        if new == self.manual_gear:
+            return False
+        if delta < 0 and self.speed_fwd > self.gear_range(new)[1] * 1.02:
+            return False
+        self.manual_gear = new
+        return True
+
+    def auto_gear(self) -> None:
+        """Pick the gear that suits the current speed (respawn, pit exit)."""
+        v = max(0.0, self.speed_fwd)
+        self.manual_gear = 1 + sum(1 for t in GEAR_THRESHOLDS if v >= t)
+
+    def gearbox_factor(self, vf: float) -> tuple[float, float]:
+        """(engine multiplier, speed cap) for the selected gear: no pull far below its range, limiter at the top."""
+        lo, hi = self.gear_range(self.manual_gear)
+        if vf <= lo:
+            pull = 1.0 if self.manual_gear == 1 else max(0.25, 0.25 + 0.75 * vf / max(1.0, lo))
+        else:
+            pull = 1.0
+        return pull, hi
+
     @property
     def gear(self) -> str:
         if self.speed_fwd < -3:
             return "R"
+        if self.manual_gearbox:
+            return str(self.manual_gear)
         if abs(self.speed_fwd) < 3 and self.throttle <= 0:
             return "N"
         return str(1 + sum(1 for t in GEAR_THRESHOLDS if self.speed_fwd >= t))
@@ -280,6 +318,10 @@ class Car:
     @property
     def rpm_fraction(self) -> float:
         v = max(0.0, self.speed_fwd)
+        if self.manual_gearbox:
+            lo, hi = self.gear_range(self.manual_gear)
+            return clamp(0.35 + 0.65 * v / hi if self.manual_gear == 1 else 0.35 + 0.65 * (v - lo * 0.55) /
+                         max(1.0, hi - lo * 0.55), 0.0, 1.0)
         bounds = (0.0,) + GEAR_THRESHOLDS + (TOP_SPEED,)
         for lo, hi in zip(bounds, bounds[1:]):
             if v < hi:
@@ -313,6 +355,7 @@ class Car:
         self.spin = 0.0
         self.speed_fwd = 0.0
         self.ghost_timer = 2.0
+        self.manual_gear = 1
 
     def control(self, dt: float, session: "Session") -> None:
         raise NotImplementedError
@@ -387,8 +430,12 @@ class Car:
         self.steer_angle = approach(self.steer_angle, steer_target, STEER_RATE * sf.steer_rate * dt)
 
         acc = 0.0
+        gear_cap = 1e9
+        if self.manual_gearbox:
+            pull, gear_cap = self.gearbox_factor(vf)
+            engine *= pull
         if self.throttle > 0.0:
-            if vf >= -5.0:
+            if vf >= -5.0 and vf < gear_cap:
                 acc += engine * self.throttle * (1.0 - ENGINE_FADE * clamp(vf / top, 0.0, 1.0))
             else:
                 acc += BRAKE_DECEL * 0.6 * self.throttle
@@ -412,7 +459,7 @@ class Car:
             new_vf = 0.0
         if vf < 0.0 < new_vf and self.throttle <= 0.0:
             new_vf = 0.0
-        rev_cap = top * (0.5 if self.puncture else sf.rev_limit)
+        rev_cap = min(top * (0.5 if self.puncture else sf.rev_limit), gear_cap * max(0.9, sf.rev_limit / 1.1))
         if new_vf > rev_cap:
             new_vf = max(rev_cap, vf - 400.0 * dt) if vf > rev_cap else rev_cap
 

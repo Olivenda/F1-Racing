@@ -80,6 +80,14 @@ class Game:
                     events.extend(self.controls.translate(event, in_session))
             events.extend(self.controls.menu_stick(dt, in_session))
             for event in events:
+                if in_session and event.type == pygame.KEYDOWN and not getattr(event, "from_joystick", False):
+                    # rebound keyboard actions arrive as the keys the session knows
+                    mapped = self.controls.session_key(event.key)
+                    if mapped is None:
+                        continue
+                    if mapped != event.key:
+                        event = pygame.event.Event(pygame.KEYDOWN, key=mapped, mod=event.mod, unicode="",
+                                                   scancode=0)
                 if event.type == pygame.QUIT:
                     self.running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_F12:
@@ -214,7 +222,7 @@ class Game:
                             rival=career.rival if career.kind == "driver" else None, career=True,
                             focus_team=career.team if career.kind == "team" else None,
                             reliability=career.reliability_map(), safety_car=st.safety_car,
-                            weather=st.weather,
+                            weather=st.weather, gearbox=st.gearbox,
                             objective=career.weekend_goal.get("text") if career.kind == "driver" else None)
         self.config = cfg
         first = {"weekend": "practice", "practice": "practice", "qualifying": "qualifying", "race": "race"}[cfg.mode]
@@ -277,7 +285,8 @@ class Game:
                                     start_compound=ALL_COMPOUNDS[c["tyre"]], assists=st.assists,
                                     view3d=st.view3d, damage=st.damage, tyre_wear_factor=st.tyre_wear_factor,
                                     auto_camera=st.auto_camera, championship=championship,
-                                    safety_car=st.safety_car, weather=st.weather, player2=player2)
+                                    safety_car=st.safety_car, weather=st.weather, player2=player2,
+                                    gearbox=st.gearbox)
         first = {"weekend": "practice", "practice": "practice", "qualifying": "qualifying", "race": "race"}[mode]
         self.start_session(first)
 

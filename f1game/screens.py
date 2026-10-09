@@ -13,7 +13,7 @@ from .championship import FORMATS, Championship
 from .profiles import recording_stats
 from .sound import VOLUMES
 from .tyres import ALL_COMPOUNDS, COMPOUND_ORDER, COMPOUNDS
-from .user_settings import ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, TYRE_WEAR_MODES, UNITS, speed_in
+from .user_settings import ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, GEARBOX_MODES, TYRE_WEAR_MODES, UNITS, speed_in
 from .settings import (CYAN, DIFFICULTY_LEVELS, F1_RED, GREEN, GREY, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .track import TRACK_DEFS
@@ -477,7 +477,7 @@ class SetupScreen:
 
 class SettingsScreen:
 
-    ROWS = ["Sprache", "Spielername", "Lenkrad & Controller", "Fahrhilfen", "Ansicht", "Schaden", "Reifenverschleiß", "Wetter", "Safety Car",
+    ROWS = ["Sprache", "Spielername", "Lenkrad & Controller", "Fahrhilfen", "Ansicht", "Schaden", "Reifenverschleiß", "Wetter", "Getriebe", "Safety Car",
             "TV-Regie (Zuschauer)", "Sound", "Einheiten", "Partikel & Effekte", "Bildrate", "FPS anzeigen",
             "Vollbild", "ZURÜCK"]
     HELP = {
@@ -490,6 +490,9 @@ class SettingsScreen:
         "Schaden": "An: Treffer beschädigen Frontflügel, Heck und Aufhängung (weniger Grip/Tempo, Auto zieht). "
                    "Reparatur beim Boxenstopp. Mit Ausfällen: zerstörte Aufhängung = DNF.",
         "Reifenverschleiß": "Doppelt macht Strategie und Boxenstopps wichtiger, Aus deaktiviert den Verschleiß.",
+        "Getriebe": "Automatik: das Auto schaltet selbst. Sequenziell: du schaltest - Tastatur E/Q (änderbar), "
+                    "Gamepad RB/LB, Lenkrad Schaltwippen. Jeder Gang hat einen Drehzahlbegrenzer, im zu hohen Gang "
+                    "fehlt die Beschleunigung. Zu frühes Runterschalten wird verweigert (Motorschutz).",
         "Wetter": "Trocken: nie Regen. Wechselhaft: Schauer können kommen und gehen - Strecke wird nass und "
                   "trocknet wieder ab. Regen: nasses Rennen. Bei Nässe Intermediates (grün) oder Wets (blau) holen.",
         "TV-Regie (Zuschauer)": "Die Kamera springt automatisch zu engen Zweikämpfen (im Rennen mit A umschalten).",
@@ -532,6 +535,7 @@ class SettingsScreen:
             "Sound": VOLUMES[st.sound][0],
             "Safety Car": "An" if st.safety_car else "Aus",
             "Wetter": WEATHER_MODES[st.weather],
+            "Getriebe": GEARBOX_MODES[st.gearbox],
             "Sprache": LANGUAGES.get(st.language, "English"),
             "FPS anzeigen": "An" if st.show_fps else "Aus",
             "Einheiten": UNITS[st.units][0],
@@ -560,6 +564,8 @@ class SettingsScreen:
             st.auto_camera = not st.auto_camera
         elif row == "Safety Car":
             st.safety_car = not st.safety_car
+        elif row == "Getriebe":
+            st.gearbox = "manual" if st.gearbox == "auto" else "auto"
         elif row == "Wetter":
             keys = list(WEATHER_MODES)
             st.weather = keys[(keys.index(st.weather) + delta) % len(keys)]

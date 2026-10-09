@@ -41,6 +41,7 @@ class Player_Car(Car):
         self.aero_request = False
         self._fb_impulse = 0.0
         self.slot = 0               # split-screen player number (0 = player 1)
+        self.shift_flash = 0.0
         self.keyset = "all"         # "all", "wasd" or "arrows"
 
     def set_assists(self, level: int) -> None:
@@ -49,6 +50,7 @@ class Player_Car(Car):
 
     def enable_autopilot(self, network: NeuralNetwork) -> None:
         if self.autopilot is None:
+            self.manual_gearbox = False     # the autopilot can't use the paddles
             self.autopilot = NeuralDriver(self, network)
             self.autopilot.start_delay = 0.0
 
@@ -56,11 +58,11 @@ class Player_Car(Car):
         if self.autopilot is not None:
             self.throttle, self.brake, self.steer_input = self.autopilot.update(dt, session.cars, self.track)
             return
-        up, down, left, right = self.held_keys()
+        controls = session.game.controls
+        up, down, left, right = self.held_keys(controls)
         self.throttle = 1.0 if up else 0.0
         self.brake = 1.0 if down else 0.0
         target = (-1.0 if left else 0.0) + (1.0 if right else 0.0)
-        controls = session.game.controls
         slot = self.slot
         pad_throttle, pad_brake = controls.pedal("throttle", slot), controls.pedal("brake", slot)
         if pad_throttle is not None:
@@ -86,21 +88,23 @@ class Player_Car(Car):
             self.steer_input = approach(self.steer_input, target, rate * dt)
         self._record(dt, session)
         self._apply_assists()
+        self.shift_flash = max(0.0, self.shift_flash - dt) if self.shift_flash > 0 else \
+            min(0.0, self.shift_flash + dt)
+        if self.manual_gearbox and self.assist_level >= 2 and self.speed_fwd > 5:
+            # full assists: the gearbox shifts down for the driver so the car never bogs down
+            lo, _ = self.gear_range(self.manual_gear)
+            if self.manual_gear > 1 and self.speed_fwd < lo * 0.7:
+                super().shift(-1)
         self._feedback(controls)
 
-    def held_keys(self) -> tuple[bool, bool, bool, bool]:
-        """(throttle, brake, left, right) from this player's half of the keyboard."""
-        keys = pygame.key.get_pressed()
-        wasd = (keys[pygame.K_w], keys[pygame.K_s], keys[pygame.K_a], keys[pygame.K_d])
-        arrows = (keys[pygame.K_UP], keys[pygame.K_DOWN], keys[pygame.K_LEFT], keys[pygame.K_RIGHT])
-        if self.keyset == "wasd":
-            return wasd
-        if self.keyset == "arrows":
-            return arrows
-        return wasd[0] or arrows[0], wasd[1] or arrows[1], wasd[2] or arrows[2], wasd[3] or arrows[3]
+    def held_keys(self, controls) -> tuple[bool, bool, bool, bool]:
+        """(throttle, brake, left, right) from this player's keys (rebindable, see Controls.keys)."""
+        pressed = pygame.key.get_pressed()
+        binds = controls.driving_keys(self.keyset)
+        return tuple(any(pressed[k] for k in binds[a]) for a in ("throttle", "brake", "left", "right"))
 
     def throttle_held(self, controls) -> bool:
-        return self.held_keys()[0] or controls.throttle_held(self.slot)
+        return self.held_keys(controls)[0] or controls.throttle_held(self.slot)
 
     def _feedback(self, controls) -> None:
         """Vibration / force jolts: impacts, gravel, kerb-like slides and wheelspin."""
@@ -117,6 +121,11 @@ class Player_Car(Car):
             controls.rumble(0.0, 0.3, 70, self.slot)
         elif self.launch_spin > 0.0 and self.throttle > 0.5:
             controls.rumble(0.25, 0.0, 70, self.slot)
+
+    def shift(self, delta: int) -> bool:
+        ok = super().shift(delta)
+        self.shift_flash = 0.25 if ok else -0.25
+        return ok
 
     def _apply_assists(self) -> None:
         self.brake_assist_active = False

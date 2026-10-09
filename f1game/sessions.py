@@ -64,6 +64,7 @@ class WeekendConfig:
     reliability: dict[str, float] = field(default_factory=dict)
     objective: str | None = None
     safety_car: bool = True
+    gearbox: str = "auto"
     weather: str = "dry"
     weather_seed: int = field(default_factory=lambda: random.randrange(1 << 30))
 
@@ -177,12 +178,14 @@ class Session:
                 car: Car = Player_Car(prof, self.track)
                 car.set_assists(self.config.assists)
                 car.apply_setup(self.game.setup_for(self.track))
+                car.manual_gearbox = self.config.gearbox == "manual"
                 self.player = car
             elif self.config.player2 is not None and prof is self.config.player2:
                 car = Player_Car(prof, self.track)
                 car.set_assists(self.config.assists)
                 car.apply_setup(self.game.setup_for(self.track))
                 car.slot = 1
+                car.manual_gearbox = self.config.gearbox == "manual"
                 self.player2 = car
             else:
                 net = self.game.brains.network(prof.brain, prof.checkpoint)
@@ -311,7 +314,7 @@ class Session:
             return
         if self.player2 is not None and actor is self.player2 and key not in (pygame.K_ESCAPE, pygame.K_p):
             # player 2's keys only drive their own car
-            if key not in (pygame.K_SPACE, pygame.K_b, pygame.K_r):
+            if key not in (pygame.K_SPACE, pygame.K_b, pygame.K_r, pygame.K_e, pygame.K_q):
                 return
         if self.player2 is not None and (pygame.K_0 <= key <= pygame.K_9 or key in (pygame.K_c, pygame.K_m)):
             return  # split screen: the cameras stay on the two players
@@ -378,6 +381,9 @@ class Session:
                 actor.straight_mode = False
             else:
                 actor.aero_request = True
+        elif key in (pygame.K_e, pygame.K_q) and actor is not None and actor.manual_gearbox:
+            if actor.autopilot is None:
+                actor.shift(1 if key == pygame.K_e else -1)
         elif key == pygame.K_b and actor is not None and actor.autopilot is None:
             self.pit_menus[actor].toggle(actor)
         elif key == pygame.K_b and self.is_manager_car(self.focus):
@@ -396,6 +402,7 @@ class Session:
 
     # player 2's keys next to the arrow keys, translated to the actions player 1 has on the left
     P2_KEYS = {pygame.K_RCTRL: pygame.K_SPACE, pygame.K_RSHIFT: pygame.K_b, pygame.K_DELETE: pygame.K_r,
+               pygame.K_PAGEUP: pygame.K_e, pygame.K_PAGEDOWN: pygame.K_q,
                pygame.K_KP1: pygame.K_1, pygame.K_KP2: pygame.K_2, pygame.K_KP3: pygame.K_3,
                pygame.K_KP4: pygame.K_4, pygame.K_KP5: pygame.K_5, pygame.K_KP_ENTER: pygame.K_RETURN}
 
@@ -813,6 +820,7 @@ class Session:
         car.throttle, car.brake, car.steer_input = (0.3 if v > 0 else 0.0), 0.0, 0.0
         if car.pit_u >= pit.length:
             car.pit_state = None
+            car.auto_gear()
             car.ghost_timer = 1.2
             car.spin = 0.0
 
@@ -1478,7 +1486,8 @@ class RaceSession(Session):
             self._check_blue_flag()
             p = order.index(self.player) + 1 if self.player is not None else 0
             if self.player is not None and p != self._player_pos and self.player.finish_time is None:
-                self.message(f"P{p}", GREEN if p < self._player_pos else (255, 90, 90), 1.5)
+                who = "" if self.player2 is None else f"{self.player.short}: "
+                self.message(f"{who}P{p}", GREEN if p < self._player_pos else (255, 90, 90), 1.5)
             self._player_pos = p
             self._last_order = order
 

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import pygame
 
-from .controls import ACTIONS, AXES, DEVICE_KINDS, AxisBinding, DeviceProfile
+from .controls import ACTIONS, AXES, DEVICE_KINDS, KEY_ACTIONS, KEY_DRIVE, AxisBinding, DeviceProfile
 from .screens import _Background, _wrap
 from .settings import CYAN, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW
 from .utils import draw_panel, draw_text
@@ -45,6 +45,11 @@ class ControlsScreen:
                                       "Gamepads vibrieren; Lenkräder bekommen Rüttel-Impulse, soweit der "
                                       "Treiber SDL-Rumble unterstützt.",
         "Standard wiederherstellen": "Setzt Achsen, Tasten und Lenkgefühl dieses Geräts zurück.",
+        "Pedal-Achsen": "Gas und Bremse brauchen ZWEI getrennte Achsen, sonst kann man nicht gleichzeitig bremsen "
+                        "und Gas geben. Zeigt dies 'kombiniert': im Lenkrad-Treiber (Logitech G HUB: 'Kombinierte "
+                        "Pedale' aus, Thrustmaster/Fanatec: 'separate axes') umstellen und Gas + Bremse neu "
+                        "kalibrieren. Eine separate Pedalbox (eigenes USB-Gerät) wird beim Kalibrieren erkannt.",
+        "Tastatur zurücksetzen": "Alle Tastatur-Belegungen auf Standard (Pfeile/WASD, Leertaste, B, R ...).",
         "ZURÜCK": "Wird automatisch in data/controls.json gespeichert (pro Gerät).",
     }
 
@@ -55,7 +60,9 @@ class ControlsScreen:
         self.t = 0.0
         self.capture_axis: str | None = None
         self.capture_button: str | None = None
-        self.baseline: list[float] = []
+        self.capture_key: str | None = None
+        self.baseline: dict[tuple[str, int], float] = {}
+        self.scroll = 0
         self.hold = 0.0
         self.peak = 0.0
         self.swallow_until = 0
@@ -71,9 +78,12 @@ class ControlsScreen:
             rows += ["Gerätetyp", "Lenkung kalibrieren", "Gaspedal kalibrieren", "Bremspedal kalibrieren",
                      "Lenkbereich", "Lenk-Totzone", "Lenk-Linearität", "Pedal-Totzone",
                      "Vibration / Force-Feedback"]
+            rows.insert(rows.index("Lenkbereich"), "Pedal-Achsen")
             rows += [f"Taste: {ACTIONS[a][0]}" for a in ACTIONS]
             rows += ["Standard wiederherstellen"]
-        return rows + ["ZURÜCK"]
+        rows += [f"Tastatur: {name}" for name, _ in KEY_DRIVE.values()]
+        rows += [f"Tastatur: {ACTIONS[a][0]}" for a in KEY_ACTIONS]
+        return rows + ["Tastatur zurücksetzen", "ZURÜCK"]
 
     def _value(self, row: str) -> str:
         c, p = self.c, self.c.profile
@@ -82,6 +92,9 @@ class ControlsScreen:
             return f"{c.device_name()}" + (f"  ({n} Geräte)" if n > 1 else "")
         if row == "Controller-Eingabe":
             return "An" if c.enabled else "Aus"
+        if row.startswith("Tastatur: "):
+            keys = c.keys[self._key_action(row)]
+            return " / ".join(pygame.key.name(k).upper() for k in keys) if keys else "nicht belegt"
         if p is None:
             return ""
         if row == "Gerätetyp":
@@ -89,7 +102,10 @@ class ControlsScreen:
         for key, label in (("steer", "Lenkung"), ("throttle", "Gaspedal"), ("brake", "Bremspedal")):
             if row.startswith(label):
                 b: AxisBinding = getattr(p, key)
-                return "nicht belegt" if b.axis < 0 else f"Achse {b.axis}  ({b.rest:+.2f} -> {b.full:+.2f})"
+                where = f"{b.device[:14]}: " if b.device else ""
+                return "nicht belegt" if b.axis < 0 else f"{where}Achse {b.axis}  ({b.rest:+.2f} -> {b.full:+.2f})"
+        if row == "Pedal-Achsen":
+            return "KOMBINIERT - siehe Hilfe!" if self._combined() else "getrennt (Gas + Bremse gleichzeitig möglich)"
         if row == "Lenkbereich":
             return f"{p.saturation * 100:.0f}%"
         if row == "Lenk-Totzone":
@@ -105,6 +121,44 @@ class ControlsScreen:
             b = p.buttons.get(action, -1)
             return "nicht belegt" if b < 0 else f"Knopf {b}"
         return ""
+
+    def _combined(self) -> bool:
+        p = self.c.profile
+        return p is not None and p.throttle.axis >= 0 and \
+            (p.throttle.axis, p.throttle.device) == (p.brake.axis, p.brake.device)
+
+    @staticmethod
+    def _key_action(row: str) -> str:
+        label = row[len("Tastatur: "):]
+        for action, (name, _) in KEY_DRIVE.items():
+            if name == label:
+                return action
+        return next(a for a in KEY_ACTIONS if ACTIONS[a][0] == label)
+
+    def _all_axes(self) -> list[tuple[str, int]]:
+        return [(j.get_name(), k) for j in self.c.joys.values() for k in range(j.get_numaxes())]
+
+    def _axis_value(self, name: str, axis: int) -> float:
+        joy = next((j for j in self.c.joys.values() if j.get_name() == name), None)
+        return joy.get_axis(axis) if joy is not None and axis < joy.get_numaxes() else 0.0
+
+    def _pick_axis(self, which: str, delta: int) -> None:
+        """Left/right on a calibration row: step through every axis of every device by hand."""
+        p, joy = self.c.profile, self.c.joystick
+        axes = self._all_axes()
+        if p is None or joy is None or not axes:
+            return
+        b: AxisBinding = getattr(p, which)
+        current = (b.device or joy.get_name(), b.axis)
+        k = axes.index(current) if current in axes else -1
+        name, axis = axes[(k + delta) % len(axes)]
+        rest = self._axis_value(name, axis)
+        if which == "steer":
+            full = 1.0
+        else:
+            full = -1.0 if rest > 0.5 else 1.0     # pedals rest at one end of the axis or in the middle
+        setattr(p, which, AxisBinding(axis, round(rest, 3), full, "" if name == joy.get_name() else name))
+        self.c.save()
 
     @staticmethod
     def _action_of(row: str) -> str:
@@ -132,6 +186,10 @@ class ControlsScreen:
         elif row == "Vibration / Force-Feedback":
             p.rumble = round(max(0.0, min(1.0, p.rumble + 0.1 * delta)), 1)
             c.rumble(0.6, 0.6, 250)
+        elif row.endswith("kalibrieren"):
+            self._pick_axis({"Lenkung": "steer", "Gaspedal": "throttle", "Bremspedal": "brake"}[row.split()[0]],
+                            delta)
+            return
         else:
             return
         c.save()
@@ -147,9 +205,13 @@ class ControlsScreen:
             c.save()
         elif row.endswith("kalibrieren") and joy is not None:
             self.capture_axis = {"Lenkung": "steer", "Gaspedal": "throttle", "Bremspedal": "brake"}[row.split()[0]]
-            self.baseline = [joy.get_axis(k) for k in range(joy.get_numaxes())]
+            self.baseline = {(n, k): self._axis_value(n, k) for n, k in self._all_axes()}
             self.hold = 0.0
             self.peak = 0.0
+        elif row.startswith("Tastatur: "):
+            self.capture_key = self._key_action(row)
+        elif row == "Tastatur zurücksetzen":
+            c.reset_keys()
         elif row.startswith("Taste: ") and joy is not None:
             self.capture_button = self._action_of(row)
         else:
@@ -160,27 +222,40 @@ class ControlsScreen:
         if joy is None or p is None or self.capture_axis is None:
             self.capture_axis = None
             return
-        axis, delta = self._moved_axis()
+        (name, axis), delta = self._moved_axis()
         if axis >= 0 and delta > 0.3:
-            rest, now = self.baseline[axis], joy.get_axis(axis)
+            rest, now = self.baseline[(name, axis)], self._axis_value(name, axis)
             # steering is symmetric: the end stop is the end of the axis, however far it was turned
             full = (1.0 if now > rest else -1.0) if self.capture_axis == "steer" else now
-            setattr(p, self.capture_axis, AxisBinding(axis, round(rest, 3), round(full, 3)))
+            device = "" if name == joy.get_name() else name
+            setattr(p, self.capture_axis, AxisBinding(axis, round(rest, 3), round(full, 3), device))
             self.c.save()
         self.capture_axis = None
 
-    def _moved_axis(self) -> tuple[int, float]:
-        joy = self.c.joystick
-        if joy is None:
-            return -1, 0.0
-        best, delta = -1, 0.0
-        for k in range(min(joy.get_numaxes(), len(self.baseline))):
-            d = abs(joy.get_axis(k) - self.baseline[k])
-            if d > delta:
-                best, delta = k, d
-        return best, delta
+    def _moved_axis(self) -> tuple[tuple[str, int], float]:
+        """The axis (on any device - pedal boxes are often a separate USB device) that moved the most.
+        Calibrating the brake ignores the throttle's axis unless nothing else moved (combined pedals)."""
+        p = self.c.profile
+        skip = None
+        if p is not None and self.capture_axis == "brake" and p.throttle.axis >= 0:
+            joy = self.c.joystick
+            skip = (p.throttle.device or (joy.get_name() if joy else ""), p.throttle.axis)
+        moved = sorted(((abs(self._axis_value(n, k) - v), (n, k)) for (n, k), v in self.baseline.items()),
+                       reverse=True)
+        if not moved:
+            return ("", -1), 0.0
+        for d, key in moved:
+            if key != skip and d > 0.3:
+                return key, d
+        return moved[0][1], moved[0][0]
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        if self.capture_key is not None:
+            if event.type == pygame.KEYDOWN and not getattr(event, "from_joystick", False):
+                if event.key != pygame.K_ESCAPE:
+                    self.c.bind_key(self.capture_key, event.key)
+                self.capture_key = None
+            return
         if self.capture_button is not None:
             if event.type == pygame.JOYBUTTONDOWN and event.instance_id == self.c.active:
                 p = self.c.profile
@@ -252,9 +327,13 @@ class ControlsScreen:
         self.sel = min(self.sel, len(rows) - 1)
         px, py, pw, ph = 60, 124, 700, 560
         draw_panel(screen, (px, py, pw, ph), PANEL, 215)
-        rh = min(34, (ph - 20) // len(rows))
+        rh = 32
+        visible = (ph - 20) // rh
+        self.scroll = max(min(self.scroll, self.sel), self.sel - visible + 1, 0)
         for i, row in enumerate(rows):
-            ry = py + 10 + i * rh
+            if not self.scroll <= i < self.scroll + visible:
+                continue
+            ry = py + 10 + (i - self.scroll) * rh
             selected = i == self.sel
             if row == "ZURÜCK":
                 col = (120, 120, 130) if selected else (50, 50, 58)
@@ -266,10 +345,11 @@ class ControlsScreen:
                 pygame.draw.rect(screen, (200, 200, 210), (px + 12, ry, 5, rh - 2), border_radius=2)
             mid = ry + (rh - 2) // 2
             draw_text(screen, row.upper(), f.tiny, GREY, (px + 28, mid), anchor="midleft", shadow=False)
-            capturing = selected and (self.capture_axis or self.capture_button)
+            capturing = selected and (self.capture_axis or self.capture_button or self.capture_key)
             value = "... warte auf Eingabe ..." if capturing else self._value(row)
-            draw_text(screen, value, f.small_bold, YELLOW if capturing else WHITE, (px + 330, mid),
-                      anchor="midleft", shadow=False)
+            warn = row == "Pedal-Achsen" and self._combined()
+            draw_text(screen, value, f.small_bold, YELLOW if capturing else (255, 90, 90) if warn else WHITE,
+                      (px + 330, mid), anchor="midleft", shadow=False)
         self._draw_live(screen)
         hb = pygame.Rect(790, 420, 450, 264)
         draw_panel(screen, hb, PANEL, 215)
@@ -277,13 +357,23 @@ class ControlsScreen:
         if self.capture_axis is not None:
             title, text = "KALIBRIERUNG", AXIS_PROMPTS[self.capture_axis] + \
                 " Übernahme automatisch nach kurzem Halten, ENTER übernimmt sofort, ESC bricht ab."
+        elif self.capture_key is not None:
+            title, text = "TASTE BELEGEN", "Gewünschte Taste auf der Tastatur drücken. ESC bricht ab. Die Taste " \
+                "wird dabei von jeder anderen Aktion entfernt."
         elif self.capture_button is not None:
             title, text = "TASTE BELEGEN", f"Knopf am Lenkrad/Controller drücken für: " \
                 f"{ACTIONS[self.capture_button][0]}. Entf löscht die Belegung, andere Taste bricht ab."
         else:
-            title = row.upper() if not row.startswith("Taste: ") else "TASTENBELEGUNG"
-            text = self.HELP.get(row, "ENTER, dann den gewünschten Knopf drücken. Jede Aktion geht "
-                                      "weiterhin auch über die Tastatur.")
+            title = row.upper() if not row.startswith(("Taste: ", "Tastatur: ")) else "TASTENBELEGUNG"
+            if row.startswith("Tastatur: "):
+                text = "ENTER, dann die neue Taste drücken. Im Splitscreen fährt Spieler 1 mit diesen Tasten " \
+                       "(ohne Pfeile), Spieler 2 mit den Pfeiltasten."
+            elif row.endswith("kalibrieren"):
+                text = self.HELP[row] + " Links/rechts: Achse von Hand wählen (alle Geräte, auch separate " \
+                                        "Pedalboxen)."
+            else:
+                text = self.HELP.get(row, "ENTER, dann den gewünschten Knopf drücken. Jede Aktion geht "
+                                          "weiterhin auch über die Tastatur.")
         draw_text(screen, title, f.medium, WHITE, (hb.x + 18, hb.y + 14))
         for k, line in enumerate(_wrap(text, f.small, hb.w - 36)[:8]):
             draw_text(screen, line, f.small, (205, 205, 210), (hb.x + 18, hb.y + 50 + k * 24), shadow=False)

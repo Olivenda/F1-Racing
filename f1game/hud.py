@@ -300,7 +300,11 @@ class HUD:
         draw_text(screen, f"{int(speed)}", f.big, WHITE, (x + 150, y + 34), anchor="topright")
         draw_text(screen, unit, f.small, GREY, (x + 154, y + 58))
         pygame.draw.rect(screen, PANEL_LIGHT, (x + 206, y + 32, 58, 62), border_radius=8)
-        draw_text(screen, car.gear, f.big, YELLOW, (x + 235, y + 63), anchor="center")
+        flash = getattr(car, "shift_flash", 0.0)
+        gcol = (255, 90, 90) if flash < 0 else WHITE if flash > 0 else YELLOW
+        draw_text(screen, car.gear, f.big, gcol, (x + 235, y + 63), anchor="center")
+        if car.manual_gearbox:
+            draw_text(screen, "SEQ", f.tiny, GREY, (x + 235, y + 28), anchor="center", shadow=False)
         bx = x + 18
         for i, (val, col, label) in enumerate(((car.throttle, GREEN, "GAS"), (car.brake, F1_RED, "BRK"))):
             by = y + 92 + i * 14
@@ -765,7 +769,10 @@ class HUD:
         self._messages(screen, s)
         self._race_control(screen, s)
         hint = "P1: WASD · LEER Gerade · B Box · R Reset      P2: Pfeile · STRG-R Gerade · SHIFT-R Box · ENTF Reset"
-        draw_text(screen, hint, f.tiny, (200, 200, 200), (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 10), anchor="midbottom")
+        if s.time < 12.0 or s.paused:
+            rect = draw_text(screen, hint, f.tiny, WHITE, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 132), anchor="center")
+            draw_panel(screen, rect.inflate(20, 10), alpha=170)
+            draw_text(screen, hint, f.tiny, WHITE, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 132), anchor="center")
 
     def draw_pause(self, screen: pygame.Surface, s: "Session") -> None:
         shade = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)

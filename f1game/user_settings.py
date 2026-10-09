@@ -15,6 +15,7 @@ ASSIST_NAMES = ["Aus", "Mittel (Stabilität + Bremslinie)", "Voll (+ automatisch
 UNITS = {"kmh": ("km/h", 1.0), "mph": ("mph", 0.621371)}
 FPS_OPTIONS = [30, 60, 120, 144]
 EFFECT_LEVELS = {"off": "Aus", "low": "Niedrig", "high": "Hoch"}
+GEARBOX_MODES = {"auto": "Automatik", "manual": "Sequenziell (selbst schalten)"}
 
 
 def speed_in(kmh: float, units: str) -> tuple[float, str]:
@@ -39,6 +40,7 @@ class UserSettings:
     fps: int = 60
     effects: str = "high"
     weather: str = "dynamic"
+    gearbox: str = "auto"
 
     @property
     def tyre_wear_factor(self) -> float:
@@ -64,6 +66,8 @@ class UserSettings:
             settings.units = "kmh"
         if settings.effects not in EFFECT_LEVELS:
             settings.effects = "high"
+        if settings.gearbox not in GEARBOX_MODES:
+            settings.gearbox = "auto"
         if settings.weather not in ("dry", "dynamic", "wet"):
             settings.weather = "dynamic"
         if settings.fps not in FPS_OPTIONS:

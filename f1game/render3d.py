@@ -357,7 +357,7 @@ class Renderer3D:
                     if top[2] > NEAR:
                         labels.append((self.project(top), car))
         for (x, y), car in labels:
-            txt = "DU" if car.is_player else car.short
+            txt = "DU" if car.is_player and car.short == "YOU" else car.short
             img = label_font.render(tr(txt), True, (0, 230, 255) if car.is_player else (250, 250, 250))
             surf.blit(img, img.get_rect(midbottom=(x, y)))
 
