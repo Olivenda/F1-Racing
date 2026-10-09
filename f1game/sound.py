@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 RATE = 22050
 CHANNELS = 2
 CHUNK_SECONDS = 0.045
+MAX_CHUNK_SECONDS = 0.16
 TABLE_SIZE = 2048
 NOISE_SIZE = 8192
 SINE_SIZE = 1024
@@ -92,28 +93,31 @@ class EngineVoice:
         self.turbo_phase = 0.0
         self.whine_phase = 0.0
         self.noise_pos = random.randrange(NOISE_SIZE)
+        self.chunk_s = CHUNK_SECONDS
+        self.pan = 0.0
 
     def feed(self, rpm: float, load: float, amp: float, bright: float = 1.0, turbo: float = 0.0,
-             whine: float = 0.0, pan: float = 0.0) -> None:
-        if amp <= 0.001:
+             whine: float = 0.0, pan: float = 0.0, frame_dt: float = 0.016) -> None:
+        if amp <= 0.001 and self.amp <= 0.001:
             if self.ch.get_busy():
                 self.ch.stop()
             self.amp = 0.0
             return
-        params = (rpm, load, min(0.9, amp), bright, turbo, whine)
+        # chunks last at least ~2 frames, so a slow frame (3D, loading, GC) doesn't leave a gap (crackle)
+        self.chunk_s = max(CHUNK_SECONDS, min(MAX_CHUNK_SECONDS, frame_dt * 2.2))
+        params = (rpm, load, min(0.9, max(0.0, amp)), bright, turbo, whine)
         if not self.ch.get_busy():
             self.ch.play(self._chunk(*params))
         if self.ch.get_queue() is None:
             self.ch.queue(self._chunk(*params))
-        left = min(1.0, 1.0 - pan)
-        right = min(1.0, 1.0 + pan)
-        self.ch.set_volume(left, right)
+        self.pan += (pan - self.pan) * 0.3        # no hard jumps between left and right
+        self.ch.set_volume(min(1.0, 1.0 - self.pan), min(1.0, 1.0 + self.pan))
 
     def _chunk(self, rpm: float, load: float, amp: float, bright: float, turbo: float,
                whine: float) -> pygame.mixer.Sound:
         s = self.sys
         rate = s.rate
-        n = int(rate * CHUNK_SECONDS)
+        n = int(rate * self.chunk_s)
         tl, to, env, noise, sine = s.table_load, s.table_off, s.envelope, s.noise, s.sine
         mask, nmask, smask = TABLE_SIZE - 1, NOISE_SIZE - 1, SINE_SIZE - 1
         freq = rpm / 120.0
@@ -210,7 +214,7 @@ class SoundSystem:
         self.volume = VOLUMES.get(volume_key, VOLUMES["normal"])[1]
         try:
             if not pygame.mixer.get_init():
-                pygame.mixer.init(RATE, -16, CHANNELS, 512)
+                pygame.mixer.init(RATE, -16, CHANNELS, 1024)
             freq, _, channels = pygame.mixer.get_init()
         except (pygame.error, TypeError):
             return
@@ -262,6 +266,9 @@ class SoundSystem:
         self._last_throttle = 0.0
         self._last_ticks = pygame.time.get_ticks()
         self._pop_cooldown = 0.0
+        self._voice_cars: list[int | None] = [None] * len(self.others)
+        self._levels: dict[int, float] = {}
+        self._frame_dt = 0.016
         self.enabled = True
 
     # ------------------------------------------------------------------ synthesis helpers
@@ -401,13 +408,21 @@ class SoundSystem:
             self.ui_ch.play(snd)
             self.ui_ch.set_volume((0.5 if kind == "fanfare" else 0.3) * self.volume)
 
-    def _loop(self, ch: pygame.mixer.Channel, snd: pygame.mixer.Sound, level: float) -> None:
-        if level > 0.01:
+    def _loop(self, ch: pygame.mixer.Channel, snd: pygame.mixer.Sound, level: float, attack: float = 12.0,
+              release: float = 6.0) -> None:
+        """Looping noise (skid, gravel, wind) that fades in and out instead of switching on and off (clicks)."""
+        key = id(ch)
+        cur = self._levels.get(key, 0.0)
+        rate = attack if level > cur else release
+        cur += (level - cur) * min(1.0, rate * self._frame_dt)
+        self._levels[key] = cur
+        if cur > 0.008:
             if not ch.get_busy():
                 ch.play(snd, loops=-1)
-            ch.set_volume(min(1.0, level))
+            ch.set_volume(min(1.0, cur))
         elif ch.get_busy():
             ch.stop()
+            self._levels[key] = 0.0
 
     def _other_cars(self, session: "Session", focus, vol: float) -> None:
         near = []
@@ -418,11 +433,23 @@ class SoundSystem:
             if d < self.HEAR_RANGE:
                 near.append((d, id(c), c))
         near.sort()
+        # each voice keeps its car while it stays in range: re-sorting by distance every frame made the
+        # voices jump between cars (sudden pitch changes)
+        wanted = [c for _, _, c in near[:len(self.others)]]
+        by_id = {id(c): (d, c) for d, _, c in near}
+        for k in range(len(self.others)):
+            cid = self._voice_cars[k]
+            if cid is not None and (cid not in by_id or by_id[cid][1] not in wanted):
+                self._voice_cars[k] = None
+        for c in wanted:
+            if id(c) not in self._voice_cars and None in self._voice_cars:
+                self._voice_cars[self._voice_cars.index(None)] = id(c)
         for k, voice in enumerate(self.others):
-            if k >= len(near):
-                voice.feed(0.0, 0.0, 0.0)
+            cid = self._voice_cars[k]
+            if cid is None:
+                voice.feed(0.0, 0.0, 0.0, frame_dt=self._frame_dt)
                 continue
-            d, _, car = near[k]
+            d, car = by_id[cid]
             rel = car.pos - focus.pos
             direction = rel / max(d, 1.0)
             v_away = (car.vel - focus.vel).dot(direction)
@@ -431,7 +458,7 @@ class SoundSystem:
             pan = max(-0.85, min(0.85, direction.dot(focus.right)))
             bright = 0.35 + 0.65 * (1.0 - d / self.HEAR_RANGE)
             voice.feed(engine_rpm(car) * doppler, car.throttle, (0.14 + 0.16 * car.throttle) * loud * vol,
-                       bright=bright, pan=pan)
+                       bright=bright, pan=pan, frame_dt=self._frame_dt)
 
     def update(self, session: "Session") -> None:
         if not self.enabled:
@@ -442,9 +469,11 @@ class SoundSystem:
         now = pygame.time.get_ticks()
         dt = max(0.001, min(0.1, (now - self._last_ticks) / 1000.0))
         self._last_ticks = now
+        self._frame_dt = dt
         car = session.focus
         if id(car) != self._focus_id:
             self._focus_id = id(car)
+            self._voice_cars = [None] * len(self.others)
             self._last_impulse = car.wall_impulse + car.car_impulse
             self._last_gear = car.gear
         fast_forward = session.time_scale > 1.0
@@ -482,15 +511,15 @@ class SoundSystem:
                 amp *= 0.75 + 0.25 * (int(session.time * 14) % 2)
             whine = 0.02 + 0.04 * speed_frac * (1.0 - 0.6 * self._load)
             self.engine.feed(rpm, self._load, amp * vol * mute, bright=1.0, turbo=self._boost,
-                             whine=whine * speed_frac)
+                             whine=whine * speed_frac, frame_dt=dt)
             self._pop_cooldown -= dt
             lifted = self._last_throttle > 0.6 and car.throttle < 0.2
             overrun = car.throttle < 0.15 and rpm_frac > 0.5 and car.speed_fwd > 60
             if not fast_forward and self._pop_cooldown <= 0 and overrun and \
-                    (lifted or random.random() < 9.0 * dt * rpm_frac):
+                    (lifted or random.random() < 1.5 * dt * rpm_frac):
                 self.pop_ch.play(random.choice(self.pops))
                 self.pop_ch.set_volume(random.uniform(0.25, 0.55) * vol * (0.6 + 0.4 * rpm_frac))
-                self._pop_cooldown = random.uniform(0.05, 0.22)
+                self._pop_cooldown = random.uniform(0.18, 0.6)
             self._last_throttle = car.throttle
 
         self._other_cars(session, car, vol * mute)

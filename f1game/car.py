@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pygame
 from pygame.math import Vector2
 
-from .settings import (BRAKE_DECEL, CAR_LENGTH, CAR_WIDTH, DRAG_SHARE, ENGINE_ACCEL, ENGINE_FADE,
+from .settings import (BRAKE_DECEL, COAST_DRAG, brake_decel, CAR_LENGTH, CAR_WIDTH, DRAG_SHARE, ENGINE_ACCEL, ENGINE_FADE,
                        GEAR_THRESHOLDS, GRASS_DRAG, GRASS_ENGINE_FACTOR, GRASS_GRIP_FACTOR, LATERAL_GRIP,
                        MAX_STEER_ANGLE, PX_PER_S_TO_KMH, REVERSE_ACCEL, REVERSE_MAX_SPEED, ROLLING_FRICTION,
                        SLIP_RECOVERY, SLIPSTREAM_DRAG, SPIN_DAMPING, STRAIGHT_MODE_DRAG, STRAIGHT_MODE_GRIP, STEER_RATE, TOP_SPEED, WHEELBASE, Color)
@@ -204,6 +204,7 @@ class Car:
         self.dsq = False
         self.dsq_reason = ""
         self.pit_plan: dict | None = None
+        self.strategy: list[list] | None = None     # race plan from practice: [[compound, laps], ...]
         self.lap_log: list[dict] = []
         self._lap_log_start: dict | None = None
 
@@ -425,7 +426,7 @@ class Car:
         if self.launch_spin > 0.0:
             self.launch_spin = max(0.0, self.launch_spin - dt)
             engine *= 0.45
-        brake_force = BRAKE_DECEL * perf.brakes * sf.brake * (self.tyres.braking if self.tyres else 1.0) * \
+        brake_force = brake_decel(vf) * perf.brakes * sf.brake * (self.tyres.braking if self.tyres else 1.0) * \
             self.damage.brake_factor
         if self.on_grass:
             self.grass_time += dt
@@ -446,6 +447,8 @@ class Car:
         ratio = vf / top
         drag_factor = sf.drag * (1.0 - SLIPSTREAM_DRAG * self.slipstream) * \
             (1.0 - STRAIGHT_MODE_DRAG if self.straight_mode else 1.0)
+        if self.throttle <= 0.0 and self.brake <= 0.0:
+            drag_factor *= COAST_DRAG      # off the throttle the car rolls on instead of feeling braked
         acc -= ENGINE_ACCEL * perf.engine * DRAG_SHARE * ratio * abs(ratio) * drag_factor
         braking_forward = False
         if self.brake > 0.0:
@@ -597,6 +600,14 @@ class Car:
             self.best_splits = self.current_splits
         self.current_splits = {}
         session.on_lap_completed(self, lap)
+
+    def next_planned_stop(self) -> tuple[int, str] | None:
+        """(lap at whose end to pit, compound) for the next stop of the race strategy, None when none is left."""
+        plan = self.strategy
+        k = self.pit_stops
+        if not plan or k + 1 >= len(plan):
+            return None
+        return sum(int(laps) for _, laps in plan[:k + 1]), str(plan[k + 1][0])
 
     @staticmethod
     def _new_tel() -> dict:

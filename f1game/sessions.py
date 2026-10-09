@@ -67,6 +67,8 @@ class WeekendConfig:
     gearbox: str = "auto"
     weather: str = "dry"
     weather_seed: int = field(default_factory=lambda: random.randrange(1 << 30))
+    strategy: list | None = None            # race plan chosen in the practice analysis: [[compound, laps], ...]
+    guests: list[DriverProfile] = field(default_factory=list)   # online players (driven over the network)
 
     @property
     def spectator(self) -> bool:
@@ -75,7 +77,7 @@ class WeekendConfig:
     @property
     def field(self) -> list[DriverProfile]:
         humans = [p for p in (self.player, self.player2) if p is not None]
-        return humans + self.ai_profiles
+        return humans + list(self.guests) + self.ai_profiles
 
     @property
     def difficulty(self) -> float:
@@ -164,9 +166,11 @@ class Session:
         self._frame_dt = 0.0
         self._weather_note = ""
         net = getattr(game, "net", None)
-        # online: "host" simulates and the guest drives player2, "client" only mirrors the host
-        self.net_role = net.role if net is not None and net.connected and config.player2 is not None else None
+        # online: the "host" simulates everything and the guests' cars run on their inputs; a "client" (guest)
+        # only mirrors the host
+        self.net_role = net.role if net is not None and net.connected and config.guests else None
         self.online = self.net_role is not None
+        self.guest_cars: list[Player_Car] = []
         self.host_paused = False
         self.host_finished = False
         if config.objective and config.player is not None:
@@ -186,6 +190,8 @@ class Session:
                 car.set_assists(self.config.assists)
                 car.apply_setup(self.game.setup_for(self.track))
                 car.manual_gearbox = self.config.gearbox == "manual"
+                if self.kind == "race" and self.config.strategy:
+                    car.strategy = [list(stint) for stint in self.config.strategy]
                 self.player = car
             elif self.config.player2 is not None and prof is self.config.player2:
                 car = Player_Car(prof, self.track)
@@ -193,21 +199,10 @@ class Session:
                 car.apply_setup(self.game.setup_for(self.track))
                 car.slot = 1
                 car.manual_gearbox = self.config.gearbox == "manual"
-                if self.net_role is not None:
-                    # online guest: their own assists, gearbox and garage setup
-                    net = self.game.net
-                    if self.net_role == "host":
-                        car.remote = net.remote_input
-                        car.set_assists(net.remote_assists)
-                        car.manual_gearbox = net.remote_gearbox == "manual"
-                        setup = net.remote_setup(self.track.definition.key)
-                    else:
-                        car.set_assists(self.game.settings.assists)
-                        car.manual_gearbox = self.game.settings.gearbox == "manual"
-                        setup = None
-                    car.apply_setup(setup or (self.game.setup_for(self.track) if self.net_role == "client"
-                                              else recommended(self.track)))
                 self.player2 = car
+            elif any(prof is g for g in self.config.guests):
+                car = self._guest_car(prof)
+                self.guest_cars.append(car)
             else:
                 net = self.game.brains.network(prof.brain, prof.checkpoint)
                 car = AI_Car(prof, self.track, net, engine_factor=self.config.difficulty * prof.pace)
@@ -224,15 +219,15 @@ class Session:
             car.fill_fuel(self.start_fuel_laps(car), RACE_FUEL_KG / laps)
             car.plank_per_lap = PLANK_RACE_MM / laps * (1.0 if car.is_player else random.uniform(0.85, 1.1))
             self.cars.append(car)
+        if self.net_role == "client":
+            # this guest's own car is "the player" here; the host and the other guests are just (human) cars
+            me = next((c for c in self.guest_cars if c.name == self.game.net.my_name), None)
+            if me is not None:
+                self.player = me
+            self.guest_cars = []
         self.cam_index = self.cars.index(self.player) if self.player is not None else 0
         self.pit_menus = {p: (self.pit_menu if p is self.player else PitMenu()) for p in self.players}
-        if self.net_role == "client":
-            # the guest's own car is "the player" here; the host's car is just another (human) car
-            self.player, self.player2 = self.player2, None
-            self.cam_index = self.cars.index(self.player)
-            self.pit_menus = {self.player: self.pit_menu}
-            self.game.controls.assign_players(1)
-        elif self.online:
+        if self.online:
             self.game.controls.assign_players(1)
         elif self.player2 is not None:
             # split screen: each player drives on their half of the keyboard, plus a controller if there is one
@@ -248,6 +243,33 @@ class Session:
         if self.player is None and own:
             self.cam_index = own[0]
             self.config.auto_camera = False
+
+    def _guest_car(self, prof: DriverProfile) -> Player_Car:
+        """An online player's car: their assists, gearbox and garage setup, driven by their inputs."""
+        car = Player_Car(prof, self.track)
+        net = self.game.net
+        key = self.track.definition.key
+        if self.net_role == "host":
+            peer = net.peer_named(prof.name)
+            if peer is not None:
+                car.remote = peer.input
+                car.set_assists(peer.assists)
+                car.manual_gearbox = peer.gearbox == "manual"
+                car.apply_setup(peer.setup_for(key) or recommended(self.track))
+                if self.kind == "race" and peer.strategy:
+                    car.strategy = [list(s) for s in peer.strategy]
+            else:
+                car.apply_setup(recommended(self.track))
+                car.remote = None
+        else:
+            mine = net is not None and prof.name == net.my_name
+            car.set_assists(self.game.settings.assists if mine else 1)
+            car.manual_gearbox = mine and self.game.settings.gearbox == "manual"
+            car.apply_setup(self.game.setup_for(self.track) if mine else recommended(self.track))
+        return car
+
+    def guest_car(self, name: str) -> Player_Car | None:
+        return next((c for c in self.guest_cars if c.name == name), None)
 
     def fuel_margin(self, car: Car) -> float:
         """Extra laps of fuel on top of the race distance: the player's garage choice, AI a safe margin."""
@@ -269,7 +291,12 @@ class Session:
         return self.cars[self.cam_index]
 
     def compound_for(self, car: Car) -> str:
-        if car.profile is self.config.player or car.profile is self.config.player2:
+        if car.profile is self.config.player and self.kind == "race" and self.config.strategy and \
+                self.config.strategy[0][0] in COMPOUNDS:
+            return self.config.strategy[0][0]       # the race strategy from practice picks the start tyre
+        if self.kind == "race" and car.strategy and car.strategy[0][0] in COMPOUNDS:
+            return car.strategy[0][0]               # an online guest's plan from their practice
+        if car.profile is self.config.player or car.profile is self.config.player2 or car.is_player:
             return self.config.start_compound
         return Weather.best_compound(self.weather.wetness) or "medium"
 
@@ -346,7 +373,11 @@ class Session:
         key = event.key
         if actor is not None and self.pit_menus[actor].handle_key(event, actor, self):
             return
-        if self.player2 is not None and actor is self.player2 and key not in (pygame.K_ESCAPE, pygame.K_p):
+        if getattr(event, "net_car", None) is not None:
+            # an online guest's keys only drive their own car
+            if key not in (pygame.K_SPACE, pygame.K_b, pygame.K_r, pygame.K_e, pygame.K_q):
+                return
+        elif self.player2 is not None and actor is self.player2 and key not in (pygame.K_ESCAPE, pygame.K_p):
             # player 2's keys only drive their own car
             if key not in (pygame.K_SPACE, pygame.K_b, pygame.K_r, pygame.K_e, pygame.K_q):
                 return
@@ -443,12 +474,13 @@ class Session:
 
     @property
     def players(self) -> list[Player_Car]:
-        return [p for p in (self.player, self.player2) if p is not None]
+        """Every human car this game simulates: local player(s) and, on an online host, the guests."""
+        return [p for p in (self.player, self.player2) if p is not None] + self.guest_cars
 
     def _route(self, event: pygame.event.Event) -> tuple[Player_Car | None, pygame.event.Event]:
         """Which player a key press belongs to (split screen), and the key in player 1's terms."""
-        if getattr(event, "net_remote", False):
-            return self.player2, event
+        if getattr(event, "net_car", None) is not None:
+            return event.net_car, event
         if self.player2 is None or self.online:
             return self.player, event
         if getattr(event, "from_joystick", False):
@@ -1150,7 +1182,7 @@ class QualifyingSession(Session):
         self.message("Die Bestzeit bestimmt deinen Startplatz", (180, 180, 180), 3.5)
 
     def compound_for(self, car: Car) -> str:
-        if car.profile is self.config.player or car.profile is self.config.player2:
+        if car.is_player:
             return self.config.start_compound
         return Weather.best_compound(self.weather.wetness) or "soft"
 
@@ -1218,6 +1250,9 @@ class RaceSession(Session):
         self.pos_history: dict[Car, list[int]] = {c: [c.grid_slot] for c in self.cars}
         if self.player is not None:
             self.message(f"Startplatz P{self._player_pos} - warte auf die Ampel!", WHITE, 4.0)
+            if self.player.strategy:
+                plan = " -> ".join(f"{COMPOUNDS[c].letter} {n}" for c, n in self.player.strategy)
+                self.message(f"Strategie aus dem Training: {plan}", (90, 200, 255), 6.0)
         else:
             self.message("ZUSCHAUER-RENNEN  ·  C Kamera  ·  A TV-Regie  ·  +/- Zeitraffer", WHITE, 5.0)
 
@@ -1378,8 +1413,8 @@ class RaceSession(Session):
         return "soft" if laps <= 4 else "medium" if laps <= 9 else "hard"
 
     def compound_for(self, car: Car) -> str:
-        if car.profile is self.config.player:
-            return self.config.start_compound
+        if car.is_player:
+            return super().compound_for(car)
         wet = Weather.best_compound(self.weather.wetness)
         if wet:
             return wet

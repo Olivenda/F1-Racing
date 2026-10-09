@@ -14,7 +14,7 @@ from .car import Car
 from .neural import NeuralNetwork
 from .profiles import RECORDING_DIR
 from .sensors import compute_inputs
-from .settings import AI_CONTROL_INTERVAL, BRAKE_DECEL
+from .settings import AI_CONTROL_INTERVAL, BRAKE_KEY_RATE, BRAKE_PEDAL_CURVE, brake_decel
 from .utils import approach
 
 if TYPE_CHECKING:
@@ -63,14 +63,15 @@ class Player_Car(Car):
         controls = self.remote if self.remote is not None else session.game.controls
         up, down, left, right = self.held_keys(controls)
         self.throttle = 1.0 if up else 0.0
-        self.brake = 1.0 if down else 0.0
+        # a brake key squeezes the brake on over a moment instead of locking at 100% instantly
+        self.brake = approach(self.brake, 1.0, BRAKE_KEY_RATE * dt) if down else 0.0
         target = (-1.0 if left else 0.0) + (1.0 if right else 0.0)
         slot = self.slot
         pad_throttle, pad_brake = controls.pedal("throttle", slot), controls.pedal("brake", slot)
         if pad_throttle is not None:
             self.throttle = max(self.throttle, pad_throttle)
         if pad_brake is not None:
-            self.brake = max(self.brake, pad_brake)
+            self.brake = max(self.brake, pad_brake ** BRAKE_PEDAL_CURVE)
         analog = controls.steering(slot) if target == 0.0 else None
         speed_ratio = min(1.0, max(0.0, self.speed_fwd) / self.top_speed)
         wheel = controls.kind(slot) == "wheel"
@@ -174,12 +175,13 @@ class Player_Car(Car):
         track = self.track
         if self.assist_level >= 2 and track.max_speed and not self.on_grass:
             grip_scale = (self.performance()["grip"] * self.grip_bonus) ** 0.5
-            decel = BRAKE_DECEL * self.performance()["brake"] * 0.85
+            brake_k = self.performance()["brake"] * 0.85
             n, step = track.n, track.WAYPOINT_SPACING
             allowed = 1e9
             for k in range(0, 70, 2):
                 v_corner = track.max_speed[(self.idx + k) % n] * grip_scale
-                allowed = min(allowed, (v_corner * v_corner + 2.0 * decel * k * step) ** 0.5)
+                allowed = min(allowed, (v_corner * v_corner + 2.0 * brake_decel(v_corner) * brake_k * k * step)
+                              ** 0.5)
             if self.speed_fwd > allowed + 4.0:
                 self.brake = max(self.brake, min(1.0, max(0.35, (self.speed_fwd - allowed) / 50.0)))
                 self.throttle = 0.0

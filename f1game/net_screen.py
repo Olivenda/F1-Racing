@@ -181,7 +181,8 @@ class NetLobbyScreen:
                 f"2. Die Windows-Firewall fragt beim ersten Start - Zugriff erlauben (oder TCP {port} freigeben).",
                 "3. Deinem Mitspieler deine öffentliche IP geben (z.B. auf whatismyip.com nachsehen). Im selben "
                 "Netzwerk reicht die lokale IP unten.",
-                "4. HOST STARTEN, warten bis er verbunden ist, dann Strecke und Modus wählen.",
+                "4. HOST STARTEN, dann Strecke und Modus wählen. Mitspieler können jederzeit beitreten (bis zu 21 Fahrer), "
+                "jeder wählt sein eigenes Team.",
             ]
         else:
             draw_text(screen, "SO GEHT'S (BEITRETEN)", f.medium, WHITE, (hb.x + 18, y))
@@ -189,7 +190,7 @@ class NetLobbyScreen:
             steps = [
                 "1. Adresse des Hosts eingeben: seine öffentliche IP (oder lokale IP im selben Netzwerk).",
                 "2. Port wie beim Host einstellen.",
-                "3. VERBINDEN - der Host wählt Strecke und Modus, du fährst das Auto seines Teamkollegen.",
+                "3. VERBINDEN - der Host wählt Strecke und Modus, du wählst dein Team (bis zu 21 Fahrer).",
                 "Dein Setup aus der Garage, deine Fahrhilfen, dein Getriebe und dein Lenkrad werden verwendet.",
             ]
         for step in steps:
@@ -210,18 +211,30 @@ class NetLobbyScreen:
 
 
 class NetWaitScreen:
-    """Guest between sessions: connected, the host is choosing the track or reading results."""
+    """Guest in the lobby / between sessions: pick a team, see who is connected and what the host chose."""
 
     def __init__(self, game: "Game") -> None:
         self.game = game
         self.bg = _Background()
         self.t = 0.0
 
+    def _teams(self) -> list[str]:
+        return [t.name for t in self.game.teams]
+
     def handle_event(self, event: pygame.event.Event) -> None:
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+        if event.type != pygame.KEYDOWN:
+            return
+        net = self.game.net
+        if event.key == pygame.K_ESCAPE:
             self.game.go_to_menu()
-        elif event.type == pygame.KEYDOWN and event.key == pygame.K_g:
+        elif event.key == pygame.K_g:
             self._garage()
+        elif event.key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_a, pygame.K_d) and net is not None:
+            teams = self._teams()
+            if teams:
+                k = teams.index(net.team) if net.team in teams else -1
+                step = -1 if event.key in (pygame.K_LEFT, pygame.K_a) else 1
+                net.choose_team(teams[(k + step) % len(teams)])
 
     def _garage(self) -> None:
         from .track import TRACK_DEFS
@@ -230,7 +243,7 @@ class NetWaitScreen:
         key = net.lobby.get("track") if net is not None else None
         if key not in game.tracks:
             key = game.config.track_key if game.config is not None else TRACK_DEFS[0].key
-        team = None
+        team = next((t for t in game.teams if net is not None and t.name == net.team), None)
         game.open_garage(key, team, lambda: setattr(game, "state", NetWaitScreen(game)))
 
     def update(self, dt: float) -> None:
@@ -241,18 +254,53 @@ class NetWaitScreen:
         f = self.game.fonts
         self.bg.draw(screen)
         net = self.game.net
-        box = pygame.Rect(SCREEN_WIDTH // 2 - 360, SCREEN_HEIGHT // 2 - 130, 720, 260)
-        draw_panel(screen, box, PANEL, 225)
-        name = net.remote_name if net is not None else ""
-        draw_text(screen, "ONLINE  ·  VERBUNDEN", f.medium, ACCENT, (box.centerx, box.y + 34), anchor="center")
-        draw_text(screen, f"Host: {name}", f.large, WHITE, (box.centerx, box.y + 80), anchor="center")
+        if net is None:
+            return
+        pygame.draw.rect(screen, ACCENT, (60, 40, 8, 60))
+        draw_text(screen, "ONLINE  ·  VERBUNDEN", f.big, WHITE, (84, 36))
+        sub = f"Host: {net.remote_name}" + (f"  ·  Ping {net.ping_ms:.0f} ms" if net.ping_ms else "")
+        draw_text(screen, sub, f.small, GREY, (86, 86))
+
+        # team choice
+        box = pygame.Rect(60, 130, 560, 200)
+        draw_panel(screen, box, PANEL, 220)
+        draw_text(screen, "DEIN TEAM", f.tiny, GREY, (box.x + 18, box.y + 16), shadow=False)
+        team = next((t for t in self.game.teams if t.name == net.team), None)
+        name = team.name if team is not None else "wie der Host"
+        if team is not None:
+            pygame.draw.rect(screen, team.color, (box.x + 18, box.y + 48, 10, 40), border_radius=3)
+        draw_text(screen, name, f.large, WHITE, (box.x + 40, box.y + 50))
+        draw_text(screen, "<  >", f.large, YELLOW, (box.right - 20, box.y + 50), anchor="topright")
+        draw_text(screen, "Links/rechts wechselt das Team - es gilt ab dem nächsten Wochenende.", f.small,
+                  (200, 200, 205), (box.x + 18, box.y + 104), shadow=False)
         dots = "." * (1 + int(self.t * 2) % 3)
         draw_text(screen, f"Warte, bis der Host die Session startet{dots}", f.medium, YELLOW,
-                  (box.centerx, box.y + 134), anchor="center")
-        if net is not None and net.lobby.get("text"):
-            draw_text(screen, f"Gewählt: {net.lobby['text']}", f.small_bold, WHITE, (box.centerx, box.y + 172),
-                      anchor="center")
-        if net is not None and net.ping_ms:
-            draw_text(screen, f"Ping {net.ping_ms:.0f} ms", f.small, GREY, (box.centerx, box.y + 198), anchor="center")
-        draw_text(screen, "G: Garage (Setup für die nächste Strecke)  ·  ESC: Verbindung trennen", f.small, GREY,
-                  (box.centerx, box.bottom - 30), anchor="center")
+                  (box.x + 18, box.y + 140))
+
+        info = pygame.Rect(60, 346, 560, 150)
+        draw_panel(screen, info, PANEL, 220)
+        draw_text(screen, "VOM HOST GEWÄHLT", f.tiny, GREY, (info.x + 18, info.y + 14), shadow=False)
+        text = net.lobby.get("text") or "Host wählt noch Strecke und Modus"
+        draw_text(screen, text, f.medium, WHITE, (info.x + 18, info.y + 40))
+        if net.lobby.get("note"):
+            draw_text(screen, net.lobby["note"], f.small_bold, ORANGE_NOTE, (info.x + 18, info.y + 78))
+        draw_text(screen, "G: Garage (Setup für diese Strecke)", f.small, GREY, (info.x + 18, info.y + 112))
+
+        # everyone in the lobby
+        players = net.lobby.get("players") or []
+        pl = pygame.Rect(650, 130, 590, 540)
+        draw_panel(screen, pl, PANEL, 220)
+        draw_text(screen, f"FAHRER ONLINE  ·  {len(players)}/21", f.tiny, GREY, (pl.x + 18, pl.y + 14), shadow=False)
+        colors = {t.name: t.color for t in self.game.teams}
+        for k, (pname, tname) in enumerate(players[:21]):
+            y = pl.y + 40 + k * 23
+            pygame.draw.rect(screen, colors.get(tname, (150, 150, 150)), (pl.x + 18, y + 3, 6, 16))
+            col = CYAN if pname == net.my_name else WHITE
+            label = f"{pname}" + ("  (Host)" if k == 0 else "")
+            draw_text(screen, label, f.small_bold, col, (pl.x + 32, y), shadow=False)
+            draw_text(screen, tname, f.small, GREY, (pl.x + 330, y), shadow=False)
+        draw_text(screen, "ESC: Verbindung trennen", f.small, GREY, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30),
+                  anchor="center")
+
+
+ORANGE_NOTE = (255, 170, 60)

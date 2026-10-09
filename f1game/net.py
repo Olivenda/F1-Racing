@@ -39,6 +39,7 @@ SNAPSHOT_HZ = 30.0
 INPUT_HZ = 60.0
 MAX_FRAME = 8 << 20
 CONNECT_TIMEOUT = 8.0
+MAX_GUESTS = 20             # 21 drivers with the host
 
 # keys the guest's game sends to the host instead of handling them itself (always / only while the pit menu is open)
 FORWARD_KEYS = {pygame.K_SPACE, pygame.K_b, pygame.K_r, pygame.K_e, pygame.K_q}
@@ -50,7 +51,8 @@ SESSION_SKIP = {"game", "track", "config", "camera", "cameras", "r3d", "r3ds", "
                 "pit_menus", "cam_index", "paused", "view3d", "show_ai_info", "show_line", "show_fps", "hide_hud",
                 "overview", "director_timer", "_label_cache", "_frame_dt", "messages", "player", "player2", "rc",
                 "weather", "team_orders", "_split_buf", "finished", "end_timer", "cars", "time_scale",
-                "_weather_timer", "_order_timer", "_player_pos", "_await_reaction", "online", "net_role"}
+                "_weather_timer", "_order_timer", "_player_pos", "_await_reaction", "online", "net_role",
+                "guest_cars", "host_paused", "host_finished"}
 CAR_SKIP = {"track", "profile", "perf", "sf", "setup", "tyres", "damage", "_rot_cache", "_sprite", "_shadow",
             "samples", "_rec_timer", "keyset", "slot", "autopilot", "_fb_impulse", "_ffb_jolt", "color", "remote",
             "_tel", "_lap_log_start", "brain", "net", "driver", "is_player"}
@@ -146,11 +148,18 @@ class Connection:
         self.sent_bytes = 0
         self.recv_bytes = 0
 
+    @staticmethod
+    def pack(msg: dict) -> bytes:
+        data = zlib.compress(json.dumps(msg, separators=(",", ":")).encode("utf-8"), 1)
+        return struct.pack(">I", len(data)) + data
+
     def send(self, msg: dict) -> None:
+        self.send_raw(self.pack(msg))
+
+    def send_raw(self, frame: bytes) -> None:
         if self.closed:
             return
-        data = zlib.compress(json.dumps(msg, separators=(",", ":")).encode("utf-8"), 1)
-        self._out += struct.pack(">I", len(data)) + data
+        self._out += frame
         self.flush()
 
     def flush(self) -> None:
@@ -206,6 +215,14 @@ class Connection:
     def close(self) -> None:
         if not self.closed:
             self.closed = True
+            try:
+                self.sock.setblocking(True)
+                self.sock.settimeout(0.2)
+                if self._out:
+                    self.sock.sendall(self._out)      # last words (e.g. "server full") before hanging up
+                self.sock.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
             try:
                 self.sock.close()
             except OSError:
@@ -281,12 +298,12 @@ def _state(obj: Any, skip: set[str], cars: dict[int, int], cache: dict, ch: str,
     return out
 
 
+
 class SnapshotWriter:
     """Host side: per-channel deltas of the session, every car, its tyres and damage, weather and race control."""
 
-    def __init__(self, session: "Session", guest: "Car | None") -> None:
+    def __init__(self, session: "Session") -> None:
         self.session = session
-        self.guest = guest
         self.cars = {id(c): i for i, c in enumerate(session.cars)}
         self.last: dict[str, dict] = {}
         self.cache: dict = {}
@@ -315,8 +332,6 @@ class SnapshotWriter:
         if rc is not None:
             msg["rc"] = self._delta("rc", _state(rc, RC_SKIP, cars, cache, "rc"))
             msg["sc"] = None if rc.sc is None else {k: enc(getattr(rc.sc, k)) for k in SC_KEYS}
-        if self.guest is not None and self.guest in s.pit_menus:
-            msg["pm"] = _state(s.pit_menus[self.guest], set(), cars, cache, "pm")
         msg["feed"] = enc(s.feed)
         msg["fin"] = bool(s.finished)
         msg["hp"] = bool(s.paused)
@@ -359,8 +374,6 @@ def apply_snapshot(session: "Session", msg: dict) -> None:
             for k in SC_KEYS:
                 if k in sc_state:
                     setattr(rc.sc, k, dec(sc_state[k]))
-    if "pm" in msg and session.player is not None:
-        _apply(session.pit_menu, msg["pm"], cars)
     if isinstance(msg.get("feed"), list):
         try:
             session.feed = dec(msg["feed"], cars)
@@ -389,23 +402,47 @@ def local_addresses() -> list[str]:
     return ips
 
 
+class Peer:
+    """One other game on the link: on the host one per guest, on a guest the host."""
+
+    def __init__(self, conn: Connection, address: str = "") -> None:
+        self.conn = conn
+        self.address = address
+        self.ready = False
+        self.name = ""
+        self.team = ""
+        self.assists = 1
+        self.gearbox = "auto"
+        self.setups: dict[str, dict] = {}
+        self.strategy: list | None = None
+        self.input = RemoteInput()
+        self.ping_ms = 0.0
+        self.in_session = False         # got the current session (guests that join mid-weekend wait)
+        self.pm_last: dict = {}
+
+    def send(self, msg: dict) -> None:
+        self.conn.send(msg)
+
+    def setup_for(self, track_key: str) -> CarSetup | None:
+        values = self.setups.get(track_key)
+        try:
+            return CarSetup.from_dict(values) if values else None
+        except (TypeError, ValueError):
+            return None
+
+
 class NetPlay:
-    """One online link: host (listens on a port) or guest (connects to an address)."""
+    """The online link: the host listens and accepts up to MAX_GUESTS guests; a guest connects to the host."""
 
     def __init__(self, game: "Game", role: str, port: int, address: str = "") -> None:
         self.game = game
         self.role = role
         self.port = port
         self.address = address
-        self.conn: Connection | None = None
         self.listener: socket.socket | None = None
+        self.peers: list[Peer] = []
         self.status = ""
         self.error = ""
-        self.remote_name = ""
-        self.remote_setups: dict[str, dict] = {}
-        self.remote_assists = 1
-        self.remote_gearbox = "auto"
-        self.remote_input = RemoteInput()
         self.session: "Session | None" = None
         self.writer: SnapshotWriter | None = None
         self._snap_timer = 0.0
@@ -413,13 +450,13 @@ class NetPlay:
         self._last_input: dict | None = None
         self.snapshots: list[dict] = []
         self.waiting_session: dict | None = None
-        self.ping_ms = 0.0
         self._ping_timer = 0.0
-        self._connect_thread: threading.Thread | None = None
         self._pending_sock: socket.socket | None = None
         self.was_connected = False
-        self.lobby: dict[str, str] = {}
-        self._lobby_sent: tuple | None = None
+        self.lobby: dict[str, Any] = {}
+        self._lobby_sent: Any = None
+        self.my_name = ""                # guest: the (unique) name the host gave this player
+        self.team = ""                   # guest: chosen team
         if role == "host":
             self._listen()
         else:
@@ -431,7 +468,7 @@ class NetPlay:
             ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             ls.bind(("0.0.0.0", self.port))
-            ls.listen(1)
+            ls.listen(32)
             ls.setblocking(False)
             self.listener = ls
             self.status = "listening"
@@ -443,22 +480,50 @@ class NetPlay:
 
         def run() -> None:
             try:
-                sock = socket.create_connection((self.address, self.port), timeout=CONNECT_TIMEOUT)
-                self._pending_sock = sock
+                self._pending_sock = socket.create_connection((self.address, self.port), timeout=CONNECT_TIMEOUT)
             except OSError as e:
                 self.error = f"Keine Verbindung zu {self.address}:{self.port} ({e.strerror or e})"
                 self.status = "error"
-        self._connect_thread = threading.Thread(target=run, daemon=True)
-        self._connect_thread.start()
+        threading.Thread(target=run, daemon=True).start()
+
+    # ---- state
+    @property
+    def host_peer(self) -> Peer | None:
+        return self.peers[0] if self.role == "client" and self.peers else None
 
     @property
     def connected(self) -> bool:
-        return self.status == "connected" and self.conn is not None and not self.conn.closed
+        """Host: listening (guests may come and go). Guest: welcomed by the host."""
+        if self.role == "host":
+            return self.status == "listening"
+        p = self.host_peer
+        return self.status == "connected" and p is not None and not p.conn.closed
+
+    def ready_peers(self) -> list[Peer]:
+        return [p for p in self.peers if p.ready and not p.conn.closed]
+
+    @property
+    def guest_count(self) -> int:
+        return len(self.ready_peers()) if self.role == "host" else 0
+
+    @property
+    def remote_name(self) -> str:
+        p = self.host_peer
+        return p.name if p is not None else ", ".join(q.name for q in self.ready_peers())
+
+    @property
+    def ping_ms(self) -> float:
+        p = self.host_peer
+        return p.ping_ms if p is not None else 0.0
+
+    def peer_named(self, name: str) -> Peer | None:
+        return next((p for p in self.ready_peers() if p.name == name), None)
 
     def close(self) -> None:
-        if self.conn is not None and not self.conn.closed:
-            self.conn.send({"t": "bye"})
-            self.conn.close()
+        for p in self.peers:
+            if not p.conn.closed:
+                p.conn.send({"t": "bye"})
+                p.conn.close()
         if self.listener is not None:
             try:
                 self.listener.close()
@@ -468,168 +533,265 @@ class NetPlay:
         self.status = "closed"
 
     def send(self, msg: dict) -> None:
-        if self.conn is not None:
-            self.conn.send(msg)
+        """Guest: to the host. Host: to every guest."""
+        for p in (self.peers if self.role == "host" else self.peers[:1]):
+            if p.ready or self.role == "client":
+                p.send(msg)
 
     def _hello(self) -> dict:
         st = self.game.settings
         return {"t": "hello", "v": PROTOCOL, "name": st.player_name, "assists": st.assists, "gearbox": st.gearbox,
-                "setups": {k: vars(s) for k, s in self.game.setups.items()}}
+                "team": self.team, "setups": {k: vars(s) for k, s in self.game.setups.items()}}
 
     # ---- per frame
     def poll(self, dt: float) -> None:
-        if self.status == "listening" and self.listener is not None:
-            try:
-                sock, addr = self.listener.accept()
-            except (BlockingIOError, InterruptedError):
-                sock = None
-            except OSError:
-                sock = None
-            if sock is not None:
-                self.conn = Connection(sock)
-                self.status = "handshake"
-                self.address = addr[0]
-                self.listener.close()
-                self.listener = None
+        if self.role == "host" and self.listener is not None:
+            self._accept()
         if self.status == "connecting" and self._pending_sock is not None:
-            self.conn = Connection(self._pending_sock)
+            self.peers = [Peer(Connection(self._pending_sock), self.address)]
             self._pending_sock = None
             self.status = "handshake"
-            self.conn.send(self._hello())
-        if self.conn is None:
-            return
-        for msg in self.conn.poll():
+            self.peers[0].send(self._hello())
+        for peer in list(self.peers):
+            for msg in peer.conn.poll():
+                try:
+                    self._handle(peer, msg)
+                except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+                    self.error = "Ungültige Daten empfangen - Verbindung getrennt"
+                    peer.conn.close()
+                    break
+            if peer.conn.closed:
+                self._drop(peer)
+                if self.role == "client":
+                    return
+        self._ping_timer -= dt
+        if self._ping_timer <= 0:
+            self._ping_timer = 1.0
+            for peer in self.peers:
+                peer.send({"t": "ping", "at": time.perf_counter()})
+        if self.role == "host":
+            self._send_lobby()
+
+    def _accept(self) -> None:
+        while True:
             try:
-                self._handle(msg)
-            except (ValueError, TypeError, KeyError, IndexError, AttributeError):
-                self.error = "Ungültige Daten empfangen - Verbindung getrennt"
-                self.conn.close()
-                break
-        if self.conn.closed and self.status != "closed":
+                sock, addr = self.listener.accept()
+            except (BlockingIOError, InterruptedError, OSError):
+                return
+            conn = Connection(sock)
+            if len(self.peers) >= MAX_GUESTS:
+                conn.send({"t": "reject", "why": f"Server voll ({MAX_GUESTS + 1} Spieler)"})
+                conn.flush()
+                conn.close()
+                continue
+            self.peers.append(Peer(conn, addr[0]))
+
+    def _drop(self, peer: Peer) -> None:
+        if peer in self.peers:
+            self.peers.remove(peer)
+        if self.role == "client":
             self.status = "closed"
             if not self.error:
                 self.error = "Verbindung getrennt"
             self.game.on_net_lost(self)
-            return
-        self._ping_timer -= dt
-        if self.connected and self._ping_timer <= 0:
-            self._ping_timer = 1.0
-            self.send({"t": "ping", "at": time.perf_counter()})
+        elif peer.ready:
+            self.game.on_guest_left(self, peer)
 
-    def _handle(self, msg: dict) -> None:
+    def _handle(self, peer: Peer, msg: dict) -> None:
         kind = msg.get("t")
         if kind == "ping":
-            self.send({"t": "pong", "at": msg.get("at")})
+            peer.send({"t": "pong", "at": msg.get("at")})
         elif kind == "pong" and isinstance(msg.get("at"), (int, float)):
-            self.ping_ms = (time.perf_counter() - float(msg["at"])) * 1000.0
+            peer.ping_ms = (time.perf_counter() - float(msg["at"])) * 1000.0
         elif kind == "bye":
-            self.error = "Der Mitspieler hat das Spiel verlassen"
-            self.conn.close()
-        elif kind == "hello" and self.role == "host":
-            if msg.get("v") != PROTOCOL:
-                self.conn.send({"t": "reject", "why": "Andere Spielversion"})
-                self.conn.close()
-                return
-            self._read_profile(msg)
-            self.status = "connected"
-            self.was_connected = True
-            self.send({"t": "welcome", "v": PROTOCOL, "name": self.game.settings.player_name})
-        elif kind == "welcome" and self.role == "client":
-            self.remote_name = str(msg.get("name", "Host"))[:24]
-            self.status = "connected"
-            self.was_connected = True
+            if self.role == "client":
+                self.error = "Der Host hat das Spiel beendet"
+            peer.conn.close()
         elif kind == "reject":
             self.error = str(msg.get("why", "Abgelehnt"))[:80]
-            self.conn.close()
-        elif kind == "setups" and self.role == "host":
-            self._read_setups(msg.get("setups"))
-        elif kind == "in" and self.role == "host":
-            self.remote_input.update(msg)
-        elif kind == "key" and self.role == "host":
-            self._remote_key(msg)
-        elif kind == "session" and self.role == "client":
-            self.waiting_session = msg
-        elif kind == "snap" and self.role == "client":
-            self.snapshots.append(msg)
-        elif kind == "lobby" and self.role == "client":
-            self.lobby = {"track": str(msg.get("track", ""))[:40], "text": str(msg.get("text", ""))[:120]}
+            peer.conn.close()
+        elif self.role == "host":
+            self._handle_host(peer, kind, msg)
+        else:
+            self._handle_guest(peer, kind, msg)
 
-    def _read_profile(self, msg: dict) -> None:
-        self.remote_name = str(msg.get("name") or "Gast")[:24]
-        self.remote_assists = max(0, min(2, int(msg.get("assists", 1))))
-        self.remote_gearbox = "manual" if msg.get("gearbox") == "manual" else "auto"
-        self._read_setups(msg.get("setups"))
+    # ---- host side
+    def _handle_host(self, peer: Peer, kind: Any, msg: dict) -> None:
+        if kind == "hello":
+            if msg.get("v") != PROTOCOL:
+                peer.send({"t": "reject", "why": "Andere Spielversion"})
+                peer.conn.close()
+                return
+            taken = {self.game.settings.player_name} | {p.name for p in self.ready_peers()}
+            name = str(msg.get("name") or "Gast")[:24].strip() or "Gast"
+            base, k = name, 2
+            while name in taken:
+                name, k = f"{base} ({k})", k + 1
+            peer.name = name
+            peer.assists = max(0, min(2, int(msg.get("assists", 1))))
+            peer.gearbox = "manual" if msg.get("gearbox") == "manual" else "auto"
+            peer.team = self._valid_team(msg.get("team"))
+            self._read_setups(peer, msg.get("setups"))
+            peer.ready = True
+            self.was_connected = True
+            peer.send({"t": "welcome", "v": PROTOCOL, "name": self.game.settings.player_name, "you": name,
+                       "team": peer.team})
+            self._lobby_sent = None
+            self.game.toast_text(f"{name} ist beigetreten")
+        elif not peer.ready:
+            return
+        elif kind == "team":
+            peer.team = self._valid_team(msg.get("team"))
+            self._lobby_sent = None
+        elif kind == "setups":
+            self._read_setups(peer, msg.get("setups"))
+        elif kind == "strategy":
+            plan = msg.get("plan")
+            if isinstance(plan, list) and all(isinstance(s, list) and len(s) == 2 and s[0] in COMPOUNDS
+                                              and isinstance(s[1], int) for s in plan) and len(plan) <= 6:
+                peer.strategy = plan
+        elif kind == "in":
+            peer.input.update(msg)
+        elif kind == "key":
+            self._remote_key(peer, msg)
 
-    def _read_setups(self, setups: Any) -> None:
+    def _valid_team(self, name: Any) -> str:
+        teams = [t.name for t in self.game.teams]
+        return name if isinstance(name, str) and name in teams else ""
+
+    @staticmethod
+    def _read_setups(peer: Peer, setups: Any) -> None:
         if not isinstance(setups, dict):
             return
         for key, values in list(setups.items())[:64]:
             if isinstance(values, dict):
                 try:
                     CarSetup.from_dict(values)
-                    self.remote_setups[str(key)] = values
+                    peer.setups[str(key)] = values
                 except (TypeError, ValueError):
                     pass
 
-    def remote_setup(self, track_key: str) -> CarSetup | None:
-        values = self.remote_setups.get(track_key)
-        return CarSetup.from_dict(values) if values else None
-
-    def _remote_key(self, msg: dict) -> None:
+    def _remote_key(self, peer: Peer, msg: dict) -> None:
         key = msg.get("key")
         if not isinstance(key, int) or key not in FORWARD_KEYS | FORWARD_MENU_KEYS:
             return
         from .sessions import Session
         state = self.game.state
-        if isinstance(state, Session) and state is self.session and state.player2 is not None:
+        if not isinstance(state, Session) or state is not self.session:
+            return
+        car = state.guest_car(peer.name)
+        if car is not None:
             event = pygame.event.Event(pygame.KEYDOWN, key=key, mod=0, unicode="", scancode=0,
-                                       net_remote=True, from_joystick=bool(msg.get("joy")))
+                                       net_car=car, from_joystick=bool(msg.get("joy")))
             state.handle_event(event)
 
-    # ---- host
+    def _send_lobby(self) -> None:
+        """Who is in the lobby and what the host picked; guests show it while they wait."""
+        from .screens import SetupScreen
+        from .track import TRACK_DEFS
+        game = self.game
+        host_team = game.teams[game.menu_choice["team"]].name if game.teams else ""
+        players = [[game.settings.player_name, host_team]] + [[p.name, p.team or host_team]
+                                                              for p in self.ready_peers()]
+        info: dict[str, Any] = {"t": "lobby", "players": players}
+        if isinstance(game.state, SetupScreen):
+            c = game.menu_choice
+            td = TRACK_DEFS[c["track"]]
+            info.update(track=td.key, text=f"{td.name} · {game.state.modes[c['mode']][1]} · {c['laps']} Runden")
+        else:
+            info.update(self.lobby_last or {})
+        key = json.dumps(info, sort_keys=True)
+        if key != self._lobby_sent:
+            self._lobby_sent = key
+            self.lobby_last = {k: info[k] for k in ("track", "text") if k in info}
+            self.send(info)
+
+    lobby_last: dict | None = None
+
     def host_started(self, session: "Session", kind: str) -> None:
-        """A new session runs on the host: tell the guest to build the same one."""
+        """A new session runs on the host: every guest in it builds the same one."""
         self.session = session
-        self.writer = SnapshotWriter(session, session.player2)
+        self.writer = SnapshotWriter(session)
         self._snap_timer = 0.0
         cfg = enc(session.config)
-        self.send({"t": "session", "kind": kind, "cfg": cfg, "order": [c.name for c in session.cars]})
+        order = [c.name for c in session.cars]
+        names = {g.name for g in session.config.guests}
+        for p in self.ready_peers():
+            p.in_session = p.name in names
+            p.pm_last = {}
+            if p.in_session:
+                p.send({"t": "session", "kind": kind, "cfg": cfg, "order": order, "you": p.name})
+            else:
+                p.send({"t": "lobby_note", "text": "Wochenende läuft - du bist beim nächsten dabei"})
 
     def host_tick(self, dt: float) -> None:
-        if not self.connected or self.writer is None or self.session is None:
+        if self.writer is None or self.session is None:
             return
         self._snap_timer -= dt
         finished = self.session.finished
         if self._snap_timer > 0 and not finished:
             return
-        self._snap_timer = 1.0 / SNAPSHOT_HZ
-        self.send(self.writer.build())
+        guests = [p for p in self.ready_peers() if p.in_session]
+        hz = SNAPSHOT_HZ if len(guests) <= 6 else SNAPSHOT_HZ * 0.67
+        self._snap_timer = 1.0 / hz
+        if not guests:
+            return
+        raw = Connection.pack(self.writer.build())       # encoded once, sent to everyone
+        cars = self.writer.cars
+        for p in guests:
+            p.conn.send_raw(raw)
+            car = self.session.guest_car(p.name)
+            if car is not None and car in self.session.pit_menus:
+                pm = _state(self.session.pit_menus[car], {"_rejoin"}, cars, {}, "pm")
+                if pm != p.pm_last:
+                    p.pm_last = pm
+                    p.send({"t": "pm", "pm": pm})
         if finished:
             self.writer = None          # the last snapshot carried the result
 
-    def host_lobby(self, game: "Game") -> None:
-        """While the host picks track and mode, the guest sees the choice (and can set up for that track)."""
-        from .screens import SetupScreen
-        from .track import TRACK_DEFS
-        if not self.connected or not isinstance(game.state, SetupScreen):
-            return
-        c = game.menu_choice
-        td = TRACK_DEFS[c["track"]]
-        screen = game.state
-        info = (td.key, td.name, screen.modes[c["mode"]][1], c["laps"])
-        if info != self._lobby_sent:
-            self._lobby_sent = info
-            self.send({"t": "lobby", "track": td.key, "text": f"{td.name} · {info[2]} · {c['laps']} Runden"})
+    # ---- guest side
+    def _handle_guest(self, peer: Peer, kind: Any, msg: dict) -> None:
+        if kind == "welcome":
+            peer.name = str(msg.get("name", "Host"))[:24]
+            self.my_name = str(msg.get("you", ""))[:40]
+            if isinstance(msg.get("team"), str):
+                self.team = msg["team"]
+            peer.ready = True
+            self.status = "connected"
+            self.was_connected = True
+        elif kind == "session":
+            # snapshots of the old session are useless; the new session's first (full) one follows this message
+            self.snapshots.clear()
+            self.waiting_session = msg
+        elif kind == "snap":
+            self.snapshots.append(msg)
+        elif kind == "pm":
+            self.snapshots.append(msg)
+        elif kind == "lobby":
+            players = msg.get("players")
+            self.lobby = {"track": str(msg.get("track", ""))[:40], "text": str(msg.get("text", ""))[:120],
+                          "players": [[str(n)[:30], str(t)[:40]] for n, t in players][:32]
+                          if isinstance(players, list) else []}
+        elif kind == "lobby_note":
+            self.lobby["note"] = str(msg.get("text", ""))[:120]
 
-    # ---- guest
+    def choose_team(self, team: str) -> None:
+        self.team = team
+        self.send({"t": "team", "team": team})
+
     def client_frame(self, session: "Session", dt: float) -> None:
-        """Replaces Session.update on the guest: mirror, extrapolate between snapshots, render-side updates."""
+        """Replaces Session.update on a guest: mirror, extrapolate between snapshots, render-side updates."""
         game = self.game
         game.sound.update(session)
         session._frame_dt = dt
-        got = bool(self.snapshots)
+        got = False
         for msg in self.snapshots:
+            if msg.get("t") == "pm":
+                if session.player is not None and isinstance(msg.get("pm"), dict):
+                    _apply(session.pit_menu, msg["pm"], session.cars)
+                continue
             apply_snapshot(session, msg)
+            got = True
         self.snapshots.clear()
         if not got and not getattr(session, "host_paused", False):
             for car in session.cars:
@@ -660,7 +822,8 @@ class NetPlay:
         """Guest: driving keys go to the host's simulation. True when the key was sent (and is not used locally)."""
         key = event.key
         menu_open = session.pit_menu.open
-        if key in FORWARD_KEYS and not (session.paused and key == pygame.K_r) or (menu_open and key in FORWARD_MENU_KEYS):
+        if key in FORWARD_KEYS and not (session.paused and key == pygame.K_r) or \
+                (menu_open and key in FORWARD_MENU_KEYS):
             self.send({"t": "key", "key": key, "joy": bool(getattr(event, "from_joystick", False))})
             return True
         return False

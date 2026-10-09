@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import pygame
 from pygame.math import Vector2
 
-from .settings import BRAKE_DECEL, CAR_LENGTH, CAR_WIDTH, LATERAL_GRIP, TOP_SPEED, Color
+from .settings import BRAKE_DECEL, brake_decel, CAR_LENGTH, CAR_WIDTH, LATERAL_GRIP, TOP_SPEED, Color
 from .pitlane import PitLane
 
 TRACK_SIZE: float = 1.25
@@ -211,7 +211,7 @@ class Track:
             for i in range(n - 1, -1, -1):
                 j = (i + 1) % n
                 ds = (line[j] - line[i]).length()
-                v[i] = min(v[i], math.sqrt(v[j] ** 2 + 2.0 * BRAKE_DECEL * 0.8 * ds))
+                v[i] = min(v[i], math.sqrt(v[j] ** 2 + 2.0 * brake_decel(v[j]) * 0.8 * ds))
         self.max_speed = v
         self.brake_zone = [v[(i + 1) % n] < v[i] - 0.5 for i in range(n)]
 

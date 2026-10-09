@@ -39,7 +39,7 @@ class GameState(Protocol):
 class Game:
 
     def __init__(self) -> None:
-        pygame.mixer.pre_init(22050, -16, 2, 512)
+        pygame.mixer.pre_init(22050, -16, 2, 1024)       # 512 underran on slow frames (crackling)
         pygame.init()
         pygame.display.set_caption("Gulivers Gieles F1 Game")
         self.settings = UserSettings.load()
@@ -125,7 +125,6 @@ class Game:
                     self.state.update(dt)
                 if self.net is not None and self.net.role == "host":
                     self.net.host_tick(dt)
-                    self.net.host_lobby(self)
                 self.state.draw(self.screen)
             self._draw_toast()
             pygame.display.flip()
@@ -153,14 +152,13 @@ class Game:
         net = self.net
         assert net is not None
         net.waiting_session = None
-        net.snapshots.clear()
         kind = msg.get("kind")
         try:
             cfg = dec(msg.get("cfg"))
         except (ValueError, TypeError, KeyError):
             cfg = None
         if kind not in ("practice", "qualifying", "race") or not isinstance(cfg, WeekendConfig) or \
-                cfg.track_key not in self.tracks or cfg.player is None or cfg.player2 is None:
+                cfg.track_key not in self.tracks or cfg.player is None or not cfg.guests:
             net.error = "Ungültige Session vom Host"
             net.close()
             self.on_net_lost(net)
@@ -168,6 +166,8 @@ class Game:
         cfg.view3d = self.settings.view3d
         cfg.auto_camera = False
         cfg.championship, cfg.career, cfg.instant = None, False, False
+        cfg.player2 = None
+        net.my_name = str(msg.get("you", net.my_name))[:40]
         self.config = cfg
         self.start_session(kind, from_net=True)
         session = self.state
@@ -187,19 +187,32 @@ class Game:
         state = self.state
         text = net.error or "Verbindung getrennt"
         self.toast_text(text, 6000)
-        if isinstance(state, Session) and state.online:
-            if net.role == "host":
-                p2 = state.player2
-                if p2 is not None:
-                    p2.remote = None
-                    state.enable_player_autopilot(p2)
-                    state.message("Mitspieler getrennt - die KI übernimmt sein Auto", (255, 140, 30), 5.0)
-            else:
-                self.go_to_menu()
-                self.toast_text(text, 6000)
-        elif net.role == "client" and net.was_connected:
+        if net.role == "client" and (net.was_connected or isinstance(state, Session)):
             self.go_to_menu()
             self.toast_text(text, 6000)
+
+    def _back_target(self, label: str) -> tuple[str, Callable[[], None]]:
+        """Where 'continue' leads after the last session: online games go back to the lobby, keeping the link."""
+        if self.net is None:
+            return label, self.go_to_menu
+        if self.net.role == "host":
+            return "zurück zur Lobby", lambda: self.open_setup(spectator=False)
+
+        def wait() -> None:
+            from .net_screen import NetWaitScreen
+            self.state = NetWaitScreen(self)
+        return "zurück zur Lobby", wait
+
+    def on_guest_left(self, net, peer) -> None:
+        """Host: a guest dropped out - the AI takes over their car for the rest of the session."""
+        self.toast_text(f"{peer.name} hat das Spiel verlassen", 5000)
+        state = self.state
+        if isinstance(state, Session) and state.online:
+            car = state.guest_car(peer.name)
+            if car is not None:
+                car.remote = None
+                state.enable_player_autopilot(car)
+                state.message(f"{peer.name} getrennt - die KI übernimmt", (255, 140, 30), 5.0)
 
     def _draw_toast(self) -> None:
         if self.toast is None:
@@ -363,15 +376,11 @@ class Game:
         name = championship.player_name if championship is not None else st.player_name
         player = None if spectator else player_profile(team, name)
         player2 = None
-        online = self.net is not None and self.net.role == "host" and self.net.connected
-        if player is not None and championship is None and online:
-            # online: the guest drives the team-mate's car
-            guest = self.net.remote_name or "Gast"
-            if guest == name:
-                guest += " (2)"
-            player2 = replace(player_profile(team, guest), short=_short_name(guest, "P2"), helmet=(255, 200, 40))
+        guests: list = []
+        if player is not None and championship is None and self.online_host:
+            # online: every guest drives a car of the team they picked; the AI gives up those seats
+            guests, profiles = self._online_field(team, opponents)
             player = replace(player, short=_short_name(name, "P1"))
-            profiles = profiles[:max(1, len(profiles) - 1)]
         elif player is not None and championship is None and c.get("players", 1) == 2:
             # player 2 drives the team-mate's car
             player2 = replace(player_profile(team, "Spieler 2"), short="SP2", helmet=(255, 200, 40))
@@ -383,12 +392,40 @@ class Game:
                                     view3d=st.view3d, damage=st.damage, tyre_wear_factor=st.tyre_wear_factor,
                                     auto_camera=st.auto_camera, championship=championship,
                                     safety_car=st.safety_car, weather=st.weather, player2=player2,
-                                    gearbox=st.gearbox)
+                                    gearbox=st.gearbox, guests=guests)
         first = {"weekend": "practice", "practice": "practice", "qualifying": "qualifying", "race": "race"}[mode]
         self.start_session(first)
 
+    @property
+    def online_host(self) -> bool:
+        return self.net is not None and self.net.role == "host" and self.net.guest_count > 0
+
+    def _online_field(self, team: Team | None, opponents: int) -> tuple[list, list]:
+        """(guest profiles, AI profiles) for an online weekend: the guests in their chosen teams, the AI field
+        without the seats humans took, at most MAX_FIELD cars in total."""
+        from collections import Counter
+        taken = Counter([team.name if team else ""])
+        guests = []
+        for k, peer in enumerate(self.net.ready_peers()):
+            gteam = next((t for t in self.teams if t.name == peer.team), team)
+            prof = replace(player_profile(gteam, peer.name), short=_short_name(peer.name, f"P{k + 2}"),
+                           helmet=HELMETS[k % len(HELMETS)])
+            guests.append(prof)
+            taken[gteam.name if gteam else ""] += 1
+        removed: Counter = Counter()
+        pool = []
+        for d in self.drivers:
+            if d.pool and removed[d.team] < taken.get(d.team, 0):
+                removed[d.team] += 1
+                continue
+            pool.append(d)
+        return guests, pool[:max(0, min(opponents, MAX_FIELD - 1 - len(guests)))]
+
     def field_preview(self, spectator: bool, opponents: int) -> list:
         team = self.teams[self.menu_choice["team"]] if self.teams else None
+        if not spectator and self.online_host:
+            guests, ai = self._online_field(team, opponents)
+            return guests + ai
         pool = self.drivers if spectator or team is None else \
             [d for d in self.drivers if not (d.pool and d.team == team.name)]
         return pool[:opponents]
@@ -437,7 +474,7 @@ class Game:
             if cfg.mode == "weekend":
                 label, nxt = "weiter zum Qualifying", lambda: self.start_session("qualifying")
             else:
-                label, nxt = "zurück zum Menü", self.go_to_menu
+                label, nxt = self._back_target("zurück zum Menü")
             player = session.player
             if player is not None and player.lap_log:
                 from .practice_analysis import PracticeAnalysisScreen
@@ -470,11 +507,18 @@ class Game:
                 cfg.championship.award(session)
                 nxt, label = self.open_championship, "zur WM-Wertung"
             else:
-                nxt, label = self.go_to_menu, "zurück zum Hauptmenü"
+                label, nxt = self._back_target("zurück zum Hauptmenü")
 
             def analysis() -> None:
                 self.state = AnalysisScreen(self, session, nxt, label)
             self.state = PodiumScreen(self, session, analysis, "zur Rennanalyse")
+
+
+MAX_FIELD = 22
+HELMETS = [(255, 200, 40), (255, 90, 200), (120, 255, 120), (255, 120, 60), (150, 120, 255), (60, 230, 230),
+           (255, 255, 255), (255, 60, 60), (60, 140, 255), (200, 255, 60), (255, 160, 200), (180, 180, 180),
+           (255, 220, 140), (110, 200, 160), (230, 130, 255), (255, 100, 120), (140, 220, 255), (220, 180, 90),
+           (160, 255, 220), (255, 140, 0)]
 
 
 def _short_name(name: str, fallback: str) -> str:

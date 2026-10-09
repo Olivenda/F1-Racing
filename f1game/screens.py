@@ -236,7 +236,7 @@ class SetupScreen:
     @property
     def online(self) -> bool:
         net = self.game.net
-        return not self.spectator and net is not None and net.role == "host" and net.connected
+        return not self.spectator and net is not None and net.role == "host" and net.guest_count > 0
 
     @property
     def max_opponents(self) -> int:
@@ -336,8 +336,10 @@ class SetupScreen:
         if row == "Dein Team":
             return self.game.teams[self.c["team"]].name if self.game.teams else "Referenzauto"
         if row == "Spieler":
-            if self.online:
-                return f"Online mit {self.game.net.remote_name}"
+            net = self.game.net
+            if net is not None and net.role == "host" and not self.spectator:
+                return (f"Online: {net.guest_count + 1} Fahrer" if net.guest_count
+                        else f"Online: warte auf Mitspieler (Port {net.port})")
             return "2 Spieler (Splitscreen)" if self.c.get("players", 1) == 2 else "1 Spieler"
         if row == "Startreifen":
             comp = COMPOUNDS[ALL_COMPOUNDS[self.c["tyre"]]]

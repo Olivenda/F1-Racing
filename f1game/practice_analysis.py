@@ -67,6 +67,19 @@ class PracticeAnalysisScreen:
         self.style = self._style()
         self.setup_notes = self._setup_notes()
         self.strategies = self._strategies()
+        self.plan_sel = 0
+        self._adopt()
+
+    def _adopt(self) -> None:
+        """The chosen plan becomes the race strategy: start tyre, pit-menu presets and the engineer's calls."""
+        cfg = getattr(self.session, "config", None)
+        if cfg is None or not self.strategies:
+            return
+        plan = self.strategies[self.plan_sel][1]
+        cfg.strategy = [[comp, int(laps)] for comp, laps in plan]
+        net = self.game.net
+        if net is not None and net.role == "client":
+            net.send({"t": "strategy", "plan": cfg.strategy})     # online: the host runs our car
 
     # ================================================================== data
     def _clean(self) -> list[dict]:
@@ -277,6 +290,11 @@ class PracticeAnalysisScreen:
         if event.key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d, pygame.K_TAB):
             self.tab = (self.tab + (-1 if event.key in (pygame.K_LEFT, pygame.K_a) else 1)) % len(TABS)
             self.scroll = 0
+        elif TABS[self.tab] == "Rennstrategie" and event.key in (pygame.K_UP, pygame.K_w, pygame.K_DOWN, pygame.K_s):
+            if self.strategies:
+                step = -1 if event.key in (pygame.K_UP, pygame.K_w) else 1
+                self.plan_sel = (self.plan_sel + step) % len(self.strategies)
+                self._adopt()
         elif event.key in (pygame.K_UP, pygame.K_w):
             self.scroll = max(0, self.scroll - 1)
         elif event.key in (pygame.K_DOWN, pygame.K_s):
@@ -584,8 +602,11 @@ class PracticeAnalysisScreen:
         best = self.strategies[0][0]
         for k, (total, plan) in enumerate(self.strategies):
             y = box.y + 40 + k * 41
-            if k == 0:
+            if k == self.plan_sel:
                 pygame.draw.rect(screen, (30, 60, 40), (box.x + 8, y - 6, box.w - 16, 36), border_radius=6)
+                pygame.draw.rect(screen, GREEN, (box.x + 8, y - 6, 4, 36), border_radius=2)
+                draw_text(screen, "FÜRS RENNEN", f.tiny, GREEN, (box.right - 18, y + 6), anchor="topright",
+                          shadow=False)
             stops = len(plan) - 1
             draw_text(screen, f"{k + 1}.", f.medium, WHITE, (box.x + 18, y), shadow=False)
             draw_text(screen, "kein Stopp" if stops == 0 else f"{stops} Stopp(s)", f.small_bold, GREY,
@@ -600,11 +621,11 @@ class PracticeAnalysisScreen:
             draw_text(screen, format_time(total), f.mono, WHITE, (box.x + 800, y + 4), shadow=False)
             draw_text(screen, "schnellste" if k == 0 else f"+{total - best:.1f}s", f.mono,
                       GREEN if k == 0 else GREY, (box.x + 960, y + 4), shadow=False)
-        plan = self.strategies[0][1]
+        plan = self.strategies[self.plan_sel][1]
         # translated piece by piece: the joined list would not match a translation template as a whole
         stops_txt = ", ".join(tr(f"Runde {sum(length for _, length in plan[:k + 1])} -> {COMPOUNDS[c].name}")
                               for k, (c, _) in enumerate(plan[1:]))
-        lines = [("Empfehlung", f"Start auf {COMPOUNDS[plan[0][0]].name}" +
+        lines = [("Fürs Rennen", f"Start auf {COMPOUNDS[plan[0][0]].name}" +
                   (f" · Stopp: {stops_txt}" if stops_txt else " · durchfahren"), GREEN),
                  ("Sprit", f"Renndistanz {self._fuel_margin():+.1f} Runden tanken (Garage)", CYAN)]
         race = self._plank_race()
@@ -615,4 +636,6 @@ class PracticeAnalysisScreen:
         if w is not None and w.mode != "dry":
             lines.append(("Wetter", "Wechselhaft gemeldet - Intermediates bereithalten, die Strategie kann kippen."
                           if w.mode == "dynamic" else "Regenrennen erwartet - Wets/Intermediates.", CYAN))
+        lines.append(("Bedienung", "Hoch/runter wählt den Plan fürs Rennen: Startreifen, Boxenstopp-Menü und "
+                                   "Funk vom Renningenieur folgen ihm.", GREY))
         self._lines(screen, pygame.Rect(40, 526, 1200, 154), "STRATEGIE", lines, 140)

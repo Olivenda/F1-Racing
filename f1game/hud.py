@@ -441,6 +441,14 @@ class HUD:
             return "Sprit reicht nicht! Lift and Coast oder zum Tanken an die Box.", (255, 90, 90)
         if car.plank_per_lap > 0 and car.plank_wear > 0.85 * PLANK_LIMIT_MM and s.kind == "race":
             return "Planke fast am Limit! Randsteine meiden, sonst Disqualifikation.", (255, 90, 90)
+        plan = car.next_planned_stop() if s.kind == "race" and car.is_player else None
+        if plan is not None and not car.in_pit:
+            lap, comp = plan
+            to_go = lap - (car.laps_done + 1)
+            if to_go <= 0:
+                return f"Plan: Box diese Runde - {COMPOUNDS[comp].name}! (B, dann 5)", ORANGE
+            if to_go <= 2:
+                return f"Plan: Stopp in {to_go} Rd. auf {COMPOUNDS[comp].name}.", (90, 200, 255)
         if t is not None and t.wear > 0.8:
             return "Reifen sind am Ende - jetzt reinkommen!", (255, 90, 90)
         if getattr(s, "blue_flag", 0) > 0:
@@ -533,11 +541,16 @@ class HUD:
                 fcol = (255, 90, 90) if car.out_of_fuel or short else YELLOW if car.fuel_laps < 1.5 else WHITE
                 ftxt = f"Sprit {car.fuel:.1f} kg · " + (f"Reserve {car.fuel_laps - need:+.1f}" if need is not None
                                                         else f"{car.fuel_laps:.1f} Rd.")
-                draw_text(screen, ftxt, f.tiny, fcol, (x + 12, cy), shadow=False)
+                fw = draw_text(screen, ftxt, f.tiny, fcol, (x + 12, cy), shadow=False).right
+            else:
+                fw = x
             if car.plank_per_lap > 0:
                 pw = car.plank_wear
                 pcol = (255, 90, 90) if pw > PLANK_LIMIT_MM else YELLOW if pw > 0.8 * PLANK_LIMIT_MM else                     (150, 200, 160)
-                draw_text(screen, f"Planke {pw:.2f}", f.tiny, pcol, (x + w - 12, cy), anchor="topright", shadow=False)
+                ptxt = f"Planke {pw:.2f}"
+                if fw + 10 + f.tiny.size(tr(ptxt))[0] > x + w - 12:
+                    cy += 18            # no room next to the fuel line (long translations)
+                draw_text(screen, ptxt, f.tiny, pcol, (x + w - 12, cy), anchor="topright", shadow=False)
             cy += 20
         gap, trend = self._gap_trend(s, car, standings)
         if s.kind == "race" and gap is not None:
@@ -547,6 +560,9 @@ class HUD:
         info = []
         if car.pit_stops:
             info.append(f"Stopps {car.pit_stops}")
+        nxt = car.next_planned_stop() if s.kind == "race" else None
+        if nxt is not None:
+            info.append(f"Plan Rd. {nxt[0]} {COMPOUNDS[nxt[1]].letter}")
         if s.kind == "race" and car.tl_count:
             info.append(f"Track Limits {car.tl_count}/{5}")
         if car.vmax > 30:

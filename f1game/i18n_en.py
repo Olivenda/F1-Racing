@@ -77,6 +77,15 @@ EXACT: dict[str, str] = {
     "Einheiten": "Units", "Bildrate": "Frame rate", "Partikel & Effekte": "Particles & effects",
     "Kantenglättung": "Anti-aliasing", "Kanten glätten": "Smooth edges",
     "Hoch (2x Supersampling)": "High (2x supersampling)",
+    # pit menu / race strategy
+    "1-4 ändern (Shift zurück) · 5/ENTER bestätigen · B schließen": "1-4 change (Shift back) · 5/ENTER confirm · B close",
+    "Bedienung": "Controls", "Fürs Rennen": "For the race", "FÜRS RENNEN": "FOR THE RACE",
+    "Hoch/runter wählt den Plan fürs Rennen: Startreifen, Boxenstopp-Menü und Funk vom Renningenieur folgen ihm.":
+        "Up/down picks the plan for the race: start tyre, pit menu and race engineer radio follow it.",
+    "Jetzt": "Now", "Neue Reifen": "New tyres", "Stopp": "Stop", "Rückkehr": "Rejoin", "Strategie": "Strategy",
+    "Prognose nach der ersten Runde": "Forecast after the first lap",
+    "Keine weiteren Stopps geplant": "No more stops planned",
+    "diese Runde": "this lap",
     # online multiplayer
     "ONLINE-MEHRSPIELER": "ONLINE MULTIPLAYER",
     "Über das Internet: Spiel hosten (Port-Forwarding) oder beitreten":
@@ -1093,6 +1102,20 @@ TEMPLATES: list[tuple[str, str]] = [
     ("Erkannt: {}", "Detected: {}"), ("{} · Achse {#}", "{} · axis {}"), ("{#}°  (± {#}°)", "{}°  (± {}°)"),
     ("Lenkung im Spiel {#}%", "In-game steering {}%"),
     ("Achse {#}", "Axis {}"),
+    # pit menu / race strategy
+    ("+{#} Rd. ({#} kg) · Res. {#}", "+{} laps ({} kg) · res. {}"), ("halten ~{#} Rd.{}", "last ~{} laps{}"),
+    (" · bis ins Ziel", " · to the finish"), (" · Ziel in {#}", " · finish in {}"),
+    ("halten ~{#} Rd. · bis ins Ziel", "last ~{} laps · to the finish"),
+    ("halten ~{#} Rd. · Ziel in {#}", "last ~{} laps · finish in {}"),
+    ("~{#}s stehen · ~{#}s Verlust", "~{}s standing · ~{}s lost"),
+    ("P{#} hinter {}", "P{} behind {}"), ("P{#} - in Führung", "P{} - in the lead"),
+    ("Stopp {#}: in {#} Rd. (Rd. {#}) -> {}", "Stop {}: in {} laps (lap {}) -> {}"),
+    ("Stopp {#}: diese Runde -> {}", "Stop {}: this lap -> {}"),
+    ("Plan Rd. {#} {}", "Plan lap {} {}"),
+    ("Plan: Box diese Runde - {}! (B, dann 5)", "Plan: box this lap - {}! (B, then 5)"),
+    ("Plan: Stopp in {#} Rd. auf {}.", "Plan: stop in {} laps for {}."),
+    ("Strategie aus dem Training: {}", "Strategy from practice: {}"),
+    ("{} {#} -> {} {#}", "{} {} -> {} {}"), ("{} {#} -> {} {#} -> {} {#}", "{} {} -> {} {} -> {} {}"),
     # online multiplayer
     ("1. Im Router eine Portweiterleitung (Port-Forwarding) anlegen: TCP-Port {#} an diesen PC.",
      "1. In your router, add a port forwarding rule: TCP port {} to this PC."),

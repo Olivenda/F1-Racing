@@ -22,9 +22,15 @@ ENGINE_ACCEL: float = 350.0
 ENGINE_FADE: float = 0.35
 DRAG_SHARE: float = 1.0 - ENGINE_FADE
 BRAKE_DECEL: float = 800.0
+# braking comes from downforce like on a real F1 car: strong at top speed, much weaker in slow corners
+BRAKE_LOW_SPEED: float = 0.48      # share of BRAKE_DECEL when (nearly) stopped
+BRAKE_HIGH_SPEED: float = 0.86     # share at top speed
+BRAKE_PEDAL_CURVE: float = 1.5     # analog brake pedals/triggers: progressive, so the first half modulates
+BRAKE_KEY_RATE: float = 6.0        # keyboard brake builds up over ~1/6 s instead of slamming on
 REVERSE_ACCEL: float = 160.0
 REVERSE_MAX_SPEED: float = 90.0
-ROLLING_FRICTION: float = 45.0
+ROLLING_FRICTION: float = 22.0
+COAST_DRAG: float = 0.6         # share of the air drag felt while coasting (no throttle, no brake)
 LATERAL_GRIP: float = 620.0
 MAX_STEER_ANGLE: float = 0.60
 STEER_RATE: float = 8.0
@@ -66,3 +72,9 @@ CYAN: Color = (0, 220, 255)
 ORANGE: Color = (255, 140, 30)
 
 PLAYER_COLOR: Color = (0, 215, 255)
+
+
+def brake_decel(speed: float) -> float:
+    """Full-pedal deceleration (px/s^2) at a forward speed, before car/tyre/setup factors."""
+    r = min(1.0, max(0.0, speed) / TOP_SPEED)
+    return BRAKE_DECEL * (BRAKE_LOW_SPEED + (BRAKE_HIGH_SPEED - BRAKE_LOW_SPEED) * r * r)
