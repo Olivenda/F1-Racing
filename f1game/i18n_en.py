@@ -78,6 +78,15 @@ EXACT: dict[str, str] = {
     "Kantenglättung": "Anti-aliasing", "Kanten glätten": "Smooth edges",
     "Hoch (2x Supersampling)": "High (2x supersampling)",
     # pit menu / race strategy
+    "BOXENSTOPP": "PIT STOP", "nicht angefordert": "not ordered", "angefordert": "ordered", "DU BEKOMMST": "YOU GET", "angefordert - zur Boxeneinfahrt fahren":
+        "ordered - drive into the pit entry", "noch nicht angefordert": "not ordered yet",
+    "Boxenmenü-Tasten (Steuerung) oder 1-3 ändern · 4/ENTER bestätigen · B schließen":
+        "Pit menu keys (controls) or 1-3 change · 4/ENTER confirm · B close",
+    "Box verpasst! Die Crew wartet - nächste Runde rein.": "Missed the box! The crew waits - come in next lap.",
+    "BOXENEINFAHRT VERPASST": "PIT ENTRY MISSED", "Boxenstopp abgesagt": "Pit stop cancelled",
+    "Boxenmenü: hoch": "Pit menu: up", "Boxenmenü: runter": "Pit menu: down", "Boxenmenü: weniger": "Pit menu: less",
+    "Boxenmenü: mehr": "Pit menu: more", "Boxenmenü: bestätigen": "Pit menu: confirm",
+    "Crew": "Crew", "Wetter": "Weather", "Renningenieur": "Race engineer",
     "1-4 ändern (Shift zurück) · 5/ENTER bestätigen · B schließen": "1-4 change (Shift back) · 5/ENTER confirm · B close",
     "Bedienung": "Controls", "Fürs Rennen": "For the race", "FÜRS RENNEN": "FOR THE RACE",
     "Hoch/runter wählt den Plan fürs Rennen: Startreifen, Boxenstopp-Menü und Funk vom Renningenieur folgen ihm.":
@@ -86,6 +95,20 @@ EXACT: dict[str, str] = {
     "Prognose nach der ersten Runde": "Forecast after the first lap",
     "Keine weiteren Stopps geplant": "No more stops planned",
     "diese Runde": "this lap",
+    # online multiplayer (lobby with up to 21 drivers)
+    "3. VERBINDEN - der Host wählt Strecke und Modus, du wählst dein Team (bis zu 21 Fahrer).":
+        "3. CONNECT - the host picks track and mode, you pick your team (up to 21 drivers).",
+    "4. HOST STARTEN, dann Strecke und Modus wählen. Mitspieler können jederzeit beitreten (bis zu 21 Fahrer), "
+    "jeder wählt sein eigenes Team.":
+        "4. START HOSTING, then pick track and mode. Others can join at any time (up to 21 drivers), each picks "
+        "their own team.",
+    "ESC: Verbindung trennen": "ESC: disconnect", "G: Garage (Setup für diese Strecke)": "G: garage (setup for this track)",
+    "Links/rechts wechselt das Team - es gilt ab dem nächsten Wochenende.":
+        "Left/right changes your team - it applies from the next weekend.",
+    "VOM HOST GEWÄHLT": "CHOSEN BY THE HOST", "DEIN TEAM": "YOUR TEAM", "wie der Host": "same as the host",
+    "Host wählt noch Strecke und Modus": "Host is still picking track and mode",
+    "Wochenende läuft - du bist beim nächsten dabei": "A weekend is running - you join the next one",
+    "zurück zur Lobby": "back to the lobby", "Der Host hat das Spiel beendet": "The host ended the game",
     # online multiplayer
     "ONLINE-MEHRSPIELER": "ONLINE MULTIPLAYER",
     "Über das Internet: Spiel hosten (Port-Forwarding) oder beitreten":
@@ -1103,6 +1126,21 @@ TEMPLATES: list[tuple[str, str]] = [
     ("Lenkung im Spiel {#}%", "In-game steering {}%"),
     ("Achse {#}", "Axis {}"),
     # pit menu / race strategy
+    ("Reifenwahl: {} · jetzt {} {#}%", "Tyre choice: {} · now {} {}%"), ("Neue Reifen ~{#} Rd.{}", "New tyres ~{} laps{}"),
+    ("Neue Reifen ~{#} Rd. · bis ins Ziel", "New tyres ~{} laps · to the finish"),
+    ("Neue Reifen ~{#} Rd. · Ziel in {#}", "New tyres ~{} laps · finish in {}"),
+    ("Stopp ~{#}s · Verlust ~{#}s", "Stop ~{}s · lost ~{}s"), ("Stopp ~{#}s · Verlust ~{#}s · P{#}", "Stop ~{}s · lost ~{}s · P{}"),
+    ("Stopp ~{#}s · Verlust ~{#}s · P{#} hinter {}", "Stop ~{}s · lost ~{}s · P{} behind {}"),
+    ("Strategie: Stopp {#} diese Runde -> {}", "Strategy: stop {} this lap -> {}"),
+    ("Strategie: Stopp {#} in {#} Rd. -> {}", "Strategy: stop {} in {} laps -> {}"),
+    ("Planke {#}/{#} mm · 1-3 ändern · 4/ENTER · B zu", "Plank {}/{} mm · 1-3 change · 4/ENTER · B close"),
+    ("{#} -> {#}", "{} -> {}"),
+    ("Reifenwahl: {}", "Tyre choice: {}"), ("{}-Reifen", "{} tyres"),
+    ("Box, Box! {} bereit - Linie folgen.", "Box, box! {} ready - follow the line."),
+    ("Wetter dreht! Box für {} - Linie folgen.", "Weather is turning! Box for {} - follow the line."),
+    ("Box laut Strategie: {} - Linie folgen!", "Box for the strategy: {} - follow the line!"),
+    ("BOX, BOX - {}", "BOX, BOX - {}"),
+    ("BOX angefordert: {} - Linie zur Boxeneinfahrt folgen", "BOX ordered: {} - follow the line to the pit entry"),
     ("+{#} Rd. ({#} kg) · Res. {#}", "+{} laps ({} kg) · res. {}"), ("halten ~{#} Rd.{}", "last ~{} laps{}"),
     (" · bis ins Ziel", " · to the finish"), (" · Ziel in {#}", " · finish in {}"),
     ("halten ~{#} Rd. · bis ins Ziel", "last ~{} laps · to the finish"),
@@ -1116,6 +1154,11 @@ TEMPLATES: list[tuple[str, str]] = [
     ("Plan: Stopp in {#} Rd. auf {}.", "Plan: stop in {} laps for {}."),
     ("Strategie aus dem Training: {}", "Strategy from practice: {}"),
     ("{} {#} -> {} {#}", "{} {} -> {} {}"), ("{} {#} -> {} {#} -> {} {#}", "{} {} -> {} {} -> {} {}"),
+    ("Online: {#} Fahrer", "Online: {} drivers"), ("Online: warte auf Mitspieler (Port {#})", "Online: waiting for players (port {})"),
+    ("FAHRER ONLINE  ·  {#}/{#}", "DRIVERS ONLINE  ·  {}/{}"), ("{}  (Host)", "{}  (host)"),
+    ("{} ist beigetreten", "{} joined"), ("{} hat das Spiel verlassen", "{} left the game"),
+    ("{} getrennt - die KI übernimmt", "{} disconnected - the AI takes over"),
+    ("Server voll ({#} Spieler)", "Server full ({} players)"),
     # online multiplayer
     ("1. Im Router eine Portweiterleitung (Port-Forwarding) anlegen: TCP-Port {#} an diesen PC.",
      "1. In your router, add a port forwarding rule: TCP port {} to this PC."),

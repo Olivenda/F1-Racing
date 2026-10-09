@@ -1,11 +1,11 @@
 # Copyright Olivenda (Oliver Petz) 2026
-"""In-race pit stop menu (B). Plans tyres, fuel, a front-wing adjustment and repairs for the next stop, and shows
-what the stop will cost: time standing, time lost in the lane, the expected position on rejoin, how long the new
-tyres will last and what the race strategy from practice says.
+"""In-race pit stop menu (B). The crew prepares the tyres - from the race strategy, the weather or the race
+engineer's call - and the menu shows exactly what the stop will bring: the tyres, the time standing and lost, the
+position on rejoin and how long the new set lasts. The driver adjusts fuel, the front wing and repairs, and
+orders or cancels the stop. Entering the pit lane is up to the driver: follow the guide line to the pit entry.
 
-Keyboard: 1-4 change the rows (Shift = backwards) so the arrow keys stay free for driving, ENTER or 5 confirms
-(or cancels an ordered stop), B closes. Controller: D-pad up/down/left/right, A on the last row or the pit
-button confirms.
+Keys: the pit-menu keybinds (default I/K up/down, J/L less/more, U confirm; rebindable in the controls menu),
+or 1-3 change a row directly (Shift = backwards) and 4/5/ENTER confirm. Controller: D-pad, or the bound buttons.
 """
 
 from __future__ import annotations
@@ -17,16 +17,16 @@ import pygame
 from .car import PLANK_LIMIT_MM
 from .pitlane import SPEED_LIMIT
 from .settings import CYAN, GREEN, GREY, ORANGE, PANEL_LIGHT, SCREEN_WIDTH, WHITE, YELLOW
-from .tyres import ALL_COMPOUNDS, COMPOUNDS
+from .tyres import COMPOUND_ORDER, COMPOUNDS
 from .utils import draw_panel, draw_text
 
 if TYPE_CHECKING:
     from .player_car import Player_Car
     from .sessions import Session
 
-TYRE_OPTIONS = ["keep"] + ALL_COMPOUNDS
-ROWS = ["Reifen", "Tanken", "Frontflügel", "Reparatur", "BOX"]
+ROWS = ["Tanken", "Frontflügel", "Reparatur", "BOX"]
 RED = (255, 90, 90)
+NAV_UP, NAV_DOWN, NAV_LESS, NAV_MORE, NAV_OK = pygame.K_F5, pygame.K_F6, pygame.K_F7, pygame.K_F8, pygame.K_F9
 
 
 def lane_loss(car) -> float:
@@ -38,12 +38,47 @@ def lane_loss(car) -> float:
     return pit.length / SPEED_LIMIT - pit.length / race_speed + 2.0
 
 
+def wear_rate(car) -> float | None:
+    """Tyre wear per lap measured on the current set (None before there is enough of it)."""
+    t = car.tyres
+    if t is None:
+        return None
+    L = car.track.length
+    laps_on_set = t.laps + (car.distance % L) / L if car.timing_started else t.laps
+    if laps_on_set < 0.4 or t.wear < 0.01:
+        return None
+    return t.wear / laps_on_set
+
+
+def crew_choice(car, session: "Session") -> tuple[str, str]:
+    """(compound, why) the crew has ready for the next stop: weather first, then the race strategy, then the
+    engineer's pick - the fastest dry compound that still reaches the finish."""
+    call = session.weather_tyre_call(car) if hasattr(session, "weather_tyre_call") else None
+    if call in COMPOUNDS:
+        return call, "Wetter"
+    wet = session.track.wetness
+    current = car.tyres.compound.key if car.tyres is not None else "medium"
+    if car.tyres is not None and car.tyres.compound.kind != "slick" and wet > 0.16:
+        return current, "Wetter"
+    plan = car.next_planned_stop() if session.kind == "race" else None
+    if plan is not None:
+        return plan[1], "Strategie"
+    remaining = getattr(session, "total_laps", 0) - car.laps_done - 1
+    rate = wear_rate(car)
+    if session.kind != "race" or remaining <= 0 or rate is None or car.tyres is None:
+        return (current if current in COMPOUND_ORDER else "medium"), "Renningenieur"
+    for comp in COMPOUND_ORDER:                     # soft first: the fastest one that lasts
+        life = 0.75 / (rate * car.tyres.compound.life / COMPOUNDS[comp].life)
+        if life >= remaining:
+            return comp, "Renningenieur"
+    return COMPOUND_ORDER[-1], "Renningenieur"
+
+
 class PitMenu:
 
     def __init__(self) -> None:
         self.open = False
         self.sel = 0
-        self.tyre = 2
         self.fuel = 0.0
         self.front_wing = 0
         self.repair = True
@@ -54,32 +89,36 @@ class PitMenu:
             self.open = False
             return
         self.open = True
-        self.sel = 0
+        self.sel = len(ROWS) - 1
         self._rejoin = None
-        if car.pit_request is not None and car.pit_plan is not None:
+        if car.pit_plan is not None:
             # reopening shows what is already ordered
-            self.tyre = TYRE_OPTIONS.index(car.pit_request) if car.pit_request in TYRE_OPTIONS else 0
             self.fuel = car.pit_plan.get("fuel", 0.0)
             self.front_wing = car.pit_plan.get("front_wing", 0)
             self.repair = car.pit_plan.get("repair", True)
         else:
-            # a fresh plan: the next tyre of the race strategy, else a new set of the current compound
-            plan = car.next_planned_stop()
-            current = plan[1] if plan else car.tyres.compound.key if car.tyres is not None else "medium"
-            self.tyre = TYRE_OPTIONS.index(current) if current in TYRE_OPTIONS else 0
             self.fuel, self.front_wing, self.repair = 0.0, 0, True
 
+    def tyre(self, car: "Player_Car", session: "Session") -> tuple[str, str]:
+        """The tyres this stop brings: what is ordered, else what the crew has ready."""
+        if car.pit_request in COMPOUNDS:
+            return car.pit_request, getattr(car, "pit_reason", "") or "Crew"
+        return crew_choice(car, session)
+
     def _change(self, row: int, delta: int, car: "Player_Car", session: "Session") -> None:
-        if row == 0:
-            self.tyre = (self.tyre + delta) % len(TYRE_OPTIONS)
-        elif row == 1 and car.fuel_per_lap > 0:
+        if row == 0 and car.fuel_per_lap > 0:
             self.fuel = max(0.0, min(self._max_fuel(car, session), self.fuel + 0.5 * delta))
-        elif row == 2 and car.setup is not None:
+        elif row == 1 and car.setup is not None:
             fw = car.setup.front_wing
             self.front_wing = max(-5 - fw, min(5 - fw, self.front_wing + delta))
-        elif row == 3:
+        elif row == 2:
             self.repair = not self.repair
         self._rejoin = None
+        if car.pit_request is not None:
+            car.pit_plan = self._plan()             # an ordered stop follows the changes right away
+
+    def _plan(self) -> dict:
+        return {"fuel": self.fuel, "front_wing": self.front_wing, "repair": self.repair}
 
     @staticmethod
     def _max_fuel(car: "Player_Car", session: "Session") -> float:
@@ -87,25 +126,22 @@ class PitMenu:
         return max(0.0, round((total + 3 - car.fuel_laps) * 2) / 2)
 
     def _confirm(self, car: "Player_Car", session: "Session") -> None:
-        nothing = TYRE_OPTIONS[self.tyre] == "keep" and self.fuel <= 0 and not self.front_wing and \
-            not (self.repair and car.damage.total > 0.05)
-        if self.sel == 4 and car.pit_request is not None:
+        if car.pit_request is not None:
             car.pit_request = None
             car.pit_plan = None
+            car.stop_declined_lap = car.laps_done
             session.message("Boxenstopp abgesagt", WHITE, 2.0)
-        elif nothing and car.pit_request is None:
-            session.message("Nichts zu tun - Boxenstopp nicht angefordert", GREY, 2.0)
         else:
-            car.pit_request = TYRE_OPTIONS[self.tyre]
-            car.pit_plan = {"fuel": self.fuel, "front_wing": self.front_wing, "repair": self.repair}
-            comp = COMPOUNDS.get(car.pit_request)
-            session.message(f"BOX in dieser Runde: {self._summary(car)}", comp.color if comp else ORANGE, 2.5)
+            comp, why = self.tyre(car, session)
+            car.pit_request = comp
+            car.pit_reason = why
+            car.pit_plan = self._plan()
+            session.message(f"BOX angefordert: {self._summary(comp)} - Linie zur Boxeneinfahrt folgen",
+                            COMPOUNDS[comp].color, 3.0)
         self.open = False
 
-    def _summary(self, car: "Player_Car") -> str:
-        parts = []
-        t = TYRE_OPTIONS[self.tyre]
-        parts.append(f"{COMPOUNDS[t].name}-Reifen" if t in COMPOUNDS else "ohne Reifenwechsel")
+    def _summary(self, comp: str) -> str:
+        parts = [f"{COMPOUNDS[comp].name}-Reifen"]
         if self.fuel > 0:
             parts.append(f"+{self.fuel:.1f} Rd. Sprit")
         if self.front_wing:
@@ -119,19 +155,21 @@ class PitMenu:
         key = event.key
         joy = getattr(event, "from_joystick", False)
         back = -1 if event.mod & pygame.KMOD_SHIFT else 1
-        if pygame.K_1 <= key <= pygame.K_4:
+        last = len(ROWS) - 1
+        if pygame.K_1 <= key <= pygame.K_3:
             self.sel = key - pygame.K_1
             self._change(self.sel, back, car, session)
-        elif joy and key in (pygame.K_UP, pygame.K_DOWN):
-            self.sel = (self.sel + (-1 if key == pygame.K_UP else 1)) % len(ROWS)
-        elif joy and key in (pygame.K_LEFT, pygame.K_RIGHT):
-            self._change(self.sel, -1 if key == pygame.K_LEFT else 1, car, session)
-        elif key in (pygame.K_RETURN, pygame.K_KP_ENTER) or (key == pygame.K_5):
-            if self.sel == 4 or not joy or key == pygame.K_5:
-                self.sel = 4 if key == pygame.K_5 else self.sel
-                self._confirm(car, session)
-            else:
+        elif key == NAV_UP or (joy and key == pygame.K_UP):
+            self.sel = (self.sel - 1) % len(ROWS)
+        elif key == NAV_DOWN or (joy and key == pygame.K_DOWN):
+            self.sel = (self.sel + 1) % len(ROWS)
+        elif key in (NAV_LESS, NAV_MORE) or (joy and key in (pygame.K_LEFT, pygame.K_RIGHT)):
+            self._change(self.sel, -1 if key in (NAV_LESS, pygame.K_LEFT) else 1, car, session)
+        elif key in (NAV_OK, pygame.K_4, pygame.K_5, pygame.K_RETURN, pygame.K_KP_ENTER):
+            if joy and key in (pygame.K_RETURN, pygame.K_KP_ENTER) and self.sel != last:
                 self._change(self.sel, 1, car, session)
+            else:
+                self._confirm(car, session)
         elif key == pygame.K_b:
             if joy:
                 self._confirm(car, session)
@@ -147,28 +185,18 @@ class PitMenu:
     def stand_time(self, car: "Player_Car", session: "Session") -> float:
         """Seconds standing in the box with this plan (same rules as the pit service in sessions.py)."""
         from .sessions import REFUEL_KG_PER_S
-        tyres = TYRE_OPTIONS[self.tyre] in COMPOUNDS
-        base = session.stop_time(car) if tyres else 0.0
         fuel_time = self.fuel * car.fuel_per_lap / REFUEL_KG_PER_S
         wing_time = 0.8 if self.front_wing else 0.0
         repair = car.damage.repair_time() if self.repair else 0.0
-        return max(base, fuel_time, wing_time, 0.8) + repair + car.penalty_unserved
+        return max(session.stop_time(car), fuel_time, wing_time, 0.8) + repair + car.penalty_unserved
 
-    def tyre_life(self, car: "Player_Car") -> float | None:
-        """Laps the chosen new set should last (to 75% wear), from the wear rate measured on the current set."""
-        t = car.tyres
-        choice = TYRE_OPTIONS[self.tyre]
-        if t is None:
+    @staticmethod
+    def tyre_life(car: "Player_Car", comp: str) -> float | None:
+        """Laps the new set should last (to 75% wear), from the wear rate measured on the current set."""
+        rate = wear_rate(car)
+        if rate is None or car.tyres is None:
             return None
-        L = car.track.length
-        laps_on_set = t.laps + (car.distance % L) / L if car.timing_started else t.laps
-        if laps_on_set < 0.4 or t.wear < 0.01:
-            return None
-        rate = t.wear / laps_on_set
-        if choice in COMPOUNDS:
-            rate *= t.compound.life / COMPOUNDS[choice].life
-            return 0.75 / rate
-        return max(0.0, (0.75 - t.wear) / rate)
+        return 0.75 / (rate * car.tyres.compound.life / COMPOUNDS[comp].life)
 
     def rejoin(self, car: "Player_Car", session: "Session", loss: float) -> tuple[int, str] | None:
         """(position, car just ahead) after the stop: every car behind closer than the time lost gets past."""
@@ -198,110 +226,83 @@ class PitMenu:
         if not self.open:
             return
         f = fonts
-        narrow = center_x != SCREEN_WIDTH // 2       # split screen: half the width
-        w, h = (420, 430) if narrow else (720, 300)
-        x, y = center_x - w // 2, 130
-        draw_panel(screen, (x, y, w, h), (16, 18, 24), 238, border=ORANGE)
-        draw_text(screen, "BOXENSTOPP PLANEN", f.medium, ORANGE, (x + 18, y + 12))
+        w = 430
+        x, y = center_x - w // 2, 112
         ordered = car.pit_request is not None
-        if ordered:
-            draw_text(screen, "angefordert", f.small_bold, GREEN, (x + w - 18, y + 16), anchor="topright",
-                      shadow=False)
-        t = TYRE_OPTIONS[self.tyre]
+        comp, why = self.tyre(car, session)
+        c = COMPOUNDS[comp]
         need = getattr(session, "total_laps", 0) - car.laps_done
+
+        # ---- estimates, condensed into a few lines
+        stand = self.stand_time(car, session)
+        loss = lane_loss(car) + stand
+        lines: list[tuple[str, tuple[int, int, int]]] = []
+        life = self.tyre_life(car, comp)
+        if life is not None:
+            ok = need <= 0 or life >= need - 0.5
+            lines.append((f"Neue Reifen ~{life:.0f} Rd." + (" · bis ins Ziel" if ok and need > 0 else
+                                                           f" · Ziel in {need}" if need > 0 else ""),
+                          GREEN if ok else YELLOW))
+        back = self.rejoin(car, session, loss)
+        stop = f"Stopp ~{stand:.1f}s · Verlust ~{loss:.0f}s"
+        if back is not None:
+            pos, ahead = back
+            stop += f" · P{pos}" + (f" hinter {ahead}" if ahead else "")
+        lines.append((stop, WHITE))
+        plan = car.next_planned_stop() if session.kind == "race" else None
+        if plan is not None:
+            lap, pcomp = plan
+            to_go = lap - (car.laps_done + 1)
+            when = "diese Runde" if to_go <= 0 else f"in {to_go} Rd."
+            lines.append((f"Strategie: Stopp {car.pit_stops + 1} {when} -> {COMPOUNDS[pcomp].name}",
+                          ORANGE if to_go <= 0 else CYAN))
+
+        rh = 26
+        h = 72 + len(ROWS) * rh + 8 + len(lines) * 19 + 26
+        draw_panel(screen, (x, y, w, h), (16, 18, 24), 235, border=ORANGE)
+        draw_text(screen, "BOXENSTOPP", f.small_bold, ORANGE, (x + 12, y + 8), shadow=False)
+        draw_text(screen, "angefordert" if ordered else "nicht angefordert", f.tiny, GREEN if ordered else GREY,
+                  (x + w - 12, y + 10), anchor="topright", shadow=False)
+
+        # the tyres the crew has ready
+        ty = y + 32
+        pygame.draw.circle(screen, (15, 15, 18), (x + 26, ty + 16), 13)
+        pygame.draw.circle(screen, c.color, (x + 26, ty + 16), 13, 3)
+        draw_text(screen, c.letter, f.small_bold, c.color, (x + 26, ty + 16), anchor="center", shadow=False)
+        draw_text(screen, f"{c.name}-Reifen", f.small_bold, c.color, (x + 46, ty + 2), shadow=False)
+        cur = car.tyres
+        sub = f"Reifenwahl: {why}" + (f" · jetzt {cur.compound.letter} {cur.wear * 100:.0f}%" if cur else "")
+        draw_text(screen, sub, f.tiny, GREY, (x + 46, ty + 20), shadow=False)
+
         fuel_txt = f"+{self.fuel:.1f} Rd. ({self.fuel * car.fuel_per_lap:.0f} kg)" if car.fuel_per_lap > 0 else "-"
         if car.fuel_per_lap > 0 and need > 0:
             fuel_txt += f" · Res. {car.fuel_laps + self.fuel - need:+.1f}"
         fw_now = car.setup.front_wing if car.setup is not None else 0
         values = [
-            "",
             fuel_txt,
-            f"{self.front_wing:+d}  ({fw_now:+d} -> {fw_now + self.front_wing:+d})" if self.front_wing
-            else f"unverändert ({fw_now:+d})",
+            f"{fw_now:+d} -> {fw_now + self.front_wing:+d}" if self.front_wing else f"unverändert ({fw_now:+d})",
             ("Ja" if self.repair else "Nein") + (f"  ({car.damage.repair_time():.0f}s)" if car.damage.total > 0.05
                                                  else "  (keine Schäden)"),
             "BOXENSTOPP ABSAGEN" if ordered else "BOX ANFORDERN",
         ]
-        col_w = w - 28 if narrow else 360
         for k, (row, val) in enumerate(zip(ROWS, values)):
-            ry = y + 50 + k * 38
+            ry = y + 72 + k * rh
             if k == self.sel:
-                pygame.draw.rect(screen, PANEL_LIGHT, (x + 10, ry - 4, col_w, 34), border_radius=6)
-                pygame.draw.rect(screen, ORANGE, (x + 10, ry - 4, 4, 34), border_radius=2)
+                pygame.draw.rect(screen, PANEL_LIGHT, (x + 6, ry - 2, w - 12, rh - 2), border_radius=5)
+                pygame.draw.rect(screen, ORANGE, (x + 6, ry - 2, 3, rh - 2), border_radius=2)
+            mid = ry + rh // 2 - 2
             if row == "BOX":
-                draw_text(screen, f"[5/ENTER]  {val}", f.small_bold, ORANGE if not ordered else (255, 120, 100),
-                          (x + 10 + col_w // 2, ry + 13), anchor="center", shadow=False)
+                draw_text(screen, val, f.small_bold, ORANGE if not ordered else (255, 120, 100),
+                          (x + w // 2, mid), anchor="center", shadow=False)
                 continue
-            draw_text(screen, f"[{k + 1}] {row.upper()}", f.tiny, GREY, (x + 22, ry + 13), anchor="midleft",
-                      shadow=False)
-            if k == 0:
-                self._draw_tyre_chips(screen, f, car, x + 140, ry + 13)
-            else:
-                draw_text(screen, val, f.small_bold, WHITE, (x + 140, ry + 13), anchor="midleft", shadow=False)
+            draw_text(screen, str(k + 1), f.tiny, ORANGE, (x + 16, mid), anchor="midleft", shadow=False)
+            draw_text(screen, row.upper(), f.tiny, GREY, (x + 30, mid), anchor="midleft", shadow=False)
+            draw_text(screen, val, f.tiny, WHITE, (x + 132, mid), anchor="midleft", shadow=False)
 
-        # ---- what the stop means
-        ix, iy = (x + 18, y + 50 + 5 * 38 + 6) if narrow else (x + 390, y + 50)
-        stand = self.stand_time(car, session)
-        loss = lane_loss(car) + stand
-        info: list[tuple[str, str, tuple[int, int, int]]] = []
-        if car.tyres is not None:
-            cur = car.tyres
-            info.append(("Jetzt", f"{cur.compound.name} · {cur.wear * 100:.0f}% · {cur.laps} Rd.",
-                         GREEN if cur.wear < 0.5 else YELLOW if cur.wear < 0.75 else RED))
-        life = self.tyre_life(car)
-        if t in COMPOUNDS:
-            if life is None:
-                info.append(("Neue Reifen", "Prognose nach der ersten Runde", GREY))
-            else:
-                ok = need <= 0 or life >= need - 0.5
-                txt = f"halten ~{life:.0f} Rd." + (" · bis ins Ziel" if ok and need > 0 else
-                                                   f" · Ziel in {need}" if need > 0 else "")
-                info.append(("Neue Reifen", txt, GREEN if ok else YELLOW))
-        info.append(("Stopp", f"~{stand:.1f}s stehen · ~{loss:.0f}s Verlust", WHITE))
-        back = self.rejoin(car, session, loss)
-        if back is not None:
-            pos, ahead = back
-            info.append(("Rückkehr", f"P{pos}" + (f" hinter {ahead}" if ahead else " - in Führung"),
-                         GREEN if pos <= session.standings().index(car) + 1 else YELLOW))
-        plan = car.next_planned_stop() if session.kind == "race" else None
-        if plan is not None:
-            lap, comp = plan
-            to_go = lap - (car.laps_done + 1)
-            when = "diese Runde" if to_go <= 0 else f"in {to_go} Rd. (Rd. {lap})"
-            info.append(("Strategie", f"Stopp {car.pit_stops + 1}: {when} -> {COMPOUNDS[comp].name}",
-                         ORANGE if to_go <= 0 else CYAN))
-        elif car.strategy and session.kind == "race":
-            info.append(("Strategie", "Keine weiteren Stopps geplant", CYAN))
-        for k, (label, text, col) in enumerate(info):
-            ly = iy + k * 38
-            draw_text(screen, label.upper(), f.tiny, GREY, (ix, ly), shadow=False)
-            draw_text(screen, text, f.small_bold, col, (ix, ly + 15), shadow=False)
-        note = f"Planke {car.plank_wear:.2f}/{PLANK_LIMIT_MM:.1f} mm - wird nicht getauscht"
-        draw_text(screen, note, f.tiny, YELLOW if car.plank_wear > 0.8 * PLANK_LIMIT_MM else GREY,
-                  (x + 18, y + h - 22), shadow=False)
-        if not narrow:
-            draw_text(screen, "1-4 ändern (Shift zurück) · 5/ENTER bestätigen · B schließen", f.tiny, GREY,
-                      (x + w - 18, y + h - 22), anchor="topright", shadow=False)
-
-    def _draw_tyre_chips(self, screen: pygame.Surface, f, car: "Player_Car", x: int, cy: int) -> None:
-        """All tyre choices side by side; the chosen one is ringed and named."""
-        for k, opt in enumerate(TYRE_OPTIONS):
-            cx = x + 13 + k * 31
-            chosen = k == self.tyre
-            if opt == "keep":
-                pygame.draw.circle(screen, (60, 62, 70) if chosen else (34, 36, 42), (cx, cy), 12)
-                draw_text(screen, "-", f.small_bold, WHITE if chosen else GREY, (cx, cy - 1), anchor="center",
-                          shadow=False)
-            else:
-                c = COMPOUNDS[opt]
-                pygame.draw.circle(screen, (15, 15, 18), (cx, cy), 12)
-                pygame.draw.circle(screen, c.color if chosen else tuple(v // 2 for v in c.color), (cx, cy), 12,
-                                   3 if chosen else 2)
-                draw_text(screen, c.letter, f.tiny, c.color if chosen else GREY, (cx, cy), anchor="center",
-                          shadow=False)
-            if chosen:
-                pygame.draw.circle(screen, WHITE, (cx, cy), 15, 1)
-        t = TYRE_OPTIONS[self.tyre]
-        name = COMPOUNDS[t].name if t in COMPOUNDS else "nicht wechseln"
-        draw_text(screen, name, f.tiny, COMPOUNDS[t].color if t in COMPOUNDS else WHITE,
-                  (x + len(TYRE_OPTIONS) * 31 + 4, cy), anchor="midleft", shadow=False)
+        ly = y + 72 + len(ROWS) * rh + 6
+        for text, col in lines:
+            draw_text(screen, text, f.tiny, col, (x + 12, ly), shadow=False)
+            ly += 19
+        note = f"Planke {car.plank_wear:.2f}/{PLANK_LIMIT_MM:.1f} mm · 1-3 ändern · 4/ENTER · B zu"
+        draw_text(screen, note, f.tiny, YELLOW if car.plank_wear > 0.8 * PLANK_LIMIT_MM else (120, 120, 130),
+                  (x + 12, y + h - 20), shadow=False)

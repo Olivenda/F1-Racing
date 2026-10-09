@@ -31,7 +31,17 @@ ACTIONS: dict[str, tuple[str, int]] = {
     "reset": ("Auto zurücksetzen", pygame.K_r),
     "map": ("Streckenübersicht", pygame.K_m),
     "continue": ("Weiter / Training beenden", pygame.K_RETURN),
+    # pit menu navigation: only active while the pit menu is open, delivered as F5-F9 (keys nothing else uses)
+    "pit_up": ("Boxenmenü: hoch", pygame.K_F5),
+    "pit_down": ("Boxenmenü: runter", pygame.K_F6),
+    "pit_left": ("Boxenmenü: weniger", pygame.K_F7),
+    "pit_right": ("Boxenmenü: mehr", pygame.K_F8),
+    "pit_ok": ("Boxenmenü: bestätigen", pygame.K_F9),
 }
+PIT_ACTIONS = ("pit_up", "pit_down", "pit_left", "pit_right", "pit_ok")
+# keyboard defaults for the pit menu: may share keys with other actions, the open menu takes precedence
+PIT_KEY_DEFAULTS = {"pit_up": [pygame.K_i], "pit_down": [pygame.K_k], "pit_left": [pygame.K_j],
+                    "pit_right": [pygame.K_l], "pit_ok": [pygame.K_u]}
 AXES: dict[str, str] = {"steer": "Lenkung", "throttle": "Gaspedal", "brake": "Bremspedal"}
 
 # keyboard: driving keys (held) and in-race actions (pressed); each action is delivered as its default key
@@ -48,6 +58,7 @@ ARROWS = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT)
 def default_keys() -> dict[str, list[int]]:
     keys = {k: list(v[1]) for k, v in KEY_DRIVE.items()}
     keys.update({a: [ACTIONS[a][1]] for a in KEY_ACTIONS})
+    keys.update({a: list(k) for a, k in PIT_KEY_DEFAULTS.items()})
     return keys
 DEVICE_KINDS = {"wheel": "Lenkrad + Pedale", "gamepad": "Gamepad"}
 
@@ -273,9 +284,11 @@ class Controls:
 
     # ------------------------------------------------------------------ keyboard bindings
     def bind_key(self, action: str, key: int) -> None:
-        """One key does one thing: it is taken away from whatever else had it."""
-        for other in self.keys.values():
-            if key in other:
+        """One key does one thing: it is taken away from whatever else had it. The pit-menu keys are their own
+        group (they only work while the menu is open), so they may share keys with driving actions."""
+        pit = action in PIT_ACTIONS
+        for name, other in self.keys.items():
+            if (name in PIT_ACTIONS) == pit and key in other:
                 other.remove(key)
         self.keys[action] = [key]
         self._build_remap()
@@ -297,7 +310,7 @@ class Controls:
         for action in KEY_ACTIONS:
             for k in self.keys[action]:
                 remap[k] = ACTIONS[action][1]
-        bound = {k for keys in self.keys.values() for k in keys}
+        bound = {k for a, keys in self.keys.items() if a not in PIT_ACTIONS for k in keys}
         for action in KEY_ACTIONS:
             canonical = ACTIONS[action][1]
             if canonical not in remap and canonical in bound:
@@ -308,6 +321,13 @@ class Controls:
 
     def session_key(self, key: int) -> int | None:
         return self._remap.get(key, key)
+
+    def pit_nav_key(self, key: int) -> int | None:
+        """While the pit menu is open: the pressed key as pit-menu navigation (F5-F9), None if it isn't one."""
+        for action in PIT_ACTIONS:
+            if key in self.keys.get(action, []):
+                return ACTIONS[action][1]
+        return None
 
     def driving_keys(self, keyset: str = "all") -> dict[str, list[int]]:
         """Held keys for throttle/brake/left/right. Split screen: player 1 without arrows, player 2 arrows."""

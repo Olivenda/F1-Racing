@@ -92,7 +92,13 @@ class Game:
             if not in_session or self.state.paused or self.state.finished or                     not any(p.autopilot is None for p in self.state.players):
                 self.controls.ffb_idle()
             for event in events:
-                if in_session and event.type == pygame.KEYDOWN and not getattr(event, "from_joystick", False):
+                nav = None
+                if in_session and event.type == pygame.KEYDOWN and not getattr(event, "from_joystick", False) \
+                        and getattr(getattr(self.state, "pit_menu", None), "open", False):
+                    nav = self.controls.pit_nav_key(event.key)      # the open pit menu takes its keys first
+                if nav is not None:
+                    event = pygame.event.Event(pygame.KEYDOWN, key=nav, mod=event.mod, unicode="", scancode=0)
+                elif in_session and event.type == pygame.KEYDOWN and not getattr(event, "from_joystick", False):
                     # rebound keyboard actions arrive as the keys the session knows
                     mapped = self.controls.session_key(event.key)
                     if mapped is None:

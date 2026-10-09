@@ -261,7 +261,9 @@ class Renderer3D:
 
     def draw(self, surf: pygame.Surface, track: "Track", cars: Sequence["Car"], target: "Car",
              racing_line: bool, label_font: pygame.font.Font,
-             garages: Sequence[tuple[Vector2, float, Color, str]] = (), rain: float = 0.0) -> None:
+             garages: Sequence[tuple[Vector2, float, Color, str]] = (), rain: float = 0.0,
+             guide: Sequence[Vector2] = ()) -> None:
+        self.guide = guide
         self.ss = 2 if self.antialias == "high" else 1
         self.aa = self.antialias == "edges"
         out = surf
@@ -355,6 +357,8 @@ class Renderer3D:
                               (240, 240, 240))
         if racing_line and track.max_speed:
             self._draw_racing_line(surf, track, target)
+        if getattr(self, "guide", None):
+            self._draw_guide(surf, self.guide)
 
         objects: list[tuple[float, int, object]] = []
         wall_l, wall_r = track.wall_edges
@@ -416,6 +420,17 @@ class Renderer3D:
             pts = [self.to_cam(a.x - na.x, a.y - na.y, 0.3), self.to_cam(b.x - nb.x, b.y - nb.y, 0.3),
                    self.to_cam(b.x + nb.x, b.y + nb.y, 0.3), self.to_cam(a.x + na.x, a.y + na.y, 0.3)]
             self.poly(surf, pts, col)
+
+    def _draw_guide(self, surf: pygame.Surface, pts: Sequence[Vector2]) -> None:
+        """The way into the pits as a glowing strip on the road."""
+        for a, b in zip(pts, pts[1:]):
+            d = b - a
+            if d.length_squared() < 1:
+                continue
+            n = Vector2(-d.y, d.x).normalize() * 2.6
+            quad = [self.to_cam(a.x - n.x, a.y - n.y, 0.35), self.to_cam(b.x - n.x, b.y - n.y, 0.35),
+                    self.to_cam(b.x + n.x, b.y + n.y, 0.35), self.to_cam(a.x + n.x, a.y + n.y, 0.35)]
+            self.poly(surf, quad, (0, 210, 255))
 
     def _draw_pit_lane(self, surf: pygame.Surface, track: "Track") -> None:
         pit = track.pit

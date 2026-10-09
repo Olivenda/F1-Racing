@@ -17,7 +17,7 @@ from .player_car import Player_Car
 from .profiles import AUTOPILOT_BRAIN, PLAYER_PROFILE, DriverProfile, driver_grip
 from .effects import Effects
 from .render3d import Renderer3D
-from .pit_menu import PitMenu
+from .pit_menu import PitMenu, crew_choice
 from .pitlane import PIT_ACCEL, PIT_DECEL, SPEED_LIMIT
 from .car_setup import CarSetup, recommended
 from .career_events import FAILURES, failure_chance
@@ -112,6 +112,8 @@ class Camera:
 
 
 REFUEL_KG_PER_S: float = 11.0
+PIT_GUIDE: Color = (0, 210, 255)
+ORANGE_CALL: Color = (255, 150, 40)
 
 
 class Session:
@@ -313,6 +315,31 @@ class Session:
             if call:
                 car.pit_request = call
                 self.add_feed(f"{car.short}: Box für {COMPOUNDS[call].name}")
+
+    def _crew_calls(self) -> None:
+        """Human drivers: on the strategy's in-lap or when the weather turns, the crew gets the tyres ready, orders
+        the stop and the engineer radios it. Driving in is still up to the driver (follow the line to the entry)."""
+        for car in self.players:
+            if car.autopilot is not None or car.pit_request is not None or car.pit_state is not None or \
+                    car.session_done or car.dnf or car.frozen or car.stop_declined_lap == car.laps_done:
+                continue
+            weather = self.weather_tyre_call(car)
+            plan = car.next_planned_stop() if self.kind == "race" else None
+            due = plan is not None and plan[0] - (car.laps_done + 1) <= 0
+            if self.kind == "race" and getattr(self, "total_laps", 0) - car.laps_done <= 1 and weather is None:
+                continue                            # last lap: no stop for the strategy any more
+            if weather is None and not due:
+                continue
+            comp, why = crew_choice(car, self)
+            car.pit_request, car.pit_reason = comp, why
+            car.pit_plan = dict(self.pit_menus[car]._plan()) if car in self.pit_menus else \
+                {"fuel": 0.0, "front_wing": 0, "repair": True}
+            name = COMPOUNDS[comp].name
+            text = (f"Wetter dreht! Box für {name} - Linie folgen." if why == "Wetter"
+                    else f"Box laut Strategie: {name} - Linie folgen!")
+            car.radio_msg = (text, ORANGE_CALL, self.time + 8.0)
+            if car is self.player or car is self.player2:
+                self.message(f"BOX, BOX - {name}", COMPOUNDS[comp].color, 3.0)
 
     def weather_tyre_call(self, car: Car) -> str | None:
         """Tyre the conditions ask for when the car is on the wrong kind (None = current tyres are fine)."""
@@ -537,6 +564,7 @@ class Session:
         if self._weather_timer <= 0:
             self._weather_timer = 2.0
             self._weather_calls()
+            self._crew_calls()
         if self.team_orders:
             self._update_team_orders()
         if self.end_timer is not None:
@@ -807,6 +835,16 @@ class Session:
         if pit is None or car.pit_state is not None or car.pit_request is None or car.frozen:
             return
         ds = (car.s - pit.entry_abs()) % self.track.length
+        if ds < 40.0 and car.speed_fwd > 0 and isinstance(car, Player_Car) and car.autopilot is None:
+            # a human has to drive into the entry: on the pit side of the track, not just anywhere
+            if pit.side * car.lateral < self.track.half_width * 0.3:
+                if car.missed_entry_lap != car.laps_done:
+                    car.missed_entry_lap = car.laps_done
+                    car.radio_msg = ("Box verpasst! Die Crew wartet - nächste Runde rein.", (255, 110, 90),
+                                     self.time + 5.0)
+                    if car is self.player or car is self.player2:
+                        self.message("BOXENEINFAHRT VERPASST", (255, 110, 90), 2.5)
+                return
         if ds < 40.0 and car.speed_fwd > 0:
             car.pit_state = "lane"
             car.pit_u = ds
@@ -1018,12 +1056,55 @@ class Session:
         if self.paused:
             self.game.hud.draw_pause(screen, self)
 
+    GUIDE_AHEAD: float = 1300.0      # how far before the pit entry the guide line appears
+
+    def _guide_path(self) -> list[tuple[float, Vector2]]:
+        """The ideal way into the pits (cached per track): from the racing line over to the pit side of the track
+        and down the entry ramp. Points carry their distance along the track."""
+        track = self.track
+        cached = getattr(track, "_pit_guide", None)
+        if cached is not None:
+            return cached
+        pit = track.pit
+        out: list[tuple[float, Vector2]] = []
+        if pit is not None:
+            entry = pit.entry_abs()
+            target = pit.side * (track.half_width - 10.0)
+            steps = int(self.GUIDE_AHEAD // 20)
+            for k in range(steps + 1):
+                s = entry - self.GUIDE_AHEAD + k * 20.0
+                i = int((s % track.length) / track.WAYPOINT_SPACING) % track.n
+                t = k / steps
+                blend = t * t * (3 - 2 * t)
+                lat = track.line_offset[i] * (1 - blend) + target * blend
+                out.append((s, track.pose_at(s, lat)[0]))
+            u = 20.0
+            while u <= pit.RAMP + 120.0:
+                out.append((entry + u, pit.pose(u, target)[0]))
+                u += 20.0
+        track._pit_guide = out
+        return out
+
+    def pit_guide(self, car: Car) -> list[Vector2]:
+        """Guide line to the pit entry for a human driver with a stop ordered, from just ahead of the car."""
+        if not isinstance(car, Player_Car) or car.pit_request is None or car.pit_state is not None or \
+                car.autopilot is not None or self.track.pit is None:
+            return []
+        L = self.track.length
+        to_entry = (self.track.pit.entry_abs() - car.s) % L
+        if to_entry > self.GUIDE_AHEAD:
+            return []
+        start = self.track.pit.entry_abs() - to_entry
+        pts = [p for s, p in self._guide_path() if s >= start - 1e-6]
+        return pts if len(pts) > 1 else []
+
     def _draw_view(self, screen: pygame.Surface, rain: bool = True) -> None:
         if self.view3d:
             self.r3d.antialias = self.game.settings.antialias
             self.r3d.draw(screen, self.track, self.cars + self.extra_objects(), self.cars[self.cam_index],
                           self.show_brake_line,
-                          self.game.fonts.tiny, self.garages(), rain=self.weather.rain)
+                          self.game.fonts.tiny, self.garages(), rain=self.weather.rain,
+                          guide=self.pit_guide(self.cars[self.cam_index]))
             if rain:
                 self.weather.draw(screen, self._frame_dt, view3d=True)
             return
@@ -1040,6 +1121,17 @@ class Session:
                 pygame.draw.circle(screen, (255, 220, 0), p, 2)
         if self.show_brake_line:
             self._draw_brake_line(screen, off)
+        guide = self.pit_guide(self.cars[self.cam_index])
+        if guide:
+            pts = [p - off for p in guide]
+            pygame.draw.lines(screen, (10, 60, 80), False, pts, 9)
+            pygame.draw.lines(screen, PIT_GUIDE, False, pts, 5)
+            for a, b in zip(pts[::3], pts[1::3]):
+                d = b - a
+                if d.length_squared() > 1:
+                    d.scale_to_length(7)
+                    n = Vector2(-d.y, d.x)
+                    pygame.draw.polygon(screen, WHITE, [a + d * 1.4, a - d * 0.4 + n, a - d * 0.4 - n])
         self._draw_garages_2d(screen, off)
 
         for car in sorted(self.cars, key=lambda c: not c.is_ghost):

@@ -421,7 +421,7 @@ class HUD:
             return "Unterboden beschädigt - weniger Abtrieb. Lässt sich in der Box nicht tauschen.", YELLOW
         if car.pit_request:
             if car.pit_request in COMPOUNDS:
-                return f"Box, Box! {COMPOUNDS[car.pit_request].name}-Reifen sind bereit.", ORANGE
+                return f"Box, Box! {COMPOUNDS[car.pit_request].name} bereit - Linie folgen.", ORANGE
             return "Box, Box! Die Crew ist bereit.", ORANGE
         if car.out_of_fuel:
             return "Kein Sprit mehr! Auto ausrollen lassen.", (255, 90, 90)

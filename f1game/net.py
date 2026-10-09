@@ -44,7 +44,8 @@ MAX_GUESTS = 20             # 21 drivers with the host
 # keys the guest's game sends to the host instead of handling them itself (always / only while the pit menu is open)
 FORWARD_KEYS = {pygame.K_SPACE, pygame.K_b, pygame.K_r, pygame.K_e, pygame.K_q}
 FORWARD_MENU_KEYS = {pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5, pygame.K_RETURN,
-                     pygame.K_KP_ENTER, pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT}
+                     pygame.K_KP_ENTER, pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT,
+                     pygame.K_F5, pygame.K_F6, pygame.K_F7, pygame.K_F8, pygame.K_F9}
 
 # state that belongs to each screen (camera, HUD toggles, caches) or that is not data
 SESSION_SKIP = {"game", "track", "config", "camera", "cameras", "r3d", "r3ds", "fx", "stewards", "pit_menu",

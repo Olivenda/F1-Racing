@@ -205,6 +205,9 @@ class Car:
         self.dsq_reason = ""
         self.pit_plan: dict | None = None
         self.strategy: list[list] | None = None     # race plan from practice: [[compound, laps], ...]
+        self.pit_reason = ""                        # why the crew picked the tyres of the ordered stop
+        self.stop_declined_lap = -1                 # the driver cancelled the crew's call on this lap
+        self.missed_entry_lap = -1                  # drove past the pit entry with a stop ordered
         self.lap_log: list[dict] = []
         self._lap_log_start: dict | None = None
 

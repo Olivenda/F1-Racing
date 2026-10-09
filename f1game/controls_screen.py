@@ -100,8 +100,8 @@ CAPTURE_STEPS = ("left", "right", "throttle", "brake")
 
 # keybind table: (action, label); drive rows have no controller button (they are axes)
 BIND_ROWS: list[tuple[str, str]] = [(a, name) for a, (name, _) in KEY_DRIVE.items()] + \
-    [(a, ACTIONS[a][0]) for a in ("gear_up", "gear_down", "drs", "pit", "reset", "camera", "view", "map", "pause",
-                                  "menu", "continue")]
+    [(a, ACTIONS[a][0]) for a in ("gear_up", "gear_down", "drs", "pit", "pit_up", "pit_down", "pit_left",
+                                  "pit_right", "pit_ok", "reset", "camera", "view", "map", "pause", "menu", "continue")]
 BIND_EXTRA = ["Controller-Tasten zurücksetzen", "Tastatur zurücksetzen", "ZURÜCK"]
 FIXED_KEYS = {"menu": "ESC", "continue": "ENTER"}
 
