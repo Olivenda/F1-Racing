@@ -209,7 +209,7 @@ class MainMenu:
 
 class SetupScreen:
 
-    PLAYER_ROWS = ["Strecke", "Modus", "Rennrunden", "KI-Stärke", "Gegner", "Dein Team", "Startreifen",
+    PLAYER_ROWS = ["Strecke", "Modus", "Rennrunden", "KI-Stärke", "Gegner", "Dein Team", "Spieler", "Startreifen",
                    "Fahrzeug-Setup", "START", "ZURÜCK"]
     SPECTATOR_ROWS = ["Strecke", "Modus", "Rennrunden", "Fahrerfeld", "START", "ZURÜCK"]
     SPECTATOR_MODES = [m for m in MODES if m[0] != "practice"]
@@ -252,6 +252,8 @@ class SetupScreen:
             self.c["team"] = (self.c["team"] + delta) % max(1, len(self.game.teams))
         elif row == "Startreifen":
             self.c["tyre"] = (self.c["tyre"] + delta) % len(ALL_COMPOUNDS)
+        elif row == "Spieler":
+            self.c["players"] = 2 if self.c.get("players", 1) == 1 else 1
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type != pygame.KEYDOWN:
@@ -325,6 +327,8 @@ class SetupScreen:
             return f"{self.c['opponents']} KI-Fahrer"
         if row == "Dein Team":
             return self.game.teams[self.c["team"]].name if self.game.teams else "Referenzauto"
+        if row == "Spieler":
+            return "2 Spieler (Splitscreen)" if self.c.get("players", 1) == 2 else "1 Spieler"
         if row == "Startreifen":
             comp = COMPOUNDS[ALL_COMPOUNDS[self.c["tyre"]]]
             return f"{comp.name}  (Grip {comp.grip * 100:.0f}%)"

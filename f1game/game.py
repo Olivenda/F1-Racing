@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+from dataclasses import replace
 import time
 from typing import Callable, Protocol
 
@@ -155,6 +156,7 @@ class Game:
     def go_to_menu(self) -> None:
         self.sound.stop()
         self.controls.stop_rumble()
+        self.controls.assign_players(1)
         if isinstance(self.state, Session):
             self.state.save_recording()
         self.state = MainMenu(self)
@@ -264,12 +266,18 @@ class Game:
         profiles = self.field_preview(spectator, opponents)
         name = championship.player_name if championship is not None else st.player_name
         player = None if spectator else player_profile(team, name)
+        player2 = None
+        if player is not None and championship is None and c.get("players", 1) == 2:
+            # player 2 drives the team-mate's car
+            player2 = replace(player_profile(team, "Spieler 2"), short="SP2", helmet=(255, 200, 40))
+            player = replace(player, short="SP1")
+            profiles = profiles[:max(1, len(profiles) - 1)]
         self.config = WeekendConfig(track_key=track_key, mode=mode, race_laps=laps, difficulty_name=difficulty,
                                     ai_profiles=profiles, player=player,
                                     start_compound=ALL_COMPOUNDS[c["tyre"]], assists=st.assists,
                                     view3d=st.view3d, damage=st.damage, tyre_wear_factor=st.tyre_wear_factor,
                                     auto_camera=st.auto_camera, championship=championship,
-                                    safety_car=st.safety_car, weather=st.weather)
+                                    safety_car=st.safety_car, weather=st.weather, player2=player2)
         first = {"weekend": "practice", "practice": "practice", "qualifying": "qualifying", "race": "race"}[mode]
         self.start_session(first)
 

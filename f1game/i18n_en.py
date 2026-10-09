@@ -613,6 +613,18 @@ EXACT: dict[str, str] = {
     "Strecke ist nass - Box für Intermediates! (B)": "Track is wet - box for intermediates! (B)",
     "Starkregen - wir brauchen Full Wets! (B)": "Heavy rain - we need full wets! (B)",
     "Strecke trocknet ab - Slicks sind jetzt schneller! (B)": "Track is drying - slicks are faster now! (B)",
+    # ---------------------------------------------------------------- damage
+    "Flügel": "Wing", "Aufh. L": "Susp. L", "Aufh. R": "Susp. R", "Boden": "Floor", "Kühler": "Radiator",
+    "Motor überhitzt": "Engine overheated",
+    "Kühler beschädigt - Motor wird heiß, Leistung reduziert. Box!":
+        "Radiator damaged - engine running hot, power turned down. Box!",
+    "Aufhängung links beschädigt - das Auto zieht! Box empfohlen.":
+        "Left suspension damaged - the car is pulling! Box recommended.",
+    "Aufhängung rechts beschädigt - das Auto zieht! Box empfohlen.":
+        "Right suspension damaged - the car is pulling! Box recommended.",
+    "Frontflügel beschädigt! Box für Reparatur empfohlen.": "Front wing damaged! Box for repairs recommended.",
+    "Unterboden beschädigt - weniger Abtrieb. Lässt sich in der Box nicht tauschen.":
+        "Floor damaged - less downforce. It can't be replaced in the pits.",
 }
 
 TEMPLATES: list[tuple[str, str]] = [

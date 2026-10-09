@@ -126,12 +126,13 @@ class PitMenu:
             return False
         return True
 
-    def draw(self, screen: pygame.Surface, fonts, car: "Player_Car", session: "Session") -> None:
+    def draw(self, screen: pygame.Surface, fonts, car: "Player_Car", session: "Session",
+             center_x: int = SCREEN_WIDTH // 2) -> None:
         if not self.open:
             return
         f = fonts
         w, h = 400, 262
-        x, y = SCREEN_WIDTH // 2 - w // 2, 150
+        x, y = center_x - w // 2, 150
         draw_panel(screen, (x, y, w, h), (16, 18, 24), 235, border=ORANGE)
         draw_text(screen, "BOXENSTOPP PLANEN", f.medium, ORANGE, (x + 18, y + 12))
         ordered = car.pit_request is not None

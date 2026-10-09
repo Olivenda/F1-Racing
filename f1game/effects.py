@@ -89,6 +89,14 @@ class Effects:
                         self._emit(w.x, w.y, -car.vel.x * 0.15 + random.uniform(-30, 30),
                                    -car.vel.y * 0.15 + random.uniform(-30, 30), random.uniform(0.5, 1.0),
                                    random.uniform(3, 5), 14.0, col, "dust")
+            elif (car.damage.cooling > 0.45 or car.damage.rear > 0.6) and speed > 30 and not car.in_pit:
+                # a holed radiator or broken gearbox trails smoke
+                heavy = max(car.damage.cooling, car.damage.rear)
+                if random.random() < heavy * dense * dt * 30:
+                    back = car.pos - fwd * (CAR_LENGTH * 0.5)
+                    self._emit(back.x, back.y, car.vel.x * 0.3 + random.uniform(-15, 15),
+                               car.vel.y * 0.3 + random.uniform(-15, 15), random.uniform(0.8, 1.5),
+                               random.uniform(3, 5), 18.0, (70, 70, 74), "smoke")
             elif self.track.wetness > 0.15 and speed > 120 and not car.in_pit:
                 # spray off the rear tyres - the wetter and faster, the bigger the cloud
                 if random.random() < min(1.0, speed / 400) * self.track.wetness * dense * dt * 60:

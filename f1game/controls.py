@@ -123,7 +123,8 @@ class Controls:
         self.enabled = True
         self._nav_dir: tuple[int, int] = (0, 0)
         self._nav_timer = 0.0
-        self._rumble_until = 0
+        self._rumble_until: dict[int, int] = {}
+        self.slot_map: dict[int, int | None] | None = None   # split-screen: player slot -> device
         self._load()
         for k in range(pygame.joystick.get_count()):
             self._add(k)
@@ -180,6 +181,40 @@ class Controls:
         joy = self.joystick
         return joy.get_name() if joy is not None else "kein Gerät"
 
+    def assign_players(self, players: int) -> None:
+        """Split-screen: player 1 gets the first device (or the keyboard), player 2 the next one."""
+        if players < 2:
+            self.slot_map = None
+            return
+        ids = sorted(self.joys, key=lambda i: (i != self.active, i))
+        if len(ids) >= 2:
+            self.slot_map = {0: ids[0], 1: ids[1]}
+        else:
+            # one controller: player 1 drives on the keyboard, player 2 gets the controller
+            self.slot_map = {0: None, 1: ids[0] if ids else None}
+
+    def slot_of(self, instance_id: int) -> int:
+        if self.slot_map is None:
+            return 0
+        return next((s for s, i in self.slot_map.items() if i == instance_id), -1)
+
+    def _device(self, slot: int) -> tuple["pygame.joystick.JoystickType | None", DeviceProfile | None]:
+        if not self.enabled:
+            return None, None
+        if self.slot_map is None:
+            joy = self.joystick if slot == 0 else None
+        else:
+            iid = self.slot_map.get(slot)
+            joy = self.joys.get(iid) if iid is not None else None
+        return joy, (self.profiles.get(joy.get_name()) if joy is not None else None)
+
+    def has_device(self, slot: int) -> bool:
+        return self._device(slot)[0] is not None
+
+    def kind(self, slot: int = 0) -> str:
+        prof = self._device(slot)[1]
+        return prof.kind if prof is not None else ""
+
     def cycle_device(self) -> None:
         ids = list(self.joys)
         if not ids:
@@ -188,9 +223,9 @@ class Controls:
         self.active = ids[(k + 1) % len(ids)]
 
     # ------------------------------------------------------------------ driving input
-    def steering(self) -> float | None:
-        joy, prof = self.joystick, self.profile
-        if not self.enabled or joy is None or prof is None:
+    def steering(self, slot: int = 0) -> float | None:
+        joy, prof = self._device(slot)
+        if joy is None or prof is None:
             return None
         v = prof.steer.read(joy)
         if v is None:
@@ -203,9 +238,9 @@ class Controls:
         mag = min(1.0, mag / max(0.05, prof.saturation))
         return sign * mag ** max(0.3, prof.linearity)
 
-    def pedal(self, which: str) -> float | None:
-        joy, prof = self.joystick, self.profile
-        if not self.enabled or joy is None or prof is None:
+    def pedal(self, which: str, slot: int = 0) -> float | None:
+        joy, prof = self._device(slot)
+        if joy is None or prof is None:
             return None
         binding = getattr(prof, which)
         if abs(binding.rest) > 0.9 and binding.axis < joy.get_numaxes() and joy.get_axis(binding.axis) == 0.0:
@@ -218,27 +253,27 @@ class Controls:
         dz = prof.pedal_deadzone
         return 0.0 if v <= dz else min(1.0, (v - dz) / max(1e-3, 1.0 - 2 * dz))
 
-    def throttle_held(self) -> bool:
-        v = self.pedal("throttle")
+    def throttle_held(self, slot: int = 0) -> bool:
+        v = self.pedal("throttle", slot)
         return v is not None and v > 0.2
 
-    def rumble(self, low: float, high: float, ms: int) -> None:
+    def rumble(self, low: float, high: float, ms: int, slot: int = 0) -> None:
         """Short vibration on pads / force jolt on wheels that expose SDL rumble."""
-        joy, prof = self.joystick, self.profile
-        if not self.connected or joy is None or prof is None or prof.rumble <= 0:
+        joy, prof = self._device(slot)
+        if joy is None or prof is None or prof.rumble <= 0:
             return
         now = pygame.time.get_ticks()
-        if now < self._rumble_until - ms // 2:
+        key = joy.get_instance_id()
+        if now < self._rumble_until.get(key, 0) - ms // 2:
             return
-        self._rumble_until = now + ms
+        self._rumble_until[key] = now + ms
         try:
             joy.rumble(min(1.0, low * prof.rumble), min(1.0, high * prof.rumble), ms)
         except (pygame.error, AttributeError):
             pass
 
     def stop_rumble(self) -> None:
-        joy = self.joystick
-        if joy is not None:
+        for joy in self.joys.values():
             try:
                 joy.stop_rumble()
             except (pygame.error, AttributeError):
@@ -258,14 +293,16 @@ class Controls:
         if not self.enabled:
             return []
         if event.type == pygame.JOYBUTTONDOWN:
-            if event.instance_id in self.joys and event.instance_id != self.active:
+            if event.instance_id in self.joys and event.instance_id != self.active and self.slot_map is None:
                 self.active = event.instance_id
             prof = self.profiles.get(self.joys[event.instance_id].get_name()) if event.instance_id in self.joys \
                 else None
             if prof is None:
                 return []
             if in_session:
-                return [_key(ACTIONS[a][1]) for a, b in prof.buttons.items() if b == event.button and a in ACTIONS]
+                slot = self.slot_of(event.instance_id)
+                return [_key(ACTIONS[a][1], slot) for a, b in prof.buttons.items()
+                        if b == event.button and a in ACTIONS]
             menu = {0: pygame.K_RETURN, 1: pygame.K_ESCAPE, 7: pygame.K_RETURN, 6: pygame.K_ESCAPE}
             if prof.kind == "wheel":
                 menu = {prof.buttons.get("drs", 0): pygame.K_RETURN, prof.buttons.get("pit", 1): pygame.K_ESCAPE}
@@ -273,11 +310,12 @@ class Controls:
             return [_key(key)] if key is not None else []
         if event.type == pygame.JOYHATMOTION:
             x, y = event.value
+            slot = self.slot_of(event.instance_id) if in_session else 0
             out = []
             if y:
-                out.append(_key(pygame.K_UP if y > 0 else pygame.K_DOWN))
+                out.append(_key(pygame.K_UP if y > 0 else pygame.K_DOWN, slot))
             if x:
-                out.append(_key(pygame.K_RIGHT if x > 0 else pygame.K_LEFT))
+                out.append(_key(pygame.K_RIGHT if x > 0 else pygame.K_LEFT, slot))
             return out
         return []
 
@@ -309,5 +347,6 @@ class Controls:
         return [_key(key)]
 
 
-def _key(key: int) -> pygame.event.Event:
-    return pygame.event.Event(pygame.KEYDOWN, key=key, mod=0, unicode="", scancode=0, from_joystick=True)
+def _key(key: int, slot: int = 0) -> pygame.event.Event:
+    return pygame.event.Event(pygame.KEYDOWN, key=key, mod=0, unicode="", scancode=0, from_joystick=True,
+                              player_slot=slot)

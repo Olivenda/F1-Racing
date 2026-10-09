@@ -40,6 +40,8 @@ class Player_Car(Car):
         self.brake_assist_active = False
         self.aero_request = False
         self._fb_impulse = 0.0
+        self.slot = 0               # split-screen player number (0 = player 1)
+        self.keyset = "all"         # "all", "wasd" or "arrows"
 
     def set_assists(self, level: int) -> None:
         self.assist_level = level
@@ -54,24 +56,22 @@ class Player_Car(Car):
         if self.autopilot is not None:
             self.throttle, self.brake, self.steer_input = self.autopilot.update(dt, session.cars, self.track)
             return
-        keys = pygame.key.get_pressed()
-        self.throttle = 1.0 if (keys[pygame.K_UP] or keys[pygame.K_w]) else 0.0
-        self.brake = 1.0 if (keys[pygame.K_DOWN] or keys[pygame.K_s]) else 0.0
-        target = 0.0
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            target -= 1.0
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            target += 1.0
+        up, down, left, right = self.held_keys()
+        self.throttle = 1.0 if up else 0.0
+        self.brake = 1.0 if down else 0.0
+        target = (-1.0 if left else 0.0) + (1.0 if right else 0.0)
         controls = session.game.controls
-        pad_throttle, pad_brake = controls.pedal("throttle"), controls.pedal("brake")
+        slot = self.slot
+        pad_throttle, pad_brake = controls.pedal("throttle", slot), controls.pedal("brake", slot)
         if pad_throttle is not None:
             self.throttle = max(self.throttle, pad_throttle)
         if pad_brake is not None:
             self.brake = max(self.brake, pad_brake)
-        analog = controls.steering() if target == 0.0 else None
+        analog = controls.steering(slot) if target == 0.0 else None
         speed_ratio = min(1.0, max(0.0, self.speed_fwd) / self.top_speed)
-        if analog is not None and (analog != 0.0 or controls.profile.kind == "wheel"):
-            if controls.profile.kind == "wheel":
+        wheel = controls.kind(slot) == "wheel"
+        if analog is not None and (analog != 0.0 or wheel):
+            if wheel:
                 # a wheel is the steering: no filtering, the driver's hands are the rate limiter
                 self.steer_input = analog
             else:
@@ -88,21 +88,35 @@ class Player_Car(Car):
         self._apply_assists()
         self._feedback(controls)
 
+    def held_keys(self) -> tuple[bool, bool, bool, bool]:
+        """(throttle, brake, left, right) from this player's half of the keyboard."""
+        keys = pygame.key.get_pressed()
+        wasd = (keys[pygame.K_w], keys[pygame.K_s], keys[pygame.K_a], keys[pygame.K_d])
+        arrows = (keys[pygame.K_UP], keys[pygame.K_DOWN], keys[pygame.K_LEFT], keys[pygame.K_RIGHT])
+        if self.keyset == "wasd":
+            return wasd
+        if self.keyset == "arrows":
+            return arrows
+        return wasd[0] or arrows[0], wasd[1] or arrows[1], wasd[2] or arrows[2], wasd[3] or arrows[3]
+
+    def throttle_held(self, controls) -> bool:
+        return self.held_keys()[0] or controls.throttle_held(self.slot)
+
     def _feedback(self, controls) -> None:
         """Vibration / force jolts: impacts, gravel, kerb-like slides and wheelspin."""
-        if not controls.connected:
+        if not controls.has_device(self.slot):
             return
         hit = self.wall_impulse + self.car_impulse - self._fb_impulse
         self._fb_impulse = self.wall_impulse + self.car_impulse
         if hit > 20:
             k = min(1.0, hit / 250.0)
-            controls.rumble(k, k, 120 + int(200 * k))
+            controls.rumble(k, k, 120 + int(200 * k), self.slot)
         elif self.on_grass and self.speed_fwd > 30:
-            controls.rumble(0.35, 0.15, 90)
+            controls.rumble(0.35, 0.15, 90, self.slot)
         elif self.sliding and self.speed_fwd > 60:
-            controls.rumble(0.0, 0.3, 70)
+            controls.rumble(0.0, 0.3, 70, self.slot)
         elif self.launch_spin > 0.0 and self.throttle > 0.5:
-            controls.rumble(0.25, 0.0, 70)
+            controls.rumble(0.25, 0.0, 70, self.slot)
 
     def _apply_assists(self) -> None:
         self.brake_assist_active = False

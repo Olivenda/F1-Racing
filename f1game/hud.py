@@ -407,8 +407,14 @@ class HUD:
                     else "VSC - Tempo halten, Delta beachten."), YELLOW
         if car.penalty_unserved > 0 and s.kind == "race":
             return f"{car.penalty_unserved:.0f}s Strafe offen - beim Stopp abgesessen.", ORANGE
+        if d.cooling > 0.4:
+            return "Kühler beschädigt - Motor wird heiß, Leistung reduziert. Box!", (255, 90, 90)
         if d.front_wing > 0.4 or d.suspension > 0.35:
-            return "Schaden am Auto! Box für Reparatur empfohlen.", (255, 90, 90)
+            side = "links" if d.susp_l > d.susp_r else "rechts"
+            return (f"Aufhängung {side} beschädigt - das Auto zieht! Box empfohlen." if d.suspension > 0.35
+                    else "Frontflügel beschädigt! Box für Reparatur empfohlen."), (255, 90, 90)
+        if d.floor > 0.3:
+            return "Unterboden beschädigt - weniger Abtrieb. Lässt sich in der Box nicht tauschen.", YELLOW
         if car.pit_request:
             if car.pit_request in COMPOUNDS:
                 return f"Box, Box! {COMPOUNDS[car.pit_request].name}-Reifen sind bereit.", ORANGE
@@ -508,8 +514,7 @@ class HUD:
             draw_text(screen, fc, f.tiny, fcol, (x + 12, cy), shadow=False)
             cy += 22
         d = car.damage
-        parts = [(n, v) for n, v in (("Frontflügel", d.front_wing), ("Heck", d.rear), ("Aufhängung", d.suspension))
-                 if v >= 0.05]
+        parts = d.parts()[:3]
         if not parts:
             draw_text(screen, "Auto: keine Schäden", f.tiny, (150, 200, 160), (x + 12, cy), shadow=False)
         else:
@@ -693,6 +698,74 @@ class HUD:
         draw_text(screen, f"NEURONALES NETZ · {car.short} · {car.profile.brain}/{car.profile.checkpoint}",
                   self.f.tiny, GREY, (rect.x + 12, rect.y + 8), shadow=False)
         draw_network(screen, rect.inflate(-20, -36).move(0, 10), car.driver.net, self.f.tiny)
+
+    def draw_split(self, screen: pygame.Surface, s: "Session") -> None:
+        """Split screen: a compact HUD per player half, lights/messages/race control across the middle."""
+        self.units = s.game.settings.units
+        f = self.f
+        half = SCREEN_WIDTH // 2
+        standings = s.standings()
+        for k, car in enumerate(s.players):
+            x0 = k * half
+            # position / lap / times
+            draw_panel(screen, (x0 + 12, 12, 236, 86))
+            pygame.draw.rect(screen, car.color, (x0 + 12, 12, 5, 86), border_radius=3)
+            draw_text(screen, f"P{k + 1} · {car.name}"[:26], f.tiny, GREY, (x0 + 26, 18), shadow=False)
+            pos = standings.index(car) + 1
+            draw_text(screen, f"{pos}", f.large, WHITE, (x0 + 26, 34))
+            draw_text(screen, f"/{len(s.cars)}", f.small, GREY, (x0 + 30 + f.large.size(str(pos))[0], 46))
+            if s.kind == "race":
+                lap = "DSQ" if car.dsq else "DNF" if car.dnf else "ZIEL" if car.session_done else \
+                    f"{min(car.laps_done + 1, s.total_laps)}/{s.total_laps}"
+            else:
+                lap = str(car.laps_done + 1) if car.timing_started else "OUT"
+            draw_text(screen, "RUNDE", f.tiny, GREY, (x0 + 110, 34), shadow=False)
+            draw_text(screen, lap, f.medium, WHITE, (x0 + 110, 48), shadow=False)
+            draw_text(screen, format_time(car.current_lap_time(s.time) if not car.session_done else None),
+                      f.mono, WHITE, (x0 + 26, 76), shadow=False)
+            best_col = PURPLE if s.fastest_lap and car.best_lap == s.fastest_lap[0] else GREEN
+            draw_text(screen, format_time(car.best_lap), f.mono, best_col if car.best_lap else GREY,
+                      (x0 + 136, 76), shadow=False)
+            # speed, gear, tyres, fuel, plank
+            bx, by = x0 + half - 248, SCREEN_HEIGHT - 104
+            draw_panel(screen, (bx, by, 236, 92))
+            speed, unit = speed_in(car.speed_kmh, self.units)
+            draw_text(screen, f"{int(speed)}", f.large, WHITE, (bx + 104, by + 6), anchor="topright")
+            draw_text(screen, unit, f.tiny, GREY, (bx + 108, by + 22), shadow=False)
+            draw_text(screen, car.gear, f.large, YELLOW, (bx + 210, by + 6), anchor="topright")
+            if car.straight_mode:
+                draw_text(screen, "GERADE", f.tiny, CYAN, (bx + 140, by + 14), shadow=False)
+            t = car.tyres
+            if t is not None:
+                comp = t.compound
+                pygame.draw.circle(screen, comp.color, (bx + 20, by + 56), 9, 3)
+                draw_text(screen, comp.letter, f.tiny, comp.color, (bx + 20, by + 56), anchor="center", shadow=False)
+                life = 1.0 - t.wear
+                col = GREEN if t.wear < 0.5 else YELLOW if t.wear < 0.75 else (255, 90, 90)
+                draw_text(screen, f"{life * 100:.0f}%", f.small_bold, col, (bx + 36, by + 46), shadow=False)
+            if car.fuel_per_lap > 0:
+                fcol = (255, 90, 90) if car.out_of_fuel else WHITE
+                draw_text(screen, f"Sprit {car.fuel_laps:.1f} Rd.", f.tiny, fcol, (bx + 92, by + 44), shadow=False)
+            if car.plank_per_lap > 0:
+                pcol = (255, 90, 90) if car.plank_wear > PLANK_LIMIT_MM else WHITE
+                draw_text(screen, f"Planke {car.plank_wear:.2f}", f.tiny, pcol, (bx + 92, by + 60), shadow=False)
+            parts = car.damage.parts()
+            if parts:
+                n, v = parts[0]
+                draw_text(screen, f"{n} {v * 100:.0f}%", f.tiny, (255, 90, 90) if v > 0.4 else YELLOW,
+                          (bx + 12, by + 74), shadow=False)
+            if car.pit_request:
+                draw_text(screen, "BOX", f.small_bold, ORANGE, (bx + 200, by + 66), anchor="topright", shadow=False)
+            if car.in_pit:
+                draw_text(screen, "PIT LIMITER", f.small_bold, ORANGE, (x0 + half // 2, SCREEN_HEIGHT - 150),
+                          anchor="center")
+        if s.kind == "race":
+            self._lights(screen, s)
+        self._neutralization(screen, s)
+        self._messages(screen, s)
+        self._race_control(screen, s)
+        hint = "P1: WASD · LEER Gerade · B Box · R Reset      P2: Pfeile · STRG-R Gerade · SHIFT-R Box · ENTF Reset"
+        draw_text(screen, hint, f.tiny, (200, 200, 200), (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 10), anchor="midbottom")
 
     def draw_pause(self, screen: pygame.Surface, s: "Session") -> None:
         shade = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)

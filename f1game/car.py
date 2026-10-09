@@ -321,7 +321,8 @@ class Car:
         if impulse > IMPACT_THRESHOLD:
             self.crashes += 1
         if contact is not None:
-            self.damage.apply_impact((contact - self.pos).dot(self.forward), impulse)
+            rel = contact - self.pos
+            self.damage.apply_impact(rel.dot(self.forward), impulse, rel.dot(self.right))
         if kind == "car":
             self.car_impulse += impulse
         else:
@@ -454,6 +455,9 @@ class Car:
             load = 0.35 + 0.9 * speed_ratio * speed_ratio + 0.5 * self.brake * speed_ratio +                 (1.6 * speed_ratio if self.on_grass else 0.0)
             load *= 1.0 + 0.003 * self.fuel
             self.plank_wear += self.plank_per_lap * lap_frac * load / 1.35 * self.sf.plank
+        if self.on_grass and speed_ratio > 0.55:
+            # bouncing over kerbs and gravel at speed knocks the floor about, more so on a low car
+            self.damage.scrape(0.004 * dt * speed_ratio * self.sf.plank)
 
     def update_track_state(self, session: "Session") -> None:
         track = self.track

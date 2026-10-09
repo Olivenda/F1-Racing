@@ -31,30 +31,113 @@ HORIZON_Y = 300.0
 WALL_HEIGHT = 13.0
 FOG: Color = (178, 196, 214)
 
-CAR_BOXES: list[tuple[tuple[float, float, float, float, float, float], str]] = [
-    ((-14.0, 13.0, -4.5, 4.5, 1.0, 5.5), "body"),
-    ((-9.0, 5.0, -7.5, 7.5, 1.0, 4.5), "body"),
-    ((13.0, 17.0, -2.0, 2.0, 1.0, 3.5), "body"),
-    ((-12.0, -3.0, -2.5, 2.5, 5.5, 8.5), "body"),
-    ((-2.0, 3.0, -2.0, 2.0, 5.5, 8.0), "helmet"),
-    ((14.0, 17.5, -8.0, 8.0, 0.4, 1.8), "dark"),
-    ((-17.0, -14.0, -7.0, 7.0, 6.5, 9.5), "dark"),
-    ((7.0, 12.0, -8.5, -5.0, 0.0, 5.0), "tyre"),
-    ((7.0, 12.0, 5.0, 8.5, 0.0, 5.0), "tyre"),
-    ((-13.0, -7.0, -9.0, -5.0, 0.0, 5.5), "tyre"),
-    ((-13.0, -7.0, 5.0, 9.0, 0.0, 5.5), "tyre"),
-    ((-8.0, 4.0, -6.8, -4.5, 1.0, 4.2), "body"),
-    ((-8.0, 4.0, 4.5, 6.8, 1.0, 4.2), "body"),
-    ((-12.0, -4.0, -0.4, 0.4, 8.5, 10.0), "body"),
-    ((-3.0, 4.0, -2.4, 2.4, 8.4, 9.0), "dark"),
-    ((3.5, 4.5, -0.5, 0.5, 5.5, 9.0), "dark"),
-    ((14.0, 17.8, -8.6, -7.6, 0.4, 3.2), "body"),
-    ((14.0, 17.8, 7.6, 8.6, 0.4, 3.2), "body"),
-    ((-17.6, -13.6, -7.6, -6.6, 2.5, 10.2), "body"),
-    ((-17.6, -13.6, 6.6, 7.6, 2.5, 10.2), "body"),
-    ((-16.6, -14.4, -6.6, 6.6, 9.5, 10.3), "body"),
-    ((-17.0, -13.0, -5.0, 5.0, 0.4, 2.4), "dark"),
+# Car model: tapered slabs (bottom rectangle at z0, top rectangle at z1) in car space, x forward, y right, z up.
+# (bottom x0, x1, y0, y1), (top x0, x1, y0, y1), z0, z1, role, kept at distance (LOD)
+_Slab = tuple[tuple[float, float, float, float], tuple[float, float, float, float], float, float, str, bool]
+
+
+def _mirrored(x: tuple[float, float], y: tuple[float, float], z: tuple[float, float], role: str,
+              top_x: tuple[float, float] | None = None, top_y: tuple[float, float] | None = None,
+              lod: bool = False) -> list[_Slab]:
+    """A part and its mirror image on the other side of the car (y given for the right-hand side)."""
+    tx, ty = top_x or x, top_y or y
+    return [((x[0], x[1], y[0], y[1]), (tx[0], tx[1], ty[0], ty[1]), z[0], z[1], role, lod),
+            ((x[0], x[1], -y[1], -y[0]), (tx[0], tx[1], -ty[1], -ty[0]), z[0], z[1], role, lod)]
+
+
+def _part(x: tuple[float, float], y: tuple[float, float], z: tuple[float, float], role: str,
+          top_x: tuple[float, float] | None = None, top_y: tuple[float, float] | None = None,
+          lod: bool = False) -> list[_Slab]:
+    tx, ty = top_x or x, top_y or y
+    return [((x[0], x[1], y[0], y[1]), (tx[0], tx[1], ty[0], ty[1]), z[0], z[1], role, lod)]
+
+
+CAR_MODEL: list[_Slab] = [
+    *_part((-14.0, 12.0), (-6.4, 6.4), (0.5, 1.2), "carbon", lod=True),                         # floor
+    *_part((-17.2, -13.4), (-5.2, 5.2), (0.5, 2.8), "carbon", top_x=(-16.0, -13.4)),           # diffuser
+    *_part((-6.0, 10.5), (-3.8, 3.8), (1.2, 4.8), "body", top_y=(-3.0, 3.0), lod=True),       # monocoque
+    *_part((10.5, 17.2), (-2.2, 2.2), (1.3, 3.8), "body", top_x=(10.5, 16.2), top_y=(-1.3, 1.3), lod=True),
+    *_mirrored((-9.5, 3.5), (3.6, 7.2), (1.2, 4.6), "body", top_x=(-6.0, 2.5), top_y=(3.6, 6.2), lod=True),
+    *_mirrored((2.5, 3.6), (3.6, 7.0), (1.4, 4.2), "dark"),                                   # pod inlets
+    *_part((-14.5, -2.0), (-3.6, 3.6), (4.6, 7.6), "body", top_x=(-9.0, -2.5), top_y=(-1.3, 1.3), lod=True),
+    *_part((-4.6, -1.8), (-1.5, 1.5), (6.4, 9.6), "body", top_x=(-4.2, -2.4), top_y=(-1.0, 1.0)),  # airbox
+    *_part((-3.6, -2.2), (-0.9, 0.9), (8.2, 9.0), "dark"),                                    # intake
+    *_part((-12.0, -4.0), (-0.3, 0.3), (7.4, 9.0), "accent", top_x=(-11.0, -4.2)),            # shark fin
+    *_part((-1.6, 4.8), (-2.3, 2.3), (4.6, 5.0), "carbon"),                                   # cockpit opening
+    *_part((-0.2, 3.0), (-1.6, 1.6), (4.9, 7.4), "helmet", top_x=(0.2, 2.6), top_y=(-1.3, 1.3)),
+    *_part((1.2, 3.0), (-1.62, 1.62), (6.0, 6.7), "visor"),                                   # visor band
+    *_part((4.6, 5.4), (-0.4, 0.4), (4.8, 8.0), "carbon"),                                    # halo pillar
+    *_mirrored((-1.2, 5.2), (2.2, 2.8), (7.4, 8.0), "carbon"),                                # halo hoop
+    *_part((-1.6, -0.8), (-2.8, 2.8), (7.4, 8.0), "carbon"),                                  # halo rear
+    *_mirrored((3.0, 4.6), (4.0, 5.6), (5.0, 6.0), "carbon"),                                 # mirrors
+    *_part((5.0, 10.5), (-0.6, 0.6), (4.75, 4.85), "accent"),                                 # livery stripe
+    # front wing: main plane, flap, endplates
+    *_part((14.4, 18.0), (-8.4, 8.4), (0.4, 1.0), "carbon", lod=True),
+    *_part((14.6, 16.6), (-8.2, 8.2), (1.0, 1.9), "body", top_x=(14.6, 15.8)),
+    *_mirrored((13.8, 18.2), (8.2, 8.9), (0.4, 3.0), "body"),
+    # rear wing: main plane, DRS flap, endplates, pylon, beam wing
+    *_part((-17.8, -14.8), (-6.8, 6.8), (7.6, 8.4), "carbon", lod=True),
+    *_part((-17.4, -15.6), (-6.6, 6.6), (8.6, 10.0), "body", top_x=(-17.2, -16.2), lod=True),
+    *_mirrored((-18.2, -14.0), (6.6, 7.4), (3.0, 10.4), "body"),
+    *_part((-16.6, -15.4), (-0.4, 0.4), (4.4, 7.6), "carbon"),
+    *_part((-17.2, -15.4), (-5.0, 5.0), (3.4, 4.0), "carbon"),
+    # suspension arms (front, rear)
+    *_mirrored((8.6, 10.4), (3.8, 6.0), (2.4, 2.8), "carbon"),
+    *_mirrored((-11.4, -9.6), (3.6, 5.8), (2.6, 3.0), "carbon"),
+    # wheels and rims (rim colour = tyre compound)
+    # each tyre is two slabs (lower half widening, upper half narrowing) for a rounder, hexagonal profile
+    *_mirrored((8.1, 11.5), (5.2, 8.8), (0.0, 2.5), "tyre", top_x=(7.0, 12.6), lod=True),
+    *_mirrored((7.0, 12.6), (5.2, 8.8), (2.5, 5.0), "tyre", top_x=(8.1, 11.5), lod=True),
+    *_mirrored((8.9, 10.7), (8.8, 9.05), (1.6, 3.4), "rim"),
+    *_mirrored((-12.4, -8.2), (5.0, 9.3), (0.0, 2.8), "tyre", top_x=(-13.6, -7.0), lod=True),
+    *_mirrored((-13.6, -7.0), (5.0, 9.3), (2.8, 5.6), "tyre", top_x=(-12.4, -8.2), lod=True),
+    *_mirrored((-11.4, -9.2), (9.3, 9.55), (1.8, 3.8), "rim"),
 ]
+
+_Face = tuple[tuple[int, ...], tuple[float, float, float], tuple[float, float, float]]
+
+
+def _slab_geometry(slab: _Slab) -> tuple[list[tuple[float, float, float]], list[_Face]]:
+    """8 local vertices plus, per face, its vertex indices, outward normal and centre (all in car space)."""
+    (bx0, bx1, by0, by1), (tx0, tx1, ty0, ty1), z0, z1, _, _ = slab
+    v = [(bx0, by0, z0), (bx1, by0, z0), (bx1, by1, z0), (bx0, by1, z0),
+         (tx0, ty0, z1), (tx1, ty0, z1), (tx1, ty1, z1), (tx0, ty1, z1)]
+    cx = sum(p[0] for p in v) / 8
+    cy = sum(p[1] for p in v) / 8
+    cz = sum(p[2] for p in v) / 8
+    faces: list[_Face] = []
+    for idx in ((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)):
+        a, b, c = v[idx[0]], v[idx[1]], v[idx[2]]
+        ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
+        wx, wy, wz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
+        nx, ny, nz = uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx
+        length = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
+        nx, ny, nz = nx / length, ny / length, nz / length
+        fc = (sum(v[k][0] for k in idx) / 4, sum(v[k][1] for k in idx) / 4, sum(v[k][2] for k in idx) / 4)
+        if (fc[0] - cx) * nx + (fc[1] - cy) * ny + (fc[2] - cz) * nz < 0:
+            nx, ny, nz = -nx, -ny, -nz
+        faces.append((idx, (nx, ny, nz), fc))
+    return v, faces
+
+
+def _damage_tag(slab: _Slab) -> tuple[str, float]:
+    """Which breakable part a slab belongs to ("fw" front wing, "rw" rear wing flap) and its side."""
+    (x0, x1, y0, y1), _, z0, z1, _, _ = slab
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    side = 0.0 if abs(cy) < 1.0 else (1.0 if cy > 0 else -1.0)
+    if cx > 13.5 and z1 <= 3.1:
+        return "fw", side
+    if cx < -14.0 and z0 >= 8.5:
+        return "rw", side
+    return "", side
+
+
+_CAR_GEOMETRY = [(_slab_geometry(slab), slab[4], slab[5],
+                  ((slab[0][0] + slab[0][1]) / 2, (slab[0][2] + slab[0][3]) / 2), _damage_tag(slab))
+                 for slab in CAR_MODEL]
+_LIGHT = (0.42, -0.52, 0.74)
+
+
 _BOX_FACES: list[tuple[tuple[int, int, int, int], tuple[float, float, float]]] = [
     ((0, 2, 6, 4), (0, 0, -1)), ((1, 3, 7, 5), (0, 0, 1)),
     ((0, 1, 3, 2), (-1, 0, 0)), ((4, 5, 7, 6), (1, 0, 0)),
@@ -366,33 +449,40 @@ class Renderer3D:
         h = car.heading
         fx, fy, rx, ry = math.cos(h), math.sin(h), -math.sin(h), math.cos(h)
         px, py = car.pos.x, car.pos.y
-        colors = {"body": car.color, "helmet": car.profile.helmet, "dark": _shade(car.color, 0.45),
-                  "tyre": (22, 22, 24)}
-        boxes = CAR_BOXES if depth < 700 else CAR_BOXES[:2] + CAR_BOXES[5:7]
-        cam_local = ((self.cx - px) * fx + (self.cy - py) * fy, (self.cx - px) * rx + (self.cy - py) * ry)
-        ordered = sorted(boxes, key=lambda b: -((b[0][0] + b[0][1]) / 2 - cam_local[0]) ** 2
-                         - ((b[0][2] + b[0][3]) / 2 - cam_local[1]) ** 2)
+        body = car.color
+        rim = car.tyres.compound.color if car.tyres is not None else (150, 150, 158)
+        colors = {"body": body, "helmet": car.profile.helmet, "dark": _shade(body, 0.45), "carbon": (30, 30, 34),
+                  "tyre": (22, 22, 24), "rim": rim, "visor": (12, 12, 16),
+                  "accent": (min(255, body[0] + 70), min(255, body[1] + 70), min(255, body[2] + 70))}
+        near = depth < 700
+        cam_l = ((self.cx - px) * fx + (self.cy - py) * fy, (self.cx - px) * rx + (self.cy - py) * ry)
         shadow = [self.to_cam(px + fx * lx + rx * ly, py + fy * lx + ry * ly, 0.2)
                   for lx, ly in ((-17, -8), (17, -8), (17, 8), (-17, 8))]
         self.poly(surf, shadow, (25, 25, 28))
-        for (x0, x1, y0, y1, z0, z1), role in ordered:
+        d = car.damage
+
+        def intact(tag: tuple[str, float]) -> bool:
+            # broken parts fall off: first the endplate on the side that hit, then the whole wing
+            kind, side = tag
+            if kind == "fw":
+                return d.front_wing < 0.5 or (d.front_wing < 0.85 and side != d.wing_side)
+            if kind == "rw":
+                return d.rear < 0.7
+            return True
+        parts = [g for g in _CAR_GEOMETRY if (near or g[2]) and intact(g[4])]
+        # painter's order: far parts first (horizontal distance to the camera in car space)
+        parts.sort(key=lambda g: -((g[3][0] - cam_l[0]) ** 2 + (g[3][1] - cam_l[1]) ** 2))
+        lx_, ly_, lz_ = _LIGHT
+        for (verts, faces), role, _, _, _ in parts:
+            cam = None
             col = colors[role]
-            corners = []
-            for lx in (x0, x1):
-                for ly in (y0, y1):
-                    wx, wy = px + fx * lx + rx * ly, py + fy * lx + ry * ly
-                    for z in (z0, z1):
-                        corners.append(self.to_cam(wx, wy, z))
-            for idx, (nx, ny, nz) in _BOX_FACES:
-                if nz < 0:
+            for idx, (nx, ny, nz), (fcx, fcy, fcz) in faces:
+                # world-space normal and face centre -> back-face test against the camera
+                wnx, wny = fx * nx + rx * ny, fy * nx + ry * ny
+                wcx, wcy = px + fx * fcx + rx * fcy, py + fy * fcx + ry * fcy
+                if (self.cx - wcx) * wnx + (self.cy - wcy) * wny + (self.cz - fcz) * nz <= 0:
                     continue
-                if nz == 0:
-                    wnx, wny = fx * nx + rx * ny, fy * nx + ry * ny
-                    fcx = px + fx * ((x0 + x1) / 2 + nx * (x1 - x0) / 2) + rx * ((y0 + y1) / 2 + ny * (y1 - y0) / 2)
-                    fcy = py + fy * ((x0 + x1) / 2 + nx * (x1 - x0) / 2) + ry * ((y0 + y1) / 2 + ny * (y1 - y0) / 2)
-                    if (self.cx - fcx) * wnx + (self.cy - fcy) * wny <= 0:
-                        continue
-                    light = 0.8 + 0.2 * (wnx * 0.6 - wny * 0.8)
-                else:
-                    light = 1.15
-                self.poly(surf, [corners[k] for k in idx], _shade(col, light), depth)
+                if cam is None:
+                    cam = [self.to_cam(px + fx * vx + rx * vy, py + fy * vx + ry * vy, vz) for vx, vy, vz in verts]
+                light = 0.62 + 0.45 * max(0.0, wnx * lx_ + wny * ly_ + nz * lz_)
+                self.poly(surf, [cam[k] for k in idx], _shade(col, light), depth)

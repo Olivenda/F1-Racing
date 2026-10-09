@@ -48,6 +48,7 @@ class WeekendConfig:
     grid: list[str] | None = None
     results: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
     player: DriverProfile | None = PLAYER_PROFILE
+    player2: DriverProfile | None = None        # local split-screen opponent
     start_compound: str = "medium"
     assists: int = 1
     view3d: bool = False
@@ -72,7 +73,8 @@ class WeekendConfig:
 
     @property
     def field(self) -> list[DriverProfile]:
-        return ([self.player] if self.player is not None else []) + self.ai_profiles
+        humans = [p for p in (self.player, self.player2) if p is not None]
+        return humans + self.ai_profiles
 
     @property
     def difficulty(self) -> float:
@@ -123,6 +125,10 @@ class Session:
         self.time = 0.0
         self.cars: list[Car] = []
         self.player: Player_Car | None = None
+        self.player2: Player_Car | None = None
+        self.cameras: dict[Car, Camera] = {}
+        self.r3ds: dict[Car, Renderer3D] = {}
+        self.pit_menus: dict[Car, PitMenu] = {}
         self.camera = Camera()
         self.cam_index = 0
         self.paused = False
@@ -172,6 +178,12 @@ class Session:
                 car.set_assists(self.config.assists)
                 car.apply_setup(self.game.setup_for(self.track))
                 self.player = car
+            elif self.config.player2 is not None and prof is self.config.player2:
+                car = Player_Car(prof, self.track)
+                car.set_assists(self.config.assists)
+                car.apply_setup(self.game.setup_for(self.track))
+                car.slot = 1
+                self.player2 = car
             else:
                 net = self.game.brains.network(prof.brain, prof.checkpoint)
                 car = AI_Car(prof, self.track, net, engine_factor=self.config.difficulty * prof.pace)
@@ -181,9 +193,20 @@ class Session:
             car.damage.multiplier = 0.0 if self.config.damage == "off" else 1.0
             laps = max(1, self.config.race_laps)
             car.fill_fuel(self.start_fuel_laps(car), RACE_FUEL_KG / laps)
-            car.plank_per_lap = PLANK_RACE_MM / laps * (1.0 if car is self.player else random.uniform(0.85, 1.1))
+            car.plank_per_lap = PLANK_RACE_MM / laps * (1.0 if car.is_player else random.uniform(0.85, 1.1))
             self.cars.append(car)
         self.cam_index = self.cars.index(self.player) if self.player is not None else 0
+        self.pit_menus = {p: (self.pit_menu if p is self.player else PitMenu()) for p in self.players}
+        if self.player2 is not None:
+            # split screen: each player drives on their half of the keyboard, plus a controller if there is one
+            self.game.controls.assign_players(2)
+            assert self.player is not None
+            self.player.keyset, self.player2.keyset = "wasd", "arrows"
+            for p in self.players:
+                self.cameras[p] = Camera()
+                self.r3ds[p] = Renderer3D()
+        else:
+            self.game.controls.assign_players(1)
         own = [k for k, c in enumerate(self.cars) if c.profile.team == self.config.focus_team]
         if self.player is None and own:
             self.cam_index = own[0]
@@ -191,7 +214,7 @@ class Session:
 
     def fuel_margin(self, car: Car) -> float:
         """Extra laps of fuel on top of the race distance: the player's garage choice, AI a safe margin."""
-        if car is self.player and car.setup is not None:
+        if isinstance(car, Player_Car) and car.setup is not None:
             return car.setup.fuel / 2.0
         return 1.0
 
@@ -282,9 +305,16 @@ class Session:
             return
         if event.type != pygame.KEYDOWN:
             return
+        actor, event = self._route(event)
         key = event.key
-        if self.player is not None and self.pit_menu.handle_key(event, self.player, self):
+        if actor is not None and self.pit_menus[actor].handle_key(event, actor, self):
             return
+        if self.player2 is not None and actor is self.player2 and key not in (pygame.K_ESCAPE, pygame.K_p):
+            # player 2's keys only drive their own car
+            if key not in (pygame.K_SPACE, pygame.K_b, pygame.K_r):
+                return
+        if self.player2 is not None and (pygame.K_0 <= key <= pygame.K_9 or key in (pygame.K_c, pygame.K_m)):
+            return  # split screen: the cameras stay on the two players
         if self.spectator and key in (pygame.K_UP, pygame.K_DOWN):
             order = self.standings()
             pos = order.index(self.focus) + (-1 if key == pygame.K_UP else 1)
@@ -324,9 +354,9 @@ class Session:
         elif key == pygame.K_c:
             self.focus_car(self.cars[(self.cam_index + 1) % len(self.cars)])
             self.message(f"Kamera: {self.focus.name}", WHITE, 1.2)
-        elif key == pygame.K_r and self.player is not None and not self.player.frozen \
-                and self.player.autopilot is None and not self.player.in_pit:
-            self.player.respawn()
+        elif key == pygame.K_r and actor is not None and not actor.frozen \
+                and actor.autopilot is None and not actor.in_pit:
+            actor.respawn()
         elif key == pygame.K_v:
             self.view3d = not self.view3d
             self.message("3D-Verfolgerkamera" if self.view3d else "2D-Draufsicht", WHITE, 1.2)
@@ -343,13 +373,13 @@ class Session:
             self.show_fps = not self.show_fps
         elif key == pygame.K_h:
             self.hide_hud = not self.hide_hud
-        elif key == pygame.K_SPACE and self.player is not None and self.player.assist_level == 0:
-            if self.player.straight_mode:
-                self.player.straight_mode = False
+        elif key == pygame.K_SPACE and actor is not None and actor.assist_level == 0:
+            if actor.straight_mode:
+                actor.straight_mode = False
             else:
-                self.player.aero_request = True
-        elif key == pygame.K_b and self.player is not None and self.player.autopilot is None:
-            self.pit_menu.toggle(self.player)
+                actor.aero_request = True
+        elif key == pygame.K_b and actor is not None and actor.autopilot is None:
+            self.pit_menus[actor].toggle(actor)
         elif key == pygame.K_b and self.is_manager_car(self.focus):
             self._draft_team_order(self.focus)
         elif key == pygame.K_TAB and self.config.focus_team:
@@ -364,13 +394,37 @@ class Session:
     def on_key(self, key: int) -> None:
         pass
 
+    # player 2's keys next to the arrow keys, translated to the actions player 1 has on the left
+    P2_KEYS = {pygame.K_RCTRL: pygame.K_SPACE, pygame.K_RSHIFT: pygame.K_b, pygame.K_DELETE: pygame.K_r,
+               pygame.K_KP1: pygame.K_1, pygame.K_KP2: pygame.K_2, pygame.K_KP3: pygame.K_3,
+               pygame.K_KP4: pygame.K_4, pygame.K_KP5: pygame.K_5, pygame.K_KP_ENTER: pygame.K_RETURN}
+
+    @property
+    def players(self) -> list[Player_Car]:
+        return [p for p in (self.player, self.player2) if p is not None]
+
+    def _route(self, event: pygame.event.Event) -> tuple[Player_Car | None, pygame.event.Event]:
+        """Which player a key press belongs to (split screen), and the key in player 1's terms."""
+        if self.player2 is None:
+            return self.player, event
+        if getattr(event, "from_joystick", False):
+            slot = getattr(event, "player_slot", 0)
+            return (self.players[slot] if 0 <= slot < len(self.players) else None), event
+        if event.key in self.P2_KEYS:
+            mapped = pygame.event.Event(pygame.KEYDOWN, key=self.P2_KEYS[event.key], mod=event.mod, unicode="",
+                                        scancode=0)
+            return self.player2, mapped
+        if event.key in (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT):
+            return self.player2, event
+        return self.player, event
+
     @property
     def spectator(self) -> bool:
         return self.player is None
 
-    def enable_player_autopilot(self) -> None:
-        if self.player is not None:
-            self.player.enable_autopilot(self.game.brains.network(AUTOPILOT_BRAIN))
+    def enable_player_autopilot(self, car: Player_Car | None = None) -> None:
+        for p in ([car] if car is not None else self.players):
+            p.enable_autopilot(self.game.brains.network(AUTOPILOT_BRAIN))
 
     def save_recording(self) -> None:
         if self.player is not None:
@@ -392,6 +446,10 @@ class Session:
         self.camera.update(self.cars[self.cam_index], frame_dt)
         if self.view3d:
             self.r3d.update_camera(self.cars[self.cam_index], frame_dt)
+        for p, cam in self.cameras.items():
+            cam.update(p, frame_dt)
+            if self.view3d:
+                self.r3ds[p].update_camera(p, frame_dt)
         for m in self.messages:
             m[2] -= frame_dt
         self.messages = [m for m in self.messages if m[2] > 0]
@@ -423,6 +481,11 @@ class Session:
         for car in self.cars:
             car.physics_step(h)
         handle_collisions(self.cars, self.track, self.stewards.on_contact)
+        for car in self.cars:
+            if car.damage.pending_puncture:
+                car.damage.pending_puncture = False
+                if not car.puncture and not car.dnf:
+                    self.on_puncture(car)
         self.post_collisions()
         for car in self.cars:
             car.update_track_state(self)
@@ -612,11 +675,11 @@ class Session:
             return
         d = car.damage
         if self.config.damage == "dnf" and d.is_terminal:
-            self.retire(car, "Aufhängung gebrochen")
+            self.retire(car, "Motor überhitzt" if d.cooling >= 1.0 else "Aufhängung gebrochen")
             return
         if car.is_player or car.pit_request is not None or car.pit_state is not None:
             return
-        if (d.front_wing > 0.5 or d.rear > 0.55 or d.suspension > 0.4) and self.damage_pit_allowed(car):
+        if (d.front_wing > 0.5 or d.rear > 0.55 or d.suspension > 0.4 or d.cooling > 0.5) and                 self.damage_pit_allowed(car):
             car.pit_request = self.repair_compound(car)
             self.add_feed(f"{car.short}: Schaden - Box für Reparatur")
 
@@ -635,6 +698,14 @@ class Session:
 
     def on_retire(self, car: Car) -> None:
         pass
+
+    def on_puncture(self, car: Car) -> None:
+        car.puncture = True
+        self.add_feed(f"REIFENSCHADEN: {car.short} (Kontakt)")
+        if car is self.player:
+            self.message("REIFENSCHADEN! Sofort an die Box (B)", (255, 80, 80), 4.0)
+        elif car.pit_request is None:
+            car.pit_request = car.tyres.compound.key if car.tyres else "medium"
 
     def _director(self, frame_dt: float) -> None:
         self.director_timer -= frame_dt
@@ -800,8 +871,8 @@ class Session:
 
     @property
     def show_brake_line(self) -> bool:
-        return self.show_line or (self.player is not None and self.player.assist_level >= 1
-                                   and self.player.autopilot is None)
+        p = self.cars[self.cam_index]
+        return self.show_line or (isinstance(p, Player_Car) and p.assist_level >= 1 and p.autopilot is None)
 
     def _draw_overview(self, screen: pygame.Surface) -> None:
         area = pygame.Rect(240, 40, SCREEN_WIDTH - 520, SCREEN_HEIGHT - 120)
@@ -843,12 +914,40 @@ class Session:
             self._draw_overview(screen)
             self._draw_overlays(screen)
             return
+        if self.player2 is not None:
+            self._draw_split(screen)
+            return
+        self._draw_view(screen)
+        self._draw_overlays(screen)
+
+    def _draw_split(self, screen: pygame.Surface) -> None:
+        """Two views side by side: each player's world view is rendered full size and its middle half is shown."""
+        buf = getattr(self, "_split_buf", None)
+        if buf is None:
+            buf = self._split_buf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        half = SCREEN_WIDTH // 2
+        keep = self.camera, self.r3d, self.cam_index
+        for k, p in enumerate(self.players):
+            self.camera, self.r3d, self.cam_index = self.cameras[p], self.r3ds[p], self.cars.index(p)
+            self._draw_view(buf, rain=False)
+            screen.blit(buf, (k * half, 0), pygame.Rect(half // 2, 0, half, SCREEN_HEIGHT))
+        self.camera, self.r3d, self.cam_index = keep
+        self.weather.draw(screen, self._frame_dt, view3d=self.view3d)
+        pygame.draw.line(screen, (10, 10, 12), (half, 0), (half, SCREEN_HEIGHT), 4)
+        if not self.hide_hud or self.paused:
+            self.game.hud.draw_split(screen, self)
+            for k, p in enumerate(self.players):
+                self.pit_menus[p].draw(screen, self.game.fonts, p, self, center_x=half // 2 + k * half)
+        if self.paused:
+            self.game.hud.draw_pause(screen, self)
+
+    def _draw_view(self, screen: pygame.Surface, rain: bool = True) -> None:
         if self.view3d:
             self.r3d.draw(screen, self.track, self.cars + self.extra_objects(), self.cars[self.cam_index],
                           self.show_brake_line,
                           self.game.fonts.tiny, self.garages(), rain=self.weather.rain)
-            self.weather.draw(screen, self._frame_dt, view3d=True)
-            self._draw_overlays(screen)
+            if rain:
+                self.weather.draw(screen, self._frame_dt, view3d=True)
             return
         track = self.track
         off = self.camera.offset(track)
@@ -871,19 +970,19 @@ class Session:
             obj.draw(screen, off, self.time)
         self.fx.draw(screen, off)
         focus = self.cars[self.cam_index]
-        self.weather.draw(screen, self._frame_dt, (focus.vel.x, focus.vel.y))
+        if rain:
+            self.weather.draw(screen, self._frame_dt, (focus.vel.x, focus.vel.y))
 
         for car in self.cars:
             sp = car.pos - off
             if not (0 < sp.x < SCREEN_WIDTH and 0 < sp.y < SCREEN_HEIGHT):
                 continue
             col = (0, 230, 255) if car.is_player else WHITE
-            img = self._label("DU" if car.is_player else car.short, col)
+            img = self._label(("DU" if car is self.player and self.player2 is None else car.short)
+                              if car.is_player else car.short, col)
             screen.blit(img, img.get_rect(midbottom=(sp.x, sp.y - 20)))
             if self.show_ai_info and isinstance(car, AI_Car):
                 self._draw_ai_debug(screen, car, off)
-
-        self._draw_overlays(screen)
 
     def _draw_brake_line(self, screen: pygame.Surface, off: Vector2) -> None:
         track, car = self.track, self.focus
@@ -1013,9 +1112,10 @@ class QualifyingSession(Session):
             car.session_done = True
             car.retired_ghost = True
             if isinstance(car, Player_Car):
-                self.enable_player_autopilot()
-                self.time_scale = self.fast_forward_scale
-                self.message("Qualifying beendet - die übrigen Fahrer werden simuliert", WHITE, 4.0)
+                self.enable_player_autopilot(car)
+                if all(p.session_done for p in self.players):
+                    self.time_scale = self.fast_forward_scale
+                    self.message("Qualifying beendet - die übrigen Fahrer werden simuliert", WHITE, 4.0)
             if all(c.session_done for c in self.cars):
                 self.end_timer = 2.5
 
@@ -1097,15 +1197,15 @@ class RaceSession(Session):
         return self.race_started
 
     def _judge_launch(self) -> None:
-        p = self.player
-        if p is None or p.autopilot is not None:
-            return
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_UP] or keys[pygame.K_w] or self.game.controls.throttle_held():
-            p.launch_spin = 1.2
-            self.message("ZU FRÜH GAS - Räder drehen durch!", (255, 140, 30), 2.5)
-        else:
-            self._await_reaction = True
+        for p in self.players:
+            if p.autopilot is not None:
+                continue
+            if p.throttle_held(self.game.controls):
+                p.launch_spin = 1.2
+                who = "" if self.player2 is None else f"{p.short}: "
+                self.message(f"{who}ZU FRÜH GAS - Räder drehen durch!", (255, 140, 30), 2.5)
+            elif p is self.player:
+                self._await_reaction = True
 
     def neutralize(self, car: Car) -> None:
         self.rc.governor(car)
@@ -1118,6 +1218,10 @@ class RaceSession(Session):
         if not car.in_pit:
             self.rc.incident(car, "dnf")
 
+    def on_puncture(self, car: Car) -> None:
+        if self.race_started:
+            self.rc.puncture(car, "Kontakt")
+
     def post_collisions(self) -> None:
         if not self.race_started:
             return
@@ -1126,8 +1230,6 @@ class RaceSession(Session):
                 car.seen_crashes = car.crashes
                 if not car.dnf:
                     self.rc.incident(car, "crash")
-                    if not car.puncture and random.random() < 0.06:
-                        self.rc.puncture(car, "Kontakt")
 
     def _plan_failures(self) -> None:
         self.failures: dict[str, str] = {}
@@ -1330,9 +1432,11 @@ class RaceSession(Session):
                 self.winner_time = self.time
                 self.add_feed(f"Zielflagge! Erster im Ziel: {car.name}")
             if isinstance(car, Player_Car):
-                self.enable_player_autopilot()
-                self.time_scale = self.fast_forward_scale
-                self.message(f"ZIEL! Du bist P{place}", YELLOW if place > 3 else (255, 215, 0), 5.0)
+                self.enable_player_autopilot(car)
+                if all(p.session_done for p in self.players):
+                    self.time_scale = self.fast_forward_scale
+                who = "Du bist" if self.player2 is None else f"{car.name}:"
+                self.message(f"ZIEL! {who} P{place}", YELLOW if place > 3 else (255, 215, 0), 5.0)
             if all(c.session_done for c in self.cars):
                 self.end_timer = 3.0
         elif car is self.player and car.laps_done == self.total_laps - 1:
