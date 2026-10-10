@@ -547,7 +547,8 @@ class SettingsScreen:
                          "grün, schwarz-weiß, Zielflagge). Voll: + blinkende Bildschirmränder, Spotter-Pfeile für "
                          "Autos neben dir und Warnung vor langsamen Autos voraus.",
         "Startkamera": "Mit dieser Kamera startet die 3D-Ansicht. Im Rennen mit K wechseln (Shift+K zurück).",
-        "Vollbild": "Skaliert das Spiel auf den ganzen Bildschirm.",
+        "Vollbild": "Randloses Vollbild über den ganzen Bildschirm (die Auflösung des Monitors bleibt). "
+                    "Jederzeit mit Alt+Enter oder F11 umschalten. Im Fenster lässt sich das Spiel auch größer ziehen.",
     }
     ATTRS = {"Sprache": "language", "Einheiten": "units", "Sound": "sound", "Fahrhilfen": "assists",
              "Getriebe": "gearbox", "Schaden": "damage", "Reifenverschleiß": "tyre_wear", "Wetter": "weather",

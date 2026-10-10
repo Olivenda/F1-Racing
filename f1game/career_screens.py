@@ -453,6 +453,9 @@ class OfferScreen(_Screen):
             draw_text(screen, o["team"].upper(), f.large, WHITE, (rect.x + 26, rect.y + 10))
             if o.get("current") or o["team"] == c.team:
                 draw_text(screen, "AKTUELLES TEAM", f.tiny, CYAN, (rect.x + 26, rect.y + 46), shadow=False)
+            elif o.get("keen"):
+                draw_text(screen, "WILL DICH UNBEDINGT (+10 % Gehalt)", f.tiny, GOLD, (rect.x + 26, rect.y + 46),
+                          shadow=False)
             draw_text(screen, f"Auto-Ranking P{o['rank']} von {len(teams)}", f.small, GREY, (rect.x + 26, rect.y + 58),
                       shadow=False)
             salary = o["salary"] * (demand if selected else 1.0)
@@ -526,8 +529,12 @@ class CareerHub(_Screen):
         if c.kind == "team":
             acts.append(("dev", "ENTWICKLUNG"))
             acts.append(("market", "FAHRERMARKT"))
+            acts.append(("staff", "MITARBEITER"))
+            acts.append(("academy", "AKADEMIE"))
         else:
             acts.append(("personal", "PERSÖNLICH"))
+        if c.player_drives:
+            acts.append(("skills", f"SKILLS ({c.xp} XP)"))
         acts.append(("design", "DESIGN"))
         acts.append(("compare", "AUTO-VERGLEICH"))
         acts.append(("stats", "STATISTIK"))
@@ -538,7 +545,7 @@ class CareerHub(_Screen):
         acts.append(("quit", "WIRKLICH LÖSCHEN?" if self.confirm_quit else "LÖSCHEN"))
         return acts
 
-    SECOND_ROW = ("compare", "stats", "trophies", "history", "options", "slots", "quit")
+    SECOND_ROW = ("design", "compare", "stats", "trophies", "history", "options", "slots", "quit")
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type != pygame.KEYDOWN:
@@ -576,11 +583,12 @@ class CareerHub(_Screen):
             game.state = CarCompareScreen(game)
         elif act == "history":
             game.state = HistoryScreen(game)
-        elif act in ("personal", "design", "stats", "trophies", "options"):
+        elif act in ("personal", "design", "stats", "trophies", "options", "skills", "staff", "academy"):
             from . import career_extras
             screen_cls = {"personal": career_extras.PersonalScreen, "design": career_extras.DesignScreen,
                           "stats": career_extras.StatsScreen, "trophies": career_extras.AchievementsScreen,
-                          "options": career_extras.CareerOptionsScreen}[act]
+                          "options": career_extras.CareerOptionsScreen, "skills": career_extras.SkillsScreen,
+                          "staff": career_extras.StaffScreen, "academy": career_extras.AcademyScreen}[act]
             game.state = screen_cls(game)
         elif act == "slots":
             game.career = None
@@ -628,7 +636,7 @@ class CareerHub(_Screen):
     def _two_bars(self, screen: pygame.Surface, x: int, y: int, w: int,
                   items: list[tuple[str, float, tuple[int, int, int]]]) -> None:
         f = self.game.fonts
-        bw = (w - 16) // 2
+        bw = (w - 16 * (len(items) - 1)) // len(items)
         for k, (label, val, col) in enumerate(items):
             bx = x + k * (bw + 16)
             draw_text(screen, label, f.tiny, GREY, (bx, y), shadow=False)
@@ -686,8 +694,11 @@ class CareerHub(_Screen):
         my = ry + 70
         mates = c.lineup(c.team) if c.team else []
         if mates:
-            draw_text(screen, f"TEAMKOLLEGE: {_fit(mates[0], f.tiny, 200)}", f.tiny, GREY, (x, my), shadow=False)
-            draw_text(screen, f"Duelle {log.get('mate_ahead', 0)}:{log.get('mate_behind', 0)}", f.tiny, WHITE,
+            draw_text(screen, f"TEAMKOLLEGE: {_fit(mates[0], f.tiny, 170)}", f.tiny, GREY, (x, my), shadow=False)
+            qa, qb = log.get("mate_q_ahead", 0), log.get("mate_q_behind", 0)
+            ra, rb = log.get("mate_ahead", 0), log.get("mate_behind", 0)
+            draw_text(screen, f"Quali {qa}:{qb} · Rennen {ra}:{rb}", f.tiny,
+                      GREEN if qa + ra > qb + rb else RED if qa + ra < qb + rb else WHITE,
                       (box.right - 18, my), anchor="topright", shadow=False)
         if c.team:
             ay = my + 22
@@ -702,6 +713,13 @@ class CareerHub(_Screen):
                 draw_text(screen, label, f.tiny, WHITE, (x, yy), shadow=False)
                 self.bar(screen, x + 80, yy + 4, 210, max(0.05, 1.0 - (p - 1) / max(1, len(vals) - 1)), bc, 7)
                 draw_text(screen, f"P{p}", f.tiny, bc, (box.right - 18, yy), anchor="topright", shadow=False)
+        from .career_plus import MAX_SKILL, SKILLS
+        lvl = sum(c.skills.get(k, 0) for k in SKILLS)
+        draw_text(screen, f"SKILLS {lvl}/{len(SKILLS) * MAX_SKILL} · {c.xp} XP verfügbar", f.tiny, CYAN,
+                  (x, box.bottom - 106), shadow=False)
+        if c.interest:
+            draw_text(screen, _fit("INTERESSE: " + ", ".join(c.interest), f.tiny, box.w - 36), f.tiny, GOLD,
+                      (x, box.bottom - 88), shadow=False)
         draw_form(screen, f, x, box.bottom - 58, c.form())
 
     def _team_card(self, screen: pygame.Surface) -> None:
@@ -713,10 +731,15 @@ class CareerHub(_Screen):
         x, y = box.x + 18, box.y + 16
         draw_text(screen, c.team.upper(), f.medium, WHITE, (x, y))
         draw_text(screen, f"Budget: {c.budget:.1f} Mio", f.medium, GREEN if c.budget >= 0 else RED, (x, y + 28))
-        draw_text(screen, f"Deckel noch {c.cap_left():.1f} Mio", f.tiny, GREY, (box.right - 18, y + 36),
+        draw_text(screen, f"Deckel noch {c.cap_left():.1f} Mio", f.tiny, GREY, (box.right - 18, y + 20),
                   anchor="topright", shadow=False)
-        self._two_bars(screen, x, y + 62, box.w - 36, [("TEAMRUF", c.team_rep, GOLD),
-                                                       ("SPONSOR-LAUNE", c.sponsor_mood, CYAN)])
+        from .career_plus import board_label
+        board_col = GREEN if c.board >= 60 else YELLOW if c.board >= 30 else RED
+        self._two_bars(screen, x, y + 62, box.w - 36, [("RUF", c.team_rep, GOLD),
+                                                       ("SPONSOR", c.sponsor_mood, CYAN),
+                                                       ("VORSTAND", c.board, board_col)])
+        draw_text(screen, f"Vorstand {board_label(c.board)}", f.tiny, board_col, (box.right - 18, y + 36),
+                  anchor="topright", shadow=False)
         sp = c.sponsor
         draw_text(screen, _fit(f"Sponsor: {sp['name']} · {sp['text']}" if sp else "Kein Titelsponsor gewählt!",
                                f.tiny, box.w - 36), f.tiny, CYAN if sp else RED, (x, y + 90), shadow=False)
@@ -750,7 +773,10 @@ class CareerHub(_Screen):
         else:
             draw_text(screen, "Keine Entwicklungsprojekte laufen", f.tiny, GREY, (x, py), shadow=False)
         dy = py + 40
-        draw_text(screen, f"FAHRER · Crew-Stopp {crew_stop_time(c.crew):.2f} s", f.tiny, GREY, (x, dy), shadow=False)
+        stars = " ".join(f"{label} {c.staff_stars(role)}*" for role, label in (("td", "TD"), ("mech", "Mech"),
+                                                                                  ("eng", "Ing")))
+        draw_text(screen, _fit(f"FAHRER · Stopp {c.pit_stop_times()[c.team]:.2f} s · {stars} · Akademie "
+                               f"{len(c.juniors())}", f.tiny, box.w - 36), f.tiny, GREY, (x, dy), shadow=False)
         rows2 = ([(c.player_name + " (du)", "-", "-")] if c.player_drives else []) + \
             [(n, str(c.drivers[n]["rating"]), f"{c.drivers[n].get('years', 0)} J.") for n in c.own_drivers()]
         for k, (name, rating, years) in enumerate(rows2):
@@ -902,6 +928,11 @@ class DevelopmentScreen(_Screen):
             self.sel = (self.sel - 1) % len(self.rows)
         elif event.key == pygame.K_DOWN:
             self.sel = (self.sel + 1) % len(self.rows)
+        elif event.key == pygame.K_TAB:
+            c.dev_focus = "now" if c.dev_focus == "next" else "next"
+            c.save()
+            self.say("Neue Projekte: " + ("für das Auto der nächsten Saison" if c.dev_focus == "next"
+                                          else "für das aktuelle Auto"))
         elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
             row = self.rows[self.sel]
             if row == "back":
@@ -981,10 +1012,24 @@ class DevelopmentScreen(_Screen):
                   (x, y + 18))
         self.bar(screen, x, y + 48, rb.w - 36, spent / COST_CAP, YELLOW if spent < COST_CAP * 0.8 else RED)
         y += 76
+        # where new projects go: this car now, or next season's car (bigger effect, later)
+        from .career_plus import NEXT_YEAR_FACTOR
+        fb = pygame.Rect(x - 4, y - 6, rb.w - 28, 40)
+        nxt = c.dev_focus == "next"
+        pygame.draw.rect(screen, (40, 70, 120) if nxt else (40, 46, 58), fb, border_radius=6)
+        draw_text(screen, "FOKUS NEUER PROJEKTE (TAB)", f.tiny, GREY, (fb.x + 10, fb.y + 4), shadow=False)
+        draw_text(screen, f"Nächste Saison (x{NEXT_YEAR_FACTOR:.1f} Wirkung)" if nxt else "Aktuelles Auto (sofort)",
+                  f.small_bold, CYAN if nxt else WHITE, (fb.x + 10, fb.y + 19), shadow=False)
+        mouse_item(fb, self, self.sel, key=pygame.K_TAB, hover=False)
+        if c.next_year:
+            draw_text(screen, f"{len(c.next_year)} fertig", f.tiny, GREEN, (fb.right - 10, fb.y + 4),
+                      anchor="topright", shadow=False)
+        y += 46
         draw_text(screen, "LAUFENDE PROJEKTE", f.tiny, GREY, (x, y), shadow=False)
         for k, p in enumerate(c.projects):
             name = AREAS[p["area"]][0] if p["area"] in AREAS else "Zuverlässigkeit"
-            draw_text(screen, f"{name} · Stufe {c.area_level(p['area']) + 1}", f.small_bold, WHITE,
+            draw_text(screen, f"{name} · Stufe {c.area_level(p['area']) + 1}" + (" · nächstes Jahr" if p.get("next")
+                                                                                   else ""), f.small_bold, WHITE,
                       (x, y + 20 + k * 40), shadow=False)
             draw_text(screen, f"fertig nach {p['races_left']} Rennen · {p['cost']:.1f} Mio investiert", f.tiny,
                       (120, 200, 255), (x, y + 40 + k * 40), shadow=False)
@@ -995,7 +1040,7 @@ class DevelopmentScreen(_Screen):
                 f"Mit {(1 - c.project_success()) * 100:.0f} % Wahrscheinlichkeit bringt ein Teil nur die halbe Wirkung. "
                 "Windkanal: kürzere Bauzeit + höhere Erfolgschance. Simulator: deine Fahrer werden besser. "
                 "Fabrik: Teile billiger. Infrastruktur zählt nicht zur Budgetobergrenze, kostet aber laufend. "
-                "Auch die KI-Teams entwickeln während der Saison weiter!")
+                "Teile fürs nächste Jahr wirken stärker, aber erst ab dem ersten Rennen der neuen Saison.")
         for k, line in enumerate(_wrap(text, f.small, rb.w - 36)):
             draw_text(screen, line, f.small, (205, 205, 210), (x, y + k * 22), shadow=False)
         self.draw_status(screen, SCREEN_HEIGHT - 26)
@@ -1169,9 +1214,11 @@ class MarketScreen(_Screen):
 
     def entries(self) -> list[str]:
         c = self.career
-        free = [n for n, d in c.drivers.items() if not d.get("default") and not d["team"]]
+        free = [n for n, d in c.drivers.items() if not d.get("default") and not d["team"]
+                and d.get("junior") in (None, c.team)]
         key = [lambda n: -c.drivers[n]["rating"], lambda n: c.drivers[n]["salary"], lambda n: c.drivers[n]["age"]]
-        return c.own_drivers() + sorted(free, key=key[self.sort])
+        juniors = c.juniors()
+        return c.own_drivers() + juniors + sorted((n for n in free if n not in juniors), key=key[self.sort])
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type != pygame.KEYDOWN:
@@ -1247,6 +1294,8 @@ class MarketScreen(_Screen):
             draw_text(screen, f"{d['salary']:.1f}", f.mono, WHITE, (box.x + 630, y + 1), shadow=False)
             if name in own:
                 draw_text(screen, f"im Team · {d.get('years', 0)} J.", f.tiny, CYAN, (box.x + 700, y + 3), shadow=False)
+            elif d.get("junior") == c.team:
+                draw_text(screen, "Akademie", f.tiny, GREEN, (box.x + 700, y + 3), shadow=False)
             else:
                 draw_text(screen, f"{need:.0f}", f.mono, GREEN if willing else RED, (box.x + 720, y + 1), shadow=False)
         if len(entries) > self.VISIBLE:
@@ -1292,7 +1341,10 @@ class MarketScreen(_Screen):
             ok = c.team_rep >= need
             draw_text(screen, f"Vertragslänge: < {self.years} Saison{'s' if self.years > 1 else ''} >", f.small_bold,
                       YELLOW, (x, yy), shadow=False)
-            draw_text(screen, ("Würde unterschreiben" if ok else f"Will ein Team mit Ruf {need:.0f}"),
+            if c.drivers[name].get("junior") == c.team:
+                ok = True
+            draw_text(screen, ("Eigener Junior - ohne Ablöse" if c.drivers[name].get("junior") == c.team else
+                               "Würde unterschreiben" if ok else f"Will ein Team mit Ruf {need:.0f}"),
                       f.small_bold, GREEN if ok else RED, (x, yy + 28), shadow=False)
             draw_text(screen, "ENTER: verpflichten", f.small, WHITE, (x, yy + 56), shadow=False)
         hint = "Pfeile hoch/runter wählen · links/rechts Vertragslänge · TAB sortieren · ESC zurück"

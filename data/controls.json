@@ -1,5 +1,5 @@
 {
- "enabled": false,
+ "enabled": true,
  "devices": {
   "Xbox 360 Controller": {
    "kind": "gamepad",

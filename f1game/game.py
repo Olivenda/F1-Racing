@@ -54,7 +54,7 @@ class Game:
         set_language(self.settings.language)
         self.sound = SoundSystem(self.settings.sound)
         self.controls = Controls()
-        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        self._open_window()
         self.apply_display()
         self.clock = pygame.time.Clock()
         self.fonts = Fonts()
@@ -84,6 +84,10 @@ class Game:
             in_session = isinstance(self.state, Session)
             events = []
             for event in pygame.event.get():
+                if event.type == pygame.KEYDOWN and (event.key == pygame.K_F11 or event.key in (
+                        pygame.K_RETURN, pygame.K_KP_ENTER) and event.mod & pygame.KMOD_ALT):
+                    self.toggle_fullscreen()        # Alt+Enter / F11: never reaches the menus or the race
+                    continue
                 events.append(event)
                 if event.type in (pygame.JOYBUTTONDOWN, pygame.JOYHATMOTION, pygame.JOYDEVICEADDED,
                                   pygame.JOYDEVICEREMOVED):
@@ -353,7 +357,8 @@ class Game:
                             focus_team=career.team if career.kind == "team" else None,
                             reliability=career.reliability_map(), safety_car=st.safety_car,
                             weather=st.weather, gearbox=st.gearbox,
-                            objective=career.weekend_goal.get("text") if career.kind == "driver" else None)
+                            objective=career.weekend_goal.get("text") if career.kind == "driver" else None,
+                            player_skills=career.player_skills(), slow_stop=career.slow_stop_chances())
         self.config = cfg
         first = {"weekend": "practice", "practice": "practice", "qualifying": "qualifying", "race": "race"}[cfg.mode]
         self.start_session(first)
@@ -381,12 +386,65 @@ class Game:
     def open_settings(self) -> None:
         self.state = SettingsScreen(self)
 
-    def apply_display(self) -> None:
-        flags = (pygame.SCALED | pygame.FULLSCREEN) if self.settings.fullscreen else 0
+    # One scaled window for the whole game: the 1280x720 picture is stretched to whatever size the window has
+    # (black bars keep the aspect), the mouse is mapped back to game coordinates, and it can be dragged bigger.
+    WINDOW_FLAGS = pygame.SCALED | pygame.RESIZABLE
+
+    def _open_window(self, fullscreen: bool = False) -> None:
         try:
-            self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), flags)
+            self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT),
+                                                  self.WINDOW_FLAGS | (pygame.FULLSCREEN if fullscreen else 0))
         except pygame.error:
             self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+
+    def apply_display(self) -> None:
+        """Fullscreen on/off. The same window is switched to borderless desktop fullscreen (no change of the
+        monitor's resolution, Alt+Tab keeps working) instead of being recreated with other flags, which on
+        Windows could leave a black, wrongly sized or windowed picture."""
+        want = bool(self.settings.fullscreen)
+        try:
+            if pygame.display.is_fullscreen() != want:
+                pygame.display.toggle_fullscreen()
+        except pygame.error:
+            self._open_window(want)
+        try:
+            ok = pygame.display.is_fullscreen() == want
+        except pygame.error:
+            ok = False
+        if not ok:      # the toggle did not take: build the window again with the wanted mode
+            self._open_window(want)
+        if not want:
+            self._fit_window()
+        self.screen = pygame.display.get_surface() or self.screen
+
+    @staticmethod
+    def _fit_window() -> None:
+        """Back from fullscreen the window would keep the size of the whole monitor (or, when the game started in
+        fullscreen, has no earlier size to go back to): make it ~85 % of that monitor, centred on it."""
+        try:
+            import warnings
+            from pygame._sdl2.video import Window
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                win = Window.from_display_module()
+            w, h = win.size
+            if not any(w >= dw - 2 and h >= dh - 60 for dw, dh in pygame.display.get_desktop_sizes()):
+                return      # a normal window the player sized himself: leave it
+            scale = max(1.0, min(w * 0.85 / SCREEN_WIDTH, h * 0.85 / SCREEN_HEIGHT))
+            nw, nh = int(SCREEN_WIDTH * scale), int(SCREEN_HEIGHT * scale)
+            x, y = win.position
+            win.size = (nw, nh)
+            win.position = (x + (w - nw) // 2, y + (h - nh) // 2)
+        except (ImportError, pygame.error, AttributeError, TypeError, ValueError):
+            pass
+
+    def toggle_fullscreen(self) -> None:
+        """Alt+Enter / F11 anywhere in the game."""
+        self.settings.fullscreen = not self.settings.fullscreen
+        self.apply_display()
+        self.settings.save()
+        self.toast_text(tr("Vollbild an (Alt+Enter: Fenster)") if self.settings.fullscreen
+                        else tr("Fenstermodus (Alt+Enter: Vollbild)"), 1800)
 
     def apply_player_name(self) -> None:
         self.player_name = self.settings.player_name

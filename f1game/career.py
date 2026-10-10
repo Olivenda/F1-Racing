@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Any
 from .career_events import (DRIVER_PRESS, TEAM_PRESS, base_reliability, goal_met, make_weekend_goal,
                             pick_press, sponsor_offers, sponsor_payout)
 from .career_achievements import ACHIEVEMENTS, make_rookie, newly_unlocked
+from .career_plus import (ACADEMY_FEE, ACADEMY_SLOTS, ACADEMY_UPKEEP, BOARD_START, JUNIOR_MAX_AGE, MAX_SKILL,
+                          NEXT_YEAR_FACTOR, SKILL_COST, SKILLS, STAFF_ROLES, board_label, race_xp, staff_candidates,
+                          staff_rep_needed)
 from .championship import POINTS, Championship
 from .profiles import (DATA_DIR, DriverProfile, Team, load_pool, player_profile, rating_to_checkpoint,
                        rating_to_pace)
@@ -164,6 +167,14 @@ class Career:
     achievements: dict[str, int] = field(default_factory=dict)
     new_achievements: list[str] = field(default_factory=list)
     race_log: list[dict[str, Any]] = field(default_factory=list)
+    xp: int = 0
+    skills: dict[str, int] = field(default_factory=lambda: {k: 0 for k in SKILLS})
+    interest: list[str] = field(default_factory=list)       # teams that want you (driver career, from mid-season)
+    staff: dict[str, dict[str, Any]] = field(default_factory=dict)
+    staff_offers: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    board: float = BOARD_START
+    dev_focus: str = "now"                                   # "now" or "next" (next season's car)
+    next_year: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def create(cls, slot: str, kind: str, player_name: str, difficulty: str, laps: int, fmt: str, teams: list[Team],
@@ -191,6 +202,7 @@ class Career:
             name = team_name.strip() or f"{player_name} Racing"
             career.teams[name] = {"color": list(team_color), **NEW_TEAM_BASE, "own": True}
             career.team = name
+            career.staff_offers = staff_candidates(career.team_rep, set())
             career.news.append(f"Willkommen, Teamchef! {name} startet mit {START_BUDGET:.0f} Mio Budget.")
             career.news.append("Hol dir im Fahrermarkt " + ("einen Teamkollegen." if player_drives else "zwei Fahrer."))
         else:
@@ -210,7 +222,9 @@ class Career:
         self.season_log = {"start_rep": self.reputation if self.kind == "driver" else self.team_rep,
                            "income": 0.0, "expenses": 0.0, "rival_ahead": 0, "rival_behind": 0,
                            "mate_ahead": 0, "mate_behind": 0, "dev_spent": 0.0, "wins": 0, "podiums": 0,
-                           "points": 0, "goals_met": 0, "goals": 0, "failures": 0}
+                           "points": 0, "goals_met": 0, "goals": 0, "failures": 0, "mate_q_ahead": 0,
+                           "mate_q_behind": 0, "xp": 0}
+        self.interest = []
         self._ensure_reliability()
         self._pick_rival()
         if self.kind == "team":
@@ -286,14 +300,107 @@ class Career:
             return None
         prof = player_profile(self.team_obj(self.team), self.player_name)
         return replace(prof, rating=0, short=self.player_short or prof.short, helmet=tuple(self.helmet),
-                       number=self.player_number)
+                       number=self.player_number, tyre_mgmt=1.0 - 0.05 * self.skills.get("tyres", 0))
+
+    def player_skills(self) -> dict[str, int]:
+        return {k: v for k, v in self.skills.items() if v} if self.player_drives else {}
+
+    def skill_cost(self, key: str) -> int | None:
+        lvl = self.skills.get(key, 0)
+        return SKILL_COST[lvl] if lvl < MAX_SKILL else None
+
+    def buy_skill(self, key: str) -> str:
+        cost = self.skill_cost(key)
+        if cost is None:
+            return f"{SKILLS[key][0]} bereits auf Maximalstufe"
+        if self.xp < cost:
+            return f"Zu wenig XP ({cost} nötig, du hast {self.xp})"
+        self.xp -= cost
+        self.skills[key] = self.skills.get(key, 0) + 1
+        self.news.insert(0, f"Neue Fähigkeit: {SKILLS[key][0]} Stufe {self.skills[key]}")
+        self.save()
+        return f"{SKILLS[key][0]} Stufe {self.skills[key]}"
+
+    # ------------------------------------------------------------------ staff (team career)
+    def staff_stars(self, role: str) -> int:
+        return int(self.staff.get(role, {}).get("stars", 0)) if self.kind == "team" else 0
+
+    def hire_staff(self, role: str, index: int) -> str:
+        offers = self.staff_offers.get(role, [])
+        if not 0 <= index < len(offers):
+            return ""
+        cand = offers[index]
+        need = staff_rep_needed(cand["stars"])
+        if self.team_rep < need:
+            return f"{cand['name']} will nicht: Teamruf {need:.0f} nötig (hast {self.team_rep:.0f})"
+        fee = cand["salary"] * 0.5
+        if self.budget < fee:
+            return f"Zu wenig Budget für die Ablöse ({fee:.1f} Mio)"
+        self.budget -= fee
+        self.season_log["expenses"] = self.season_log.get("expenses", 0.0) + fee
+        old = self.staff.get(role)
+        self.staff[role] = dict(cand)
+        offers.pop(index)
+        if old:
+            offers.append(old)
+        title = STAFF_ROLES[role][0]
+        self.news.insert(0, f"Neuer {title}: {cand['name']} ({cand['stars']} Sterne, {cand['salary']:.1f} Mio/Saison)")
+        self.save()
+        return f"{cand['name']} ist dein {title}"
+
+    def staff_salaries(self) -> float:
+        return sum(p.get("salary", 0.0) for p in self.staff.values()) if self.kind == "team" else 0.0
+
+    # ------------------------------------------------------------------ junior academy (team career)
+    def juniors(self) -> list[str]:
+        return [n for n, d in self.drivers.items() if d.get("junior") == self.team and not d["team"]]
+
+    def academy_candidates(self) -> list[str]:
+        free = [n for n, d in self.drivers.items() if not d["team"] and not d.get("default") and not d.get("junior")
+                and d.get("age", 30) <= JUNIOR_MAX_AGE]
+        return sorted(free, key=lambda n: -(self.drivers[n].get("potential", 0) * 2 + self.drivers[n]["rating"]))[:6]
+
+    def sign_junior(self, name: str) -> str:
+        if len(self.juniors()) >= ACADEMY_SLOTS:
+            return f"Die Akademie ist voll ({ACADEMY_SLOTS} Plätze)"
+        if self.budget < ACADEMY_FEE:
+            return f"Zu wenig Budget ({ACADEMY_FEE:.1f} Mio)"
+        self.budget -= ACADEMY_FEE
+        self.season_log["expenses"] = self.season_log.get("expenses", 0.0) + ACADEMY_FEE
+        self.drivers[name]["junior"] = self.team
+        self.news.insert(0, f"Akademie: {name} ({self.drivers[name]['age']} J., Potenzial "
+                            f"{self.drivers[name].get('potential', 0)}) gehört jetzt zu deinem Nachwuchs")
+        self.save()
+        return f"{name} in der Akademie"
+
+    def release_junior(self, name: str) -> str:
+        self.drivers[name].pop("junior", None)
+        self.news.insert(0, f"Akademie: {name} verlässt den Nachwuchs")
+        self.save()
+        return f"{name} entlassen"
+
+    def _academy_after_race(self) -> list[str]:
+        notes = []
+        eng = self.staff_stars("eng")
+        for name in self.juniors():
+            d = self.drivers[name]
+            if d["rating"] < max(d.get("potential", 0), d["rating"]) and random.random() < 0.22 + 0.05 * eng:
+                d["rating"] += 1
+                notes.append(f"Akademie: {name} macht Fortschritte (Wertung {d['rating']}).")
+        return notes
 
     @property
     def short_code(self) -> str:
         return self.player_short or "".join(ch for ch in self.player_name.upper() if ch.isalpha())[:3] or "YOU"
 
     def pit_stop_times(self) -> dict[str, float]:
-        return {self.team: crew_stop_time(self.crew)} if self.kind == "team" else {}
+        if self.kind != "team":
+            return {}
+        return {self.team: crew_stop_time(self.crew) - 0.05 * self.staff_stars("mech")}
+
+    def slow_stop_chances(self) -> dict[str, float]:
+        """A better chief mechanic botches fewer stops (base 6 %)."""
+        return {self.team: 0.06 * (1.0 - 0.15 * self.staff_stars("mech"))} if self.kind == "team" else {}
 
     def team_ranking(self) -> list[str]:
         return sorted(self.teams, key=lambda t: -self.team_obj(t).rating)
@@ -352,6 +459,12 @@ class Career:
     def note_quali(self, order: list[str]) -> None:
         if self.player_name in order:
             self.quali_pos = order.index(self.player_name) + 1
+            me = self.quali_pos - 1
+            log = self.season_log
+            for mate in (self.lineup(self.team) if self.team else []):
+                if mate in order:
+                    key = "mate_q_ahead" if me < order.index(mate) else "mate_q_behind"
+                    log[key] = log.get(key, 0) + 1
 
     def answer_press(self, index: int) -> str:
         if not self.press:
@@ -479,10 +592,21 @@ class Career:
             if not rows[k]["dnf"]:
                 log["wins"] = log.get("wins", 0) + (k == 0)
                 log["podiums"] = log.get("podiums", 0) + (k < 3)
+        goals_before = log.get("goals_met", 0)
         if self.kind == "driver":
             notes += self._driver_after_race(rows, names)
+            notes += self._transfer_rumours()
         else:
             notes += self._team_after_race(rows)
+        if self.player_drives and self.player_name in names:
+            k = names.index(self.player_name)
+            mates = [j for j, r in enumerate(rows) if r["team"] == self.team and j != k]
+            rival_k = names.index(self.rival) if self.rival in names else None
+            gained = race_xp(k + 1, rows[k]["dnf"], rows[k]["points"], bool(mates) and all(k < j for j in mates),
+                             rival_k is not None and k < rival_k, log.get("goals_met", 0) > goals_before)
+            self.xp += gained
+            log["xp"] = log.get("xp", 0) + gained
+            notes.append(f"+{gained} XP für deine Fähigkeiten (jetzt {self.xp} XP).")
         notes += self._ai_development()
         self._log_race(rows, names, track)
         self._make_press(rows, names)
@@ -511,6 +635,24 @@ class Career:
 
     def form(self, n: int = 5) -> list[dict[str, Any]]:
         return self.race_log[-n:]
+
+    def _transfer_rumours(self) -> list[str]:
+        """From mid-season, stronger teams take notice when your reputation is good enough."""
+        champ = self.championship
+        if not self.team or len(champ.results) < max(1, len(champ.rounds) // 2):
+            return []
+        ranking = self.team_ranking()
+        n = len(ranking)
+        mine = ranking.index(self.team)
+        notes = []
+        for k, team in enumerate(ranking[:mine]):
+            if team in self.interest:
+                continue
+            if self.reputation + random.uniform(-4, 8) >= 85 - 70 * k / max(1, n - 1) and random.random() < 0.35:
+                self.interest.append(team)
+                notes.append(f"Gerücht: {team} ist an dir interessiert - ein Angebot zum Saisonende ist sicher.")
+                break
+        return notes
 
     def _driver_after_race(self, rows: list[dict[str, Any]], names: list[str]) -> list[str]:
         notes = []
@@ -573,18 +715,30 @@ class Career:
         prize = 0.25 * points
         salaries = sum(self.drivers[n]["salary"] for n in self.own_drivers()) / len(self.championship.rounds)
         upkeep = FACILITY_UPKEEP * sum(self.facilities.values())
-        costs = salaries + OPERATIONS_PER_RACE + upkeep
+        rounds = len(self.championship.rounds)
+        staff = self.staff_salaries() / rounds + ACADEMY_UPKEEP * len(self.juniors()) / rounds
+        costs = salaries + OPERATIONS_PER_RACE + upkeep + staff
         notes += self._progress_projects()
+        notes += self._academy_after_race()
         sim = self.facilities.get("simulator", 0)
+        grow = 0.15 * sim + 0.06 * self.staff_stars("eng")
         for name in self.own_drivers():
             d = self.drivers[name]
-            if sim and random.random() < 0.15 * sim and d["rating"] < max(d.get("potential", 0), d["rating"]) + 2:
+            if grow and random.random() < grow and d["rating"] < max(d.get("potential", 0), d["rating"]) + 2:
                 d["rating"] += 1
                 notes.append(f"Simulator-Arbeit zahlt sich aus: {name} jetzt Wertung {d['rating']}.")
         self.budget += sponsor + prize - costs
         log["income"] += sponsor + prize
         log["expenses"] += costs
         self.team_rep = max(0.0, min(100.0, self.team_rep + points / 6.0 - 0.3))
+        # the board judges every weekend against the season goal
+        pos, goal = self.team_pos(), self.team_goal()
+        mood = (2.0 if pos is not None and pos <= goal else -2.0) + 2.5 * podiums + (1.0 if points else -0.5) \
+            - 1.5 * sum(1 for k in ours if rows[k].get("failure"))
+        old = board_label(self.board)
+        self.board = max(0.0, min(100.0, self.board + mood))
+        if board_label(self.board) != old:
+            notes.append(f"Vorstand jetzt {board_label(self.board)} ({self.board:.0f}/100).")
         notes.append(f"Finanzen: +{sponsor + prize:.1f} Mio ({self.sponsor.get('name', 'Sponsor')}/Preisgeld), "
                      f"-{costs:.1f} Mio (Gehälter/Betrieb). Budget {self.budget:.1f} Mio.")
         team_names = [r["team"] for r in rows]
@@ -611,7 +765,7 @@ class Career:
         return base + (1 if self.area_level(area) >= 5 else 0)
 
     def project_success(self) -> float:
-        return min(0.97, 0.8 + 0.06 * self.facilities.get("windtunnel", 0))
+        return min(0.98, 0.8 + 0.06 * self.facilities.get("windtunnel", 0) + 0.025 * self.staff_stars("td"))
 
     def cap_left(self) -> float:
         return COST_CAP - self.season_log.get("dev_spent", 0.0)
@@ -632,9 +786,11 @@ class Career:
         self.season_log["expenses"] = self.season_log.get("expenses", 0.0) + cost
         self.season_log["dev_spent"] = self.season_log.get("dev_spent", 0.0) + cost
         races = self.project_duration(area)
-        self.projects.append({"area": area, "races_left": races, "cost": cost})
+        nxt = self.dev_focus == "next"
+        self.projects.append({"area": area, "races_left": races, "cost": cost, "next": nxt})
         name = AREAS[area][0] if area in AREAS else "Zuverlässigkeit"
-        self.news.insert(0, f"Projekt gestartet: {name} Stufe {self.area_level(area) + 1} (fertig in {races} Rd.)")
+        self.news.insert(0, f"Projekt gestartet: {name} Stufe {self.area_level(area) + 1} (fertig in {races} Rd.)"
+                         + (" - für das Auto der nächsten Saison" if nxt else ""))
         self.save()
         return f"{name}: Projekt läuft ({races} Rennen)"
 
@@ -647,7 +803,15 @@ class Career:
                 continue
             area = p["area"]
             ok = random.random() < self.project_success()
-            share = 1.0 if ok else 0.5
+            share = (1.0 if ok else 0.5) * (1.0 + 0.06 * self.staff_stars("td"))
+            if p.get("next"):
+                # goes into next season's car: worth more, but only from the first race of the new season
+                self.next_year.append({"area": area, "share": share * NEXT_YEAR_FACTOR})
+                self.upgrades[area] = self.area_level(area) + 1
+                name = AREAS[area][0] if area in AREAS else "Zuverlässigkeit"
+                notes.append(f"Fertig fürs nächste Jahr: {name} Stufe {self.upgrades[area]}" +
+                             ("" if ok else " - enttäuschend, weniger Wirkung."))
+                continue
             if area == "reliability":
                 t = self.teams[self.team]
                 t["reliability"] = round(min(0.995, t.get("reliability", 0.965) + RELIABILITY_STEP * share), 4)
@@ -660,6 +824,14 @@ class Career:
                          ("" if ok else " - enttäuschend, nur halbe Wirkung."))
         self.projects = keep
         return notes
+
+    def _apply_part(self, area: str, share: float) -> None:
+        if area == "reliability":
+            t = self.teams[self.team]
+            t["reliability"] = round(min(0.995, t.get("reliability", 0.965) + RELIABILITY_STEP * share), 4)
+        else:
+            _name, key, step = AREAS[area]
+            self.teams[self.team][key] = round(self.teams[self.team][key] + step * share, 4)
 
     def build_facility(self, key: str) -> str:
         level = self.facilities.get(key, 0)
@@ -705,16 +877,21 @@ class Career:
             return f"{name} fährt bereits für {d['team']}"
         if self.seats() <= 0:
             return "Kein freies Cockpit - zuerst einen Fahrer entlassen"
-        if self.team_rep < self.required_rep(name):
+        junior = d.get("junior") == self.team
+        if not junior and self.team_rep < self.required_rep(name):
             return f"{name} will nicht: dein Team braucht Ruf {self.required_rep(name):.0f} (hat {self.team_rep:.0f})"
-        fee = d["salary"] * 0.5
+        fee = 0.0 if junior else d["salary"] * 0.5
         if self.budget < fee:
             return f"Zu wenig Budget für die Ablöse ({fee:.1f} Mio)"
         self.budget -= fee
         self.season_log["expenses"] = self.season_log.get("expenses", 0.0) + fee
         d["team"] = self.team
         d["years"] = years
-        self.news.insert(0, f"Neu im Team: {name} ({years} J., {d['salary']:.1f} Mio/Saison, Ablöse {fee:.1f} Mio)")
+        d.pop("junior", None)
+        if junior:
+            self.news.insert(0, f"Aus der eigenen Akademie befördert: {name} ({years} J., {d['salary']:.1f} Mio/Saison)")
+        else:
+            self.news.insert(0, f"Neu im Team: {name} ({years} J., {d['salary']:.1f} Mio/Saison, Ablöse {fee:.1f} Mio)")
         self.save()
         return f"{name} verpflichtet!"
 
@@ -741,6 +918,7 @@ class Career:
                           if self.reputation + random.uniform(-6, 6) >= 85 - 70 * k / max(1, n - 1)]
             if self.team and self.team not in candidates and self._goal_met():
                 candidates.append(self.team)
+            candidates += [t for t in self.interest if t in ranking and t not in candidates]
             if not candidates:
                 candidates = ranking[-1:]
         for team in candidates:
@@ -750,10 +928,14 @@ class Career:
             goal = max(2, min(20, round(rank * 1.6) + 2))
             limit = 1.0 + self.reputation / 250 + (self.trust / 400 if team == self.team else 0.0) + \
                 random.uniform(0.0, 0.15) + 0.04 * manager
-            offers.append({"team": team, "salary": salary, "years": random.choice([1, 2, 2, 3]), "goal": goal,
-                           "rank": rank, "limit": round(limit, 3)})
+            keen = team in self.interest
+            offers.append({"team": team, "salary": round(salary * (1.1 if keen else 1.0), 1),
+                           "years": random.choice([1, 2, 2, 3]), "goal": goal, "rank": rank,
+                           "limit": round(limit + (0.05 if keen else 0.0), 3), "keen": keen})
+        offers.sort(key=lambda o: (not o.get("keen"), o["rank"]))
+        offers = offers[:5]
         offers.sort(key=lambda o: o["rank"])
-        return offers[:5]
+        return offers
 
     def negotiate(self, index: int, demand: float, years: int) -> tuple[bool, str]:
         offer = self.offers[index]
@@ -852,6 +1034,7 @@ class Career:
             prize = review.get("prize", 0.0)
             self.budget += prize
             self.team_rep = max(0.0, min(100.0, self.team_rep + (8 if review["goal_met"] else -5)))
+            self.board = max(0.0, min(100.0, self.board + (15 if review["goal_met"] else -20)))
             for name in self.own_drivers():
                 self.drivers[name]["years"] = self.drivers[name].get("years", 1) - 1
         self.season_log["closed"] = True
@@ -892,12 +1075,42 @@ class Career:
                 continue
             for key in ("engine", "aero", "top_speed", "brakes"):
                 t[key] = round(max(0.95, min(1.06, t[key] + random.gauss(0.002, 0.006))), 4)
+        if self.kind == "team":
+            notes += self._team_new_season()
         best = max(self.teams, key=lambda t: self.team_obj(t).rating if not self.teams[t].get("own") else 0)
         notes.append(f"Wintertests: {best} gilt als Favorit für Saison {self.season + 1}.")
         self.season += 1
         self._new_championship()
         self.news = (notes + [f"Saison {self.season} beginnt!"] + self.news)[:14]
         self.save()
+        return notes
+
+    def _team_new_season(self) -> list[str]:
+        notes = []
+        if self.next_year:
+            for part in self.next_year:
+                self._apply_part(part["area"], part["share"])
+            notes.append(f"Neues Auto: {len(self.next_year)} Teile aus der Vorjahresentwicklung sind eingebaut.")
+            self.next_year = []
+        if self.board >= 70:
+            bonus = round((self.board - 50) * 0.2, 1)
+            self.budget += bonus
+            notes.append(f"Der Vorstand ist {board_label(self.board)}: +{bonus:.1f} Mio Zusatzbudget.")
+        elif self.board < 30:
+            cut = round((30 - self.board) * 0.3, 1)
+            self.budget -= cut
+            notes.append(f"Der Vorstand kürzt das Budget um {cut:.1f} Mio - Ergebnisse müssen her!")
+            if self.board < 12 and self.staff:
+                role = max(self.staff, key=lambda r: self.staff[r].get("salary", 0))
+                gone = self.staff.pop(role)
+                notes.append(f"Der Vorstand entlässt {gone['name']} ({STAFF_ROLES[role][0]}).")
+            self.board = max(self.board, 25.0)
+        taken = {p["name"] for p in self.staff.values()}
+        self.staff_offers = staff_candidates(self.team_rep, taken)
+        for name in self.juniors():
+            if self.drivers[name].get("age", 0) > JUNIOR_MAX_AGE + 2:
+                self.drivers[name].pop("junior", None)
+                notes.append(f"Akademie: {name} ist zu alt für den Nachwuchs und sucht sich ein Cockpit.")
         return notes
 
     def _retirements_and_rookies(self) -> list[str]:
@@ -1044,6 +1257,10 @@ class Career:
             career.sponsor_offers = sponsor_offers(career.team_rep)
         if career.kind == "driver" and not career.weekend_goal:
             career._new_weekend_goal()
+        if career.kind == "team" and not career.staff_offers:
+            career.staff_offers = staff_candidates(career.team_rep, {p["name"] for p in career.staff.values()})
+        for k in SKILLS:
+            career.skills.setdefault(k, 0)
         return career
 
     def _fill_seats(self, announce: bool = True) -> None:
@@ -1054,7 +1271,8 @@ class Career:
                 continue
             seats = 1 if (self.kind == "driver" and team == self.team) else 2
             while len(self.lineup(team)) < seats:
-                free = [n for n, d in self.drivers.items() if not d.get("default") and not d["team"]]
+                free = [n for n, d in self.drivers.items() if not d.get("default") and not d["team"]
+                        and not d.get("junior")]
                 if not free:
                     return
                 pick = next((n for n in free if wanted.get(n) == team), None) or \

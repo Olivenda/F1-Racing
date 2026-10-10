@@ -1372,3 +1372,118 @@ EXACT.update({
 TEMPLATES += [("Rechnet gerade auf: {}", "Computing on: {}"), ("Rechnet jetzt auf: {}", "Now computing on: {}"),
               ("{} - messe Tempo", "{} - measuring speed"), ("{} - nur GPU gewählt", "{} - GPU only chosen"),
               ("{} - schneller (GPU {}s, CPU {}s pro Generation)", "{} - faster (GPU {}s, CPU {}s per generation)")]
+
+# career: driver skills, staff, academy, board, next-year development, transfer rumours
+EXACT.update({
+    "Qualifying-Ass": "Qualifying ace", "Reifenflüsterer": "Tyre whisperer", "Regenkönig": "Rain master",
+    "Windschattenjäger": "Slipstream hunter", "Raketenstart": "Rocket start", "Spritsparer": "Fuel saver",
+    "+0,5 % Grip im Qualifying": "+0.5% grip in qualifying", "-5 % Reifenverschleiß": "-5% tyre wear",
+    "+1,5 % Grip auf nasser Strecke": "+1.5% grip on a wet track", "+15 % Windschatten-Effekt": "+15% slipstream effect",
+    "+6 % Beschleunigung in den ersten 6 s nach dem Start": "+6% acceleration in the first 6 s after the start",
+    "-3 % Spritverbrauch": "-3% fuel use",
+    "Technischer Direktor": "Technical director", "Chefmechaniker": "Chief mechanic", "Renningenieur": "Race engineer",
+    "Entwicklung: +2,5 % Erfolgschance und +6 % Wirkung je Stern":
+        "Development: +2.5% success chance and +6% effect per star",
+    "Boxenstopps: -0,05 s je Stern und seltener ein verpatzter Stopp":
+        "Pit stops: -0.05 s per star and fewer botched stops",
+    "Deine Fahrer und Junioren entwickeln sich schneller": "Your drivers and juniors improve faster",
+    "begeistert": "delighted", "zufrieden": "satisfied", "besorgt": "worried", "Ultimatum": "ultimatum",
+    "MITARBEITER": "STAFF", "AKADEMIE": "ACADEMY", "VORSTAND": "BOARD", "FAHRER-SKILLS": "DRIVER SKILLS",
+    "ERFAHRUNG": "EXPERIENCE", "XP PRO RENNEN": "XP PER RACE", "Teilnahme": "Taking part",
+    "Ins Ziel gekommen": "Reached the finish", "je WM-Punkt": "per championship point",
+    "Teamkollege geschlagen": "Beat your team-mate", "Rivale geschlagen": "Beat your rival",
+    "Wochenendziel erreicht": "Weekend goal reached", "Sieg": "Win",
+    "KANDIDATEN": "CANDIDATES", "- unbesetzt -": "- vacant -", "verfügbar": "available",
+    "Neue Kandidaten zur nächsten Saison": "New candidates next season",
+    "NACHWUCHS-AKADEMIE": "JUNIOR ACADEMY", "DEINE JUNIOREN (ENTER = entlassen)": "YOUR JUNIORS (ENTER = release)",
+    "TALENTE (Doppelklick/ENTER = aufnehmen)": "TALENTS (double click/ENTER = sign up)",
+    "Gerade keine jungen Talente frei - zur neuen Saison kommen Rookies dazu.":
+        "No young talents free right now - new rookies arrive next season.",
+    "FOKUS NEUER PROJEKTE (TAB)": "FOCUS OF NEW PROJECTS (TAB)", "Aktuelles Auto (sofort)": "Current car (now)",
+    "Neue Projekte: für das Auto der nächsten Saison": "New projects: for next season's car",
+    "Neue Projekte: für das aktuelle Auto": "New projects: for the current car",
+    "WILL DICH UNBEDINGT (+10 % Gehalt)": "REALLY WANTS YOU (+10% salary)",
+    "Akademie": "Academy", "Eigener Junior - ohne Ablöse": "Own junior - no transfer fee",
+})
+TEMPLATES += [
+    ("{} je Stufe", "{} per level"),
+    ("Neue Fähigkeit: {} Stufe {#}", "New skill: {} level {}"),
+    ("Zu wenig XP ({#} nötig, du hast {#})", "Not enough XP ({} needed, you have {})"),
+    ("{} will nicht: Teamruf {#} nötig (hast {#})", "{} declines: needs team reputation {} (you have {})"),
+    ("Neuer {}: {} ({#} Sterne, {#} Mio/Saison)", "New {}: {} ({} stars, {} M/season)"),
+    ("{} ist dein {}", "{} is your {}"),
+    ("Die Akademie ist voll ({#} Plätze)", "The academy is full ({} places)"),
+    ("Akademie: {} ({#} J., Potenzial {#}) gehört jetzt zu deinem Nachwuchs",
+     "Academy: {} ({} y/o, potential {}) joins your juniors"),
+    ("{} in der Akademie", "{} in the academy"),
+    ("Akademie: {} verlässt den Nachwuchs", "Academy: {} leaves the juniors"),
+    ("Akademie: {} macht Fortschritte (Wertung {#}).", "Academy: {} is improving (rating {})."),
+    ("Akademie: {} ist zu alt für den Nachwuchs und sucht sich ein Cockpit.",
+     "Academy: {} is too old for the juniors and looks for a race seat."),
+    ("Aus der eigenen Akademie befördert: {} ({#} J., {#} Mio/Saison)",
+     "Promoted from your own academy: {} ({} yrs, {} M/season)"),
+    ("+{#} XP für deine Fähigkeiten (jetzt {#} XP).", "+{} XP for your skills (now {} XP)."),
+    ("Gerücht: {} ist an dir interessiert - ein Angebot zum Saisonende ist sicher.",
+     "Rumour: {} is interested in you - an offer at the end of the season is certain."),
+    ("Vorstand jetzt {} ({#}/100).", "Board now {} ({}/100)."),
+    ("Vorstand {}", "Board {}"),
+    ("Projekt gestartet: {} Stufe {#} (fertig in {#} Rd.) - für das Auto der nächsten Saison",
+     "Project started: {} level {} (ready in {} races) - for next season's car"),
+    ("Fertig fürs nächste Jahr: {} Stufe {#}", "Ready for next year: {} level {}"),
+    ("Fertig fürs nächste Jahr: {} Stufe {#} - enttäuschend, weniger Wirkung.",
+     "Ready for next year: {} level {} - disappointing, less effect."),
+    ("Neues Auto: {#} Teile aus der Vorjahresentwicklung sind eingebaut.",
+     "New car: {} parts from last year's development are fitted."),
+    ("Der Vorstand ist {}: +{#} Mio Zusatzbudget.", "The board is {}: +{} M extra budget."),
+    ("Der Vorstand kürzt das Budget um {#} Mio - Ergebnisse müssen her!",
+     "The board cuts the budget by {} M - results are needed!"),
+    ("Der Vorstand entlässt {} ({}).", "The board fires {} ({})."),
+    ("SKILLS ({#} XP)", "SKILLS ({} XP)"),
+    ("Quali {#}:{#} · Rennen {#}:{#}", "Quali {}:{} · race {}:{}"),
+    ("SKILLS {#}/{#} · {#} XP verfügbar", "SKILLS {}/{} · {} XP available"),
+    ("INTERESSE: {}", "INTEREST: {}"),
+    ("FAHRER · Stopp {#} s · TD {#}* · Mech {#}* · Ing {#}* · Akademie {#}",
+     "DRIVERS · stop {} s · TD {}* · Mech {}* · Eng {}* · academy {}"),
+    ("Nächste Saison (x{#} Wirkung)", "Next season (x{} effect)"),
+    ("{#} fertig", "{} ready"),
+    ("{} · Stufe {#} · nächstes Jahr", "{} · level {} · next year"),
+    ("{} · {#} XP verfügbar · Doppelklick oder ENTER lernt", "{} · {} XP available · double click or ENTER learns"),
+    ("{#} XP", "{} XP"), ("diese Saison +{#} XP", "this season +{} XP"),
+    ("Stufen kosten {#} / {#} / {#} XP. Die Fähigkeiten wirken nur auf dein eigenes Auto - im Training, Qualifying "
+     "und Rennen.", "Levels cost {} / {} / {} XP. Skills only affect your own car - in practice, qualifying and "
+                    "the race."),
+    ("{} · Budget {#} Mio · Teamruf {#} · Doppelklick oder ENTER stellt ein (Ablöse = halbes Jahresgehalt)",
+     "{} · budget {} M · team reputation {} · double click or ENTER hires (fee = half a year's salary)"),
+    ("{#} Mio / Saison · Ablöse {#}", "{} M / season · fee {}"), ("{#} Mio / Saison", "{} M / season"),
+    ("will Teamruf {#}", "wants team reputation {}"),
+    ("Gehälter aller Mitarbeiter: {#} Mio / Saison", "Salaries of all staff: {} M / season"),
+    ("{} · {#}/{#} Plätze · Aufnahme {#} Mio, {#} Mio/Saison", "{} · {}/{} places · sign-up {} M, {} M/season"),
+    ("{} · {#} J. · Stil {}", "{} · {} yrs · style {}"), ("{#} / Pot. {#}", "{} / pot. {}"),
+    ("Nochmal ENTER: {} aus der Akademie entlassen?", "ENTER again: release {} from the academy?"),
+    ("Junioren fahren noch keine Rennen, entwickeln sich aber nach jedem Grand Prix (Chance {#} % auf +1 Wertung, "
+     "mehr mit einem besseren Renningenieur) bis zu ihrem Potenzial (goldene Linie). Andere Teams können sie dir "
+     "nicht wegschnappen. Im Fahrermarkt kannst du sie jederzeit OHNE Ablöse und ohne Ruf-Anforderung ins Cockpit "
+     "befördern. Mit über {#} Jahren verlassen sie die Akademie.",
+     "Juniors don't race yet, but they improve after every grand prix ({}% chance of +1 rating, more with a better "
+     "race engineer) up to their potential (gold line). Other teams can't poach them. In the driver market you can "
+     "promote them into a race seat at any time WITHOUT a transfer fee and without reputation demands. Over {} they "
+     "leave the academy."),
+    ("Projekte kosten sofort Geld, das neue Teil kommt aber erst nach der Bauzeit ans Auto. Mit {#} % "
+     "Wahrscheinlichkeit bringt ein Teil nur die halbe Wirkung. Windkanal: kürzere Bauzeit + höhere Erfolgschance. "
+     "Simulator: deine Fahrer werden besser. Fabrik: Teile billiger. Infrastruktur zählt nicht zur "
+     "Budgetobergrenze, kostet aber laufend. Teile fürs nächste Jahr wirken stärker, aber erst ab dem ersten Rennen "
+     "der neuen Saison.",
+     "Projects cost money right away, but the new part only reaches the car after the build time. With {}% "
+     "probability a part brings only half its effect. Wind tunnel: shorter build time + higher success chance. "
+     "Simulator: your drivers get better. Factory: cheaper parts. Infrastructure doesn't count towards the cost cap "
+     "but costs money every race. Parts for next year are stronger, but only from the first race of the new "
+     "season."),
+]
+EXACT.update({"Vollbild an (Alt+Enter: Fenster)": "Fullscreen on (Alt+Enter: window)",
+              "Fenstermodus (Alt+Enter: Vollbild)": "Window mode (Alt+Enter: fullscreen)"})
+EXACT.update({
+    "Randloses Vollbild über den ganzen Bildschirm (die Auflösung des Monitors bleibt). Jederzeit mit Alt+Enter "
+    "oder F11 umschalten. Im Fenster lässt sich das Spiel auch größer ziehen.":
+        "Borderless fullscreen over the whole screen (the monitor keeps its resolution). Switch any time with "
+        "Alt+Enter or F11. In window mode you can also drag the game window bigger.",
+})

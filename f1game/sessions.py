@@ -16,6 +16,7 @@ from .physics import handle_collisions
 from .player_car import Player_Car
 from .profiles import AUTOPILOT_BRAIN, PLAYER_PROFILE, DriverProfile, driver_grip
 from .effects import Effects
+from .career_plus import START_BOOST_TIME
 from .flags import post_states
 from .render3d import CAMERA_MODES, Renderer3D
 from .pit_menu import PitMenu, crew_choice
@@ -70,6 +71,8 @@ class WeekendConfig:
     weather_seed: int = field(default_factory=lambda: random.randrange(1 << 30))
     strategy: list | None = None            # race plan chosen in the practice analysis: [[compound, laps], ...]
     guests: list[DriverProfile] = field(default_factory=list)   # online players (driven over the network)
+    player_skills: dict[str, int] = field(default_factory=dict)  # career driver skills of the player
+    slow_stop: dict[str, float] = field(default_factory=dict)    # team -> chance of a botched pit stop
 
     @property
     def spectator(self) -> bool:
@@ -212,6 +215,9 @@ class Session:
                 car.manual_gearbox = self.config.gearbox == "manual"
                 if self.kind == "race" and self.config.strategy:
                     car.strategy = [list(stint) for stint in self.config.strategy]
+                car.skills = dict(self.config.player_skills)
+                if self.kind == "qualifying":
+                    car.grip_bonus *= 1.0 + 0.005 * car.skills.get("quali", 0)
                 self.player = car
             elif self.config.player2 is not None and prof is self.config.player2:
                 car = Player_Car(prof, self.track)
@@ -681,7 +687,7 @@ class Session:
                         lat = abs(-dx * fy + dy * fx)
                         if lat < 28.0:
                             target = max(target, (1.0 - along / rng) * (1.0 - 0.5 * lat / 28.0))
-            car.slip_target = target
+            car.slip_target = target * (1.0 + 0.15 * car.skills.get("slip", 0)) if car.skills else target
 
     def _active_aero(self, car: Car, h: float) -> None:
         if isinstance(car, Player_Car) and car.autopilot is None and car.assist_level == 0:
@@ -975,7 +981,7 @@ class Session:
                 wheels = None
                 if tyres:
                     normal = base
-                    if random.random() < SLOW_STOP_CHANCE:
+                    if random.random() < self.config.slow_stop.get(car.profile.team, SLOW_STOP_CHANCE):
                         problem = random.randrange(4)
                         base += random.uniform(1.5, 4.5)
                     wheels = []
@@ -1513,6 +1519,8 @@ class RaceSession(Session):
             self.race_start_time = self.time
             for car in self.cars:
                 car.frozen = False
+                if car.skills.get("start"):
+                    car.start_boost = START_BOOST_TIME
                 car.start_timing(self.time)
 
     @property

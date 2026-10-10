@@ -200,6 +200,8 @@ class Car:
         self.slipstream = 0.0
         self.slip_target = 0.0
         self.dirty_air = 0.0            # 0..1 turbulent wake of a car close ahead: costs front grip in corners
+        self.skills: dict[str, int] = {}    # career driver skills (player only), see career_plus.SKILLS
+        self.start_boost = 0.0          # seconds of extra launch power left (skill "start")
         self.dirty_target = 0.0
         self.on_kerb = False
         self.wheelspin = 0.0            # 0..1, only without traction control (assists off)
@@ -438,12 +440,17 @@ class Car:
             (GRASS_GRIP_FACTOR * sf.grass_grip if self.on_grass else 1.0) * \
             (STRAIGHT_MODE_GRIP if self.straight_mode else 1.0) * (0.55 if self.puncture else 1.0) * \
             (1.0 - 0.09 * self.dirty_air) * (0.94 if self.on_kerb else 1.0)
+        if self.skills:
+            grip *= 1.0 + 0.015 * self.skills.get("wet", 0) * track.wetness
         engine = ENGINE_ACCEL * self.engine_factor * perf.engine * sf.engine * self.damage.engine_factor * \
             (self.tyres.traction if self.tyres else 1.0) * \
             (GRASS_ENGINE_FACTOR if self.on_grass else 1.0)
         if self.launch_spin > 0.0:
             self.launch_spin = max(0.0, self.launch_spin - dt)
             engine *= 0.45
+        if self.start_boost > 0.0:
+            self.start_boost = max(0.0, self.start_boost - dt)
+            engine *= 1.0 + 0.06 * self.skills.get("start", 0)
         brake_force = brake_decel(vf) * perf.brakes * sf.brake * (self.tyres.braking if self.tyres else 1.0) * \
             self.damage.brake_factor
         if self.on_grass:
@@ -544,7 +551,8 @@ class Car:
         lap_frac = self.speed_fwd * dt / self.track.length
         if self.fuel_per_lap > 0 and not self.out_of_fuel:
             # mostly distance based; lifting off still saves fuel (~0.8 is a typical lap's average throttle)
-            self.fuel = max(0.0, self.fuel - self.fuel_per_lap * lap_frac * (0.6 + 0.4 * self.throttle) / 0.92)
+            self.fuel = max(0.0, self.fuel - self.fuel_per_lap * lap_frac * (0.6 + 0.4 * self.throttle) / 0.92
+                            * (1.0 - 0.03 * self.skills.get("fuel", 0)))
             if self.fuel <= 0.0:
                 self.out_of_fuel = True
         if self.plank_per_lap > 0:

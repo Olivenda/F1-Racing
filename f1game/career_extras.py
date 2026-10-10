@@ -583,3 +583,276 @@ class CareerOptionsScreen(_RowScreen):
                       shadow=False)
         draw_form(screen, f, 60, 450, c.form(8), "LETZTE RENNEN")
         self.draw_status(screen)
+
+
+# ------------------------------------------------------------------------------------------------ driver skills
+
+class SkillsScreen(_RowScreen):
+    """Spend XP from race weekends on driver skills that act in the race."""
+
+    accent = (0, 200, 255)
+
+    def rows(self) -> list[str]:
+        from .career_plus import SKILLS
+        return list(SKILLS) + ["back"]
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type != pygame.KEYDOWN or self.move(event):
+            return
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            if self.row == "back":
+                self.game.open_career()
+            else:
+                self.say(self.career.buy_skill(self.row))
+        elif event.key == pygame.K_ESCAPE:
+            self.game.open_career()
+
+    def draw(self, screen: pygame.Surface) -> None:
+        from .career_plus import MAX_SKILL, SKILL_COST, SKILLS
+        f, c = self.game.fonts, self.career
+        self.header(screen, "FAHRER-SKILLS", f"{c.player_name} · {c.xp} XP verfügbar · Doppelklick oder ENTER lernt")
+        box = pygame.Rect(60, 106, 760, 560)
+        draw_panel(screen, box, PANEL, 215)
+        rh = 74
+        for i, key in enumerate(self.rows()):
+            selected = i == self.sel
+            if key == "back":
+                r = pygame.Rect(box.x + 20, box.bottom - 50, box.w - 40, 36)
+                self.button(screen, r, "ZURÜCK", selected, (110, 110, 125))
+                mouse_item(r, self, i)
+                continue
+            r = pygame.Rect(box.x + 12, box.y + 12 + i * (rh + 4), box.w - 24, rh)
+            mouse_item(r, self, i, key=None)
+            if selected:
+                self.highlight(screen, r)
+            name, effect = SKILLS[key]
+            lvl = c.skills.get(key, 0)
+            draw_text(screen, name.upper(), f.medium, WHITE, (r.x + 20, r.y + 10))
+            draw_text(screen, f"{effect} je Stufe", f.small, (200, 200, 208), (r.x + 20, r.y + 42), shadow=False)
+            for k in range(MAX_SKILL):
+                pygame.draw.rect(screen, self.accent if k < lvl else (50, 52, 60),
+                                 (r.right - 250 + k * 56, r.y + 16, 48, 12), border_radius=4)
+            draw_text(screen, f"Stufe {lvl}/{MAX_SKILL}", f.small_bold, WHITE, (r.right - 250, r.y + 40),
+                      shadow=False)
+            cost = c.skill_cost(key)
+            label = "MAX" if cost is None else f"{cost} XP"
+            col = GREY if cost is None else GREEN if c.xp >= cost else RED
+            draw_text(screen, label, f.medium, col, (r.right - 18, r.y + 24), anchor="topright")
+        rb = pygame.Rect(840, 106, 400, 560)
+        draw_panel(screen, rb, PANEL, 215)
+        x, y = rb.x + 18, rb.y + 18
+        draw_text(screen, "ERFAHRUNG", f.tiny, GREY, (x, y), shadow=False)
+        draw_text(screen, f"{c.xp} XP", f.big, CYAN, (x, y + 16))
+        draw_text(screen, f"diese Saison +{c.season_log.get('xp', 0)} XP", f.small, GREY, (x, y + 70), shadow=False)
+        draw_text(screen, "XP PRO RENNEN", f.tiny, GREY, (x, y + 110), shadow=False)
+        earn = [("Teilnahme", "5"), ("Ins Ziel gekommen", "+5"), ("je WM-Punkt", "+1"),
+                ("Teamkollege geschlagen", "+8"), ("Rivale geschlagen", "+5"), ("Wochenendziel erreicht", "+10"),
+                ("Sieg", "+5")]
+        for k, (label, val) in enumerate(earn):
+            draw_text(screen, label, f.small, WHITE, (x, y + 132 + k * 26), shadow=False)
+            draw_text(screen, val, f.small_bold, GREEN, (rb.right - 18, y + 132 + k * 26), anchor="topright",
+                      shadow=False)
+        text = (f"Stufen kosten {SKILL_COST[0]} / {SKILL_COST[1]} / {SKILL_COST[2]} XP. Die Fähigkeiten wirken nur "
+                "auf dein eigenes Auto - im Training, Qualifying und Rennen.")
+        for k, line in enumerate(_wrap(text, f.small, rb.w - 36)):
+            draw_text(screen, line, f.small, (205, 205, 210), (x, y + 330 + k * 22), shadow=False)
+        self.draw_status(screen)
+
+
+# ------------------------------------------------------------------------------------------------ team staff
+
+class StaffScreen(_Screen):
+    """Hire the technical director, chief mechanic and race engineer. Three candidates per role, new ones every
+    season; better people want a team with a better reputation."""
+
+    accent = (255, 160, 60)
+    ROLES = ("td", "mech", "eng")
+
+    def __init__(self, game: "Game") -> None:
+        super().__init__(game)
+        self.sel = 0        # 0..8: role * 3 + candidate, 9: back
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type != pygame.KEYDOWN:
+            return
+        if event.key == pygame.K_DOWN:
+            self.sel = min(9, self.sel + 1)
+        elif event.key == pygame.K_UP:
+            self.sel = max(0, self.sel - 1)
+        elif event.key == pygame.K_RIGHT and self.sel < 9:
+            self.sel = min(8, self.sel + 3)
+        elif event.key == pygame.K_LEFT and self.sel < 9:
+            self.sel = max(0, self.sel - 3)
+        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            if self.sel == 9:
+                self.game.open_career()
+            else:
+                self.say(self.career.hire_staff(self.ROLES[self.sel // 3], self.sel % 3))
+        elif event.key == pygame.K_ESCAPE:
+            self.game.open_career()
+
+    def draw(self, screen: pygame.Surface) -> None:
+        from .career_plus import STAFF_ROLES, staff_rep_needed
+        f, c = self.game.fonts, self.career
+        self.header(screen, "MITARBEITER", f"{c.team} · Budget {c.budget:.1f} Mio · Teamruf {c.team_rep:.0f} · "
+                                           "Doppelklick oder ENTER stellt ein (Ablöse = halbes Jahresgehalt)")
+        for col, role in enumerate(self.ROLES):
+            title, effect = STAFF_ROLES[role]
+            box = pygame.Rect(60 + col * 400, 106, 380, 500)
+            draw_panel(screen, box, PANEL, 215)
+            draw_text(screen, title.upper(), f.medium, WHITE, (box.x + 16, box.y + 12))
+            for k, line in enumerate(_wrap(effect, f.tiny, box.w - 32)[:2]):
+                draw_text(screen, line, f.tiny, (190, 190, 200), (box.x + 16, box.y + 42 + k * 16), shadow=False)
+            cur = c.staff.get(role)
+            cr = pygame.Rect(box.x + 10, box.y + 84, box.w - 20, 70)
+            pygame.draw.rect(screen, (40, 52, 40) if cur else (52, 30, 30), cr, border_radius=6)
+            draw_text(screen, "AKTUELL", f.tiny, GREY, (cr.x + 10, cr.y + 6), shadow=False)
+            if cur:
+                draw_text(screen, _fit(cur["name"], f.small_bold, 220), f.small_bold, WHITE, (cr.x + 10, cr.y + 24),
+                          shadow=False)
+                self._stars(screen, cr.right - 110, cr.y + 26, cur["stars"])
+                draw_text(screen, f"{cur['salary']:.1f} Mio / Saison", f.tiny, GREY, (cr.x + 10, cr.y + 48),
+                          shadow=False)
+            else:
+                draw_text(screen, "- unbesetzt -", f.small_bold, RED, (cr.x + 10, cr.y + 26), shadow=False)
+            draw_text(screen, "KANDIDATEN", f.tiny, GREY, (box.x + 16, box.y + 168), shadow=False)
+            offers = c.staff_offers.get(role, [])[:3]
+            for k, cand in enumerate(offers):
+                idx = col * 3 + k
+                r = pygame.Rect(box.x + 10, box.y + 188 + k * 100, box.w - 20, 92)
+                mouse_item(r, self, idx, key=None)
+                selected = idx == self.sel
+                pygame.draw.rect(screen, PANEL_LIGHT if selected else (30, 32, 40), r, border_radius=6)
+                if selected:
+                    pygame.draw.rect(screen, self.accent, (r.x, r.y, 5, r.h), border_radius=2)
+                draw_text(screen, _fit(cand["name"], f.small_bold, 220), f.small_bold, WHITE, (r.x + 14, r.y + 10),
+                          shadow=False)
+                self._stars(screen, r.right - 110, r.y + 12, cand["stars"])
+                fee = cand["salary"] * 0.5
+                draw_text(screen, f"{cand['salary']:.1f} Mio / Saison · Ablöse {fee:.1f}", f.tiny,
+                          GREEN if c.budget >= fee else RED, (r.x + 14, r.y + 38), shadow=False)
+                need = staff_rep_needed(cand["stars"])
+                ok = c.team_rep >= need
+                draw_text(screen, "verfügbar" if ok else f"will Teamruf {need:.0f}", f.tiny, GREEN if ok else RED,
+                          (r.x + 14, r.y + 60), shadow=False)
+                if cur:
+                    diff = cand["stars"] - cur["stars"]
+                    draw_text(screen, f"{diff:+d}" if diff else "=", f.small_bold,
+                              GREEN if diff > 0 else RED if diff < 0 else GREY, (r.right - 14, r.y + 56),
+                              anchor="topright", shadow=False)
+            if not offers:
+                draw_text(screen, "Neue Kandidaten zur nächsten Saison", f.tiny, GREY, (box.x + 16, box.y + 196),
+                          shadow=False)
+        back = pygame.Rect(60, 620, 1180, 40)
+        self.button(screen, back, "ZURÜCK", self.sel == 9, (110, 110, 125))
+        mouse_item(back, self, 9)
+        draw_text(screen, f"Gehälter aller Mitarbeiter: {c.staff_salaries():.1f} Mio / Saison", f.tiny, GREY,
+                  (SCREEN_WIDTH // 2, 674), anchor="center", shadow=False)
+        self.draw_status(screen, SCREEN_HEIGHT - 18)
+
+    @staticmethod
+    def _stars(screen: pygame.Surface, x: int, y: int, stars: int) -> None:
+        for k in range(5):
+            cx, cy = x + k * 20 + 8, y + 8
+            pts = []
+            for j in range(10):
+                a = math.radians(-90 + j * 36)
+                r = 8 if j % 2 == 0 else 3.6
+                pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+            pygame.draw.polygon(screen, GOLD if k < stars else (60, 62, 72), pts)
+
+
+# ------------------------------------------------------------------------------------------------ junior academy
+
+class AcademyScreen(_RowScreen):
+    """Young talents grow in your academy and can be promoted into a race seat without a transfer fee."""
+
+    accent = (120, 220, 120)
+
+    def __init__(self, game: "Game") -> None:
+        super().__init__(game)
+        self.confirm: str | None = None
+
+    def rows(self) -> list[str]:
+        c = self.career
+        return [f"j:{n}" for n in c.juniors()] + [f"c:{n}" for n in c.academy_candidates()] + ["back"]
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type != pygame.KEYDOWN or self.move(event):
+            return
+        c = self.career
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            row = self.row
+            if row == "back":
+                self.game.open_career()
+            elif row.startswith("j:"):
+                name = row[2:]
+                if self.confirm == name:
+                    self.say(c.release_junior(name))
+                    self.confirm = None
+                else:
+                    self.confirm = name
+                    self.say(f"Nochmal ENTER: {name} aus der Akademie entlassen?")
+            else:
+                self.say(c.sign_junior(row[2:]))
+        elif event.key == pygame.K_ESCAPE:
+            self.game.open_career()
+
+    def draw(self, screen: pygame.Surface) -> None:
+        from .career_plus import ACADEMY_FEE, ACADEMY_SLOTS, ACADEMY_UPKEEP, JUNIOR_MAX_AGE
+        f, c = self.game.fonts, self.career
+        self.header(screen, "NACHWUCHS-AKADEMIE", f"{c.team} · {len(c.juniors())}/{ACADEMY_SLOTS} Plätze · "
+                                                  f"Aufnahme {ACADEMY_FEE:.1f} Mio, {ACADEMY_UPKEEP:.1f} Mio/Saison")
+        rows = self.rows()
+        box = pygame.Rect(60, 106, 760, 560)
+        draw_panel(screen, box, PANEL, 215)
+        y = box.y + 12
+        heading = None
+        for i, row in enumerate(rows):
+            selected = i == self.sel
+            if row == "back":
+                r = pygame.Rect(box.x + 20, box.bottom - 50, box.w - 40, 36)
+                self.button(screen, r, "ZURÜCK", selected, (110, 110, 125))
+                mouse_item(r, self, i)
+                continue
+            kind, name = row[0], row[2:]
+            if kind != heading:
+                heading = kind
+                draw_text(screen, "DEINE JUNIOREN (ENTER = entlassen)" if kind == "j" else
+                          "TALENTE (Doppelklick/ENTER = aufnehmen)", f.tiny, GREY, (box.x + 16, y + 4), shadow=False)
+                y += 24
+            r = pygame.Rect(box.x + 10, y, box.w - 20, 56)
+            y += 62
+            if r.bottom > box.bottom - 58:
+                continue
+            mouse_item(r, self, i, key=None)
+            if selected:
+                self.highlight(screen, r)
+            elif kind == "j":
+                pygame.draw.rect(screen, (24, 50, 30), r, border_radius=6)
+            d = c.drivers[name]
+            pot = max(d.get("potential", 0), d["rating"])
+            draw_text(screen, _fit(name, f.small_bold, 280), f.small_bold, GREEN if kind == "j" else WHITE,
+                      (r.x + 16, r.y + 8), shadow=False)
+            draw_text(screen, f"{d.get('nationality', '')} · {d.get('age', 0)} J. · Stil {d.get('style', '-')}",
+                      f.tiny, GREY, (r.x + 16, r.y + 32), shadow=False)
+            draw_text(screen, "WERTUNG", f.tiny, GREY, (r.x + 330, r.y + 8), shadow=False)
+            self.bar(screen, r.x + 330, r.y + 28, 220, (d["rating"] - 55) / 40, self.accent, 8)
+            px = r.x + 330 + 220 * max(0.0, min(1.0, (pot - 55) / 40))
+            pygame.draw.line(screen, GOLD, (px, r.y + 24), (px, r.y + 40), 2)
+            draw_text(screen, f"{d['rating']} / Pot. {pot}", f.small_bold, YELLOW, (r.right - 14, r.y + 18),
+                      anchor="topright", shadow=False)
+        if not c.academy_candidates() and not c.juniors():
+            draw_text(screen, "Gerade keine jungen Talente frei - zur neuen Saison kommen Rookies dazu.", f.small,
+                      GREY, (box.x + 16, box.y + 60), shadow=False)
+        rb = pygame.Rect(840, 106, 400, 560)
+        draw_panel(screen, rb, PANEL, 215)
+        eng = c.staff_stars("eng")
+        text = ("Junioren fahren noch keine Rennen, entwickeln sich aber nach jedem Grand Prix "
+                f"(Chance {22 + 5 * eng} % auf +1 Wertung, mehr mit einem besseren Renningenieur) bis zu ihrem "
+                "Potenzial (goldene Linie). Andere Teams können sie dir nicht wegschnappen. Im Fahrermarkt "
+                "kannst du sie jederzeit OHNE Ablöse und ohne Ruf-Anforderung ins Cockpit befördern. "
+                f"Mit über {JUNIOR_MAX_AGE + 2} Jahren verlassen sie die Akademie.")
+        for k, line in enumerate(_wrap(text, f.small, rb.w - 36)):
+            draw_text(screen, line, f.small, (205, 205, 210), (rb.x + 18, rb.y + 18 + k * 23), shadow=False)
+        self.draw_status(screen)
