@@ -50,6 +50,7 @@ class HUD:
         self._ram_checked = 0
         self._sog_label: pygame.Surface | None = None
         self._trend: dict[int, tuple] = {}
+        self.style = "modern"
 
     def clear_caches(self) -> None:
         self._minimap_cache.clear()
@@ -69,11 +70,19 @@ class HUD:
 
     def draw_session(self, screen: pygame.Surface, s: "Session") -> None:
         self.units = s.game.settings.units
+        self.style = getattr(s.game.settings, "hud_style", "modern")
         standings = s.standings()
+        cockpit = s.view3d and s.r3d.cockpit
         self._info_panel(screen, s, standings)
         self._timing_tower(screen, s, standings)
         self._minimap(screen, s)
-        self._speedo(screen, s.focus)
+        if not cockpit:     # in the cockpit the steering wheel display shows speed, gear and revs
+            if self.style == "modern":
+                self._dashboard(screen, s.focus)
+            else:
+                self._speedo(screen, s.focus)
+        if s.view3d and s.r3d.cam.kind in ("onboard", "chase"):
+            self._spotter(screen, s)
         self._engineer(screen, s)
         self._pit_overlay(screen, s.focus)
         if s.kind == "race":
@@ -332,6 +341,163 @@ class HUD:
         elif car.sliding:
             draw_text(screen, "SLIDE", f.small_bold, ORANGE, (x + 205, y + 100))
 
+    # ------------------------------------------------------------------ modern dashboard
+    def _dashboard(self, screen: pygame.Surface, car: "Car") -> None:
+        f = self.f
+        w, h = 404, 130
+        x, y = SCREEN_WIDTH - w - 16, SCREEN_HEIGHT - h - 16
+        draw_panel(screen, (x, y, w, h), alpha=215)
+        pygame.draw.rect(screen, car.color, (x, y, w, 3), border_top_left_radius=8, border_top_right_radius=8)
+        # shift lights: 15 LEDs, green - red - blue, flashing blue at the limiter
+        rpm = car.rpm_fraction
+        flash = rpm > 0.97 and pygame.time.get_ticks() // 70 % 2
+        for i in range(15):
+            col = (40, 220, 80) if i < 5 else (235, 40, 40) if i < 10 else (80, 120, 255)
+            if flash:
+                col = (80, 120, 255)
+            lit = rpm >= (i + 1) / 15 * 0.98
+            pygame.draw.circle(screen, col if lit else tuple(c // 6 for c in col), (x + 22 + i * 15, y + 17), 5)
+        # gear
+        box = pygame.Rect(x + 12, y + 32, 66, 74)
+        pygame.draw.rect(screen, PANEL_LIGHT, box, border_radius=8)
+        shift = getattr(car, "shift_flash", 0.0)
+        gcol = (255, 90, 90) if shift < 0 else WHITE if shift > 0 else YELLOW
+        draw_text(screen, car.gear, f.big, gcol, (box.centerx, box.centery - 2), anchor="center", shadow=False)
+        img = f.tiny.render("SEQ" if car.manual_gearbox else "AUTO", True, GREY)
+        screen.blit(img, img.get_rect(midtop=(box.centerx, box.bottom + 2)))
+        # speed and pedals
+        speed, unit = speed_in(car.speed_kmh, self.units)
+        draw_text(screen, f"{int(speed)}", f.big, WHITE, (x + 236, y + 26), anchor="topright", shadow=False)
+        img = f.tiny.render(unit, True, GREY)
+        screen.blit(img, img.get_rect(topright=(x + 236, y + 72)))
+        for i, (val, col, label) in enumerate(((car.throttle, GREEN, "THR"), (car.brake, F1_RED, "BRK"))):
+            by = y + 80 + i * 14
+            img = f.tiny.render(label, True, GREY)
+            screen.blit(img, (x + 92, by - 3))
+            pygame.draw.rect(screen, (46, 48, 56), (x + 122, by, 62, 8), border_radius=3)
+            if val > 0.01:
+                pygame.draw.rect(screen, col, (x + 122, by, max(3, int(62 * val)), 8), border_radius=3)
+        pill = pygame.Rect(x + 92, y + 108, 92, 15)
+        if car.straight_mode:
+            pygame.draw.rect(screen, (70, 170, 255), pill, border_radius=5)
+            draw_text(screen, "GERADE", f.tiny, (5, 20, 40), pill.center, anchor="center", shadow=False)
+        else:
+            zone = car.track.aero_zone_at[car.idx] >= 0 if car.track.aero_zone_at else False
+            col = (70, 170, 255) if zone else (100, 100, 112)
+            pygame.draw.rect(screen, col, pill, 2, border_radius=5)
+            draw_text(screen, "KURVE", f.tiny, col, pill.center, anchor="center", shadow=False)
+        if car.slipstream > 0.03:
+            bh = int(40 * min(1.0, car.slipstream))
+            pygame.draw.rect(screen, (46, 48, 56), (x + 84, y + 34, 5, 40), border_radius=2)
+            pygame.draw.rect(screen, CYAN, (x + 84, y + 74 - bh, 5, bh), border_radius=2)
+        if car.on_grass:
+            draw_text(screen, "RASEN!", f.tiny, (120, 220, 90), (x + 236, y + 6), anchor="topright", shadow=False)
+        elif car.sliding or getattr(car, "wheelspin", 0.0) > 0.3:
+            draw_text(screen, "SLIDE", f.tiny, ORANGE, (x + 236, y + 6), anchor="topright", shadow=False)
+        elif getattr(car, "locking", False):
+            draw_text(screen, "LOCK", f.tiny, (255, 90, 90), (x + 236, y + 6), anchor="topright", shadow=False)
+        self._car_status(screen, car, pygame.Rect(x + 248, y + 10, 70, 112))
+        # tyre temperatures and fuel
+        cx = x + 362
+        t = car.tyres
+        draw_text(screen, "REIFEN °C", f.tiny, GREY, (cx, y + 8), anchor="midtop", shadow=False)
+        if t is not None and hasattr(t, "temps"):
+            for k, temp in enumerate(t.temps):
+                img = f.small_bold.render(f"{temp:.0f}", True, self._temp_color(temp, t.optimal))
+                screen.blit(img, img.get_rect(center=(cx - 15 + (k % 2) * 30, y + 34 + (k // 2) * 20)))
+        laps = getattr(car, "fuel_laps", 0.0)
+        img = f.tiny.render(f"{getattr(car, 'fuel', 0.0):.0f} kg", True, WHITE)
+        screen.blit(img, img.get_rect(midtop=(cx, y + 76)))
+        bar = pygame.Rect(cx - 28, y + 94, 56, 6)
+        pygame.draw.rect(screen, (46, 48, 56), bar, border_radius=3)
+        pygame.draw.rect(screen, YELLOW if laps < 1.5 else (200, 200, 210),
+                         (bar.x, bar.y, int(bar.w * min(1.0, laps / 10)), bar.h), border_radius=3)
+        draw_text(screen, f"{laps:.1f} Rd.", f.tiny, GREY, (cx, y + 104), anchor="midtop", shadow=False)
+
+    @staticmethod
+    def _temp_color(temp: float, optimal: float) -> tuple[int, int, int]:
+        """Blue cold, green in the working window, orange warm, red overheating."""
+        dev = temp - optimal
+        if dev < -25:
+            return (70, 130, 255)
+        if dev < -10:
+            return (110, 190, 255)
+        if dev <= 12:
+            return (70, 230, 120)
+        if dev <= 22:
+            return (255, 170, 50)
+        return (255, 70, 50)
+
+    def _car_status(self, screen: pygame.Surface, car: "Car", box: pygame.Rect) -> None:
+        """Top-down car: tyres coloured by wear (outline = compound), wings/pods/floor by damage."""
+        def dmg(v: float) -> tuple[int, int, int]:
+            v = max(0.0, min(1.0, v))
+            if v < 0.05:
+                return (70, 76, 90)
+            return (255, int(220 - 180 * v), 40) if v < 0.5 else (240, int(140 - 120 * v), 30)
+
+        def wear_col(v: float) -> tuple[int, int, int]:
+            v = max(0.0, min(1.0, v))
+            if v < 0.5:
+                return (int(60 + 380 * v), 220, 80)
+            return (250, int(220 - 300 * (v - 0.5)), 50)
+        d = car.damage
+        cx = box.centerx
+        tyres = car.tyres
+        wear = tyres.corner_wear() if tyres is not None else (0.0, 0.0, 0.0, 0.0)
+        comp = tyres.compound.color if tyres is not None else GREY
+        pygame.draw.rect(screen, dmg(d.front_wing), (cx - 26, box.y, 52, 8), border_radius=3)
+        pygame.draw.rect(screen, (70, 76, 90), (cx - 5, box.y + 8, 10, 26))
+        pygame.draw.rect(screen, dmg(d.floor), (cx - 13, box.y + 34, 26, 52), border_radius=5)
+        pygame.draw.rect(screen, dmg(d.cooling), (cx - 21, box.y + 44, 8, 30), border_radius=3)
+        pygame.draw.rect(screen, dmg(d.cooling), (cx + 13, box.y + 44, 8, 30), border_radius=3)
+        pygame.draw.rect(screen, dmg(d.rear), (cx - 24, box.bottom - 10, 48, 9), border_radius=3)
+        # tyres: front left, front right, rear left, rear right
+        spots = ((cx - 34, box.y + 14), (cx + 20, box.y + 14), (cx - 35, box.y + 70), (cx + 20, box.y + 70))
+        for k, ((tx, ty), wv) in enumerate(zip(spots, wear)):
+            w_, h_ = (14, 24) if k < 2 else (15, 28)
+            susp = d.susp_l if k % 2 == 0 else d.susp_r
+            rect = pygame.Rect(tx, ty, w_, h_)
+            pygame.draw.rect(screen, wear_col(wv), rect, border_radius=4)
+            if tyres is not None and hasattr(tyres, "temps"):
+                # temperature strip: blue cold, green in the window, red overheating
+                dev = tyres.temps[k] - tyres.optimal
+                tcol = (60, 140, 255) if dev < -12 else (255, 70, 50) if dev > 14 else (60, 230, 120)
+                pygame.draw.rect(screen, tcol, (rect.x + 3, rect.y + 3, rect.w - 6, 5), border_radius=2)
+            pygame.draw.rect(screen, comp, rect, 2, border_radius=4)
+            if susp > 0.05:
+                pygame.draw.line(screen, dmg(susp), (rect.right if k % 2 == 0 else rect.x, rect.centery),
+                                 (cx - 13 if k % 2 == 0 else cx + 13, rect.centery), 3)
+        if tyres is not None:
+            pygame.draw.circle(screen, (12, 12, 16), (cx, box.y + 60), 10)
+            pygame.draw.circle(screen, comp, (cx, box.y + 60), 10, 2)
+            img = self.f.tiny.render(tyres.compound.letter, True, comp)
+            screen.blit(img, img.get_rect(center=(cx, box.y + 60)))
+
+    def _spotter(self, screen: pygame.Surface, s: "Session") -> None:
+        """Chevrons at the side of the screen when a car is right alongside (hard to see in 3D)."""
+        me = s.focus
+        f, r = me.forward, me.right
+        sides = {-1: 0.0, 1: 0.0}
+        for other in s.cars:
+            if other is me or other.is_ghost or getattr(other, "ghost_visual", False) or other.dnf:
+                continue
+            d = other.pos - me.pos
+            along, lat = d.dot(f), d.dot(r)
+            if abs(along) < 42 and 10 < abs(lat) < 46:
+                side = 1 if lat > 0 else -1
+                sides[side] = max(sides[side], 1.0 - abs(along) / 42)
+        cy = SCREEN_HEIGHT // 2 + 20
+        for side, k in sides.items():
+            if k <= 0:
+                continue
+            x = SCREEN_WIDTH // 2 + side * 330
+            col = (255, int(200 - 120 * k), 40)
+            for j in range(3):
+                off = j * 16 * side
+                pts = [(x + off, cy - 22), (x + off + side * 14, cy), (x + off, cy + 22)]
+                pygame.draw.lines(screen, col if j < 1 + int(k * 2.5) else (90, 70, 40), False, pts, 6)
+
     def _blue_flag(self, screen: pygame.Surface, s: "Session") -> None:
         car = s.focus
         chaser = getattr(car, "blue_for", None)
@@ -355,12 +521,39 @@ class HUD:
             draw_panel(screen, (cx - 150, py, 300, 70), (60, 45, 0), 220)
             limit, unit = speed_in(100.0, self.units)
             draw_text(screen, f"PIT LIMITER  {limit:.0f} {unit}", f.medium, (255, 210, 40), (cx, py + 20), anchor="center")
-            sub = (f"Boxenstopp ... {car.pit_stop_timer:3.1f}s" if car.pit_stop_timer > 0
-                   else f"-> {COMPOUNDS[car.pit_compound].name}" if car.pit_compound in COMPOUNDS else "-> Box")
-            draw_text(screen, sub, f.small_bold, WHITE, (cx, py + 50), anchor="center")
+            service = getattr(car, "pit_service", None)
+            if service is not None and car.pit_stopped and (car.pit_stop_timer > 0 or car.pit_hold):
+                self._pit_service(screen, car, service, cx, py)
+            else:
+                sub = f"-> {COMPOUNDS[car.pit_compound].name}" if car.pit_compound in COMPOUNDS else "-> Box"
+                if car.pit_stopped and car.pit_last_stop is not None:
+                    sub = f"Stopp {car.pit_last_stop:.2f}s  ·  GO GO GO!"
+                draw_text(screen, sub, f.small_bold, WHITE, (cx, py + 50), anchor="center")
         if getattr(car, "brake_assist_active", False):
             draw_text(screen, "BREMSHILFE", f.small_bold, (255, 90, 90), (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 110),
                       anchor="center")
+
+    def _pit_service(self, screen: pygame.Surface, car: "Car", service: dict, cx: int, py: int) -> None:
+        """Stationary clock counting up (like the TV graphic) and the four wheels: grey waiting, red off, green on."""
+        f = self.f
+        t = service["t"]
+        col = YELLOW if service.get("problem") is not None else WHITE
+        img = f.mono_big.render(f"{t:5.2f}s", True, col)
+        screen.blit(img, img.get_rect(midleft=(cx - 118, py + 50)))
+        wheels = service.get("wheels")
+        if wheels:
+            for k, (off, on) in enumerate(wheels):
+                x = cx + 26 + (k % 2) * 24
+                y = py + 38 + (k // 2) * 15
+                state = (40, 220, 90) if t >= on else (235, 50, 45) if t >= off else (110, 110, 120)
+                if k == service.get("problem") and off <= t < on:
+                    state = (255, 200, 40) if pygame.time.get_ticks() // 150 % 2 else (235, 50, 45)
+                pygame.draw.rect(screen, state, (x, y, 18, 11), border_radius=3)
+        light = (255, 200, 40) if car.pit_hold and car.pit_stop_timer <= 0 else (235, 50, 45)
+        pygame.draw.circle(screen, (10, 10, 12), (cx + 118, py + 50), 12)
+        pygame.draw.circle(screen, light, (cx + 118, py + 50), 9)
+        if car.pit_hold and car.pit_stop_timer <= 0:
+            draw_text(screen, "WARTEN", f.tiny, YELLOW, (cx + 96, py + 50), anchor="midright", shadow=False)
 
     @staticmethod
     def _tyre_forecast(car: "Car") -> float | None:
@@ -473,90 +666,105 @@ class HUD:
         f = self.f
         car = s.focus
         standings = s.standings()
-        x, y, w, h = SCREEN_WIDTH - 256, 322, 240, 254
+        x, y, w, h = SCREEN_WIDTH - 256, 314, 240, 258
         draw_panel(screen, (x, y, w, h))
         pygame.draw.rect(screen, car.color, (x, y, w, 4), border_radius=3)
         pos = standings.index(car) + 1
         title = "RENNINGENIEUR" if car is s.player else f"P{pos} {car.name}"
+        if car.profile.number:
+            title += f" · #{car.profile.number}"
+        draw_text(screen, title[:28], f.tiny, GREY if car is s.player else WHITE, (x + 12, y + 9), shadow=False)
+        if car is not s.player:
+            sub = car.profile.team + (f" · KI {car.profile.brain}/{car.profile.checkpoint}" if not car.is_player else "")
+            draw_text(screen, sub[:38], f.tiny, (130, 130, 140), (x + 12, y + 23), shadow=False)
+        remaining = max(0, getattr(s, "total_laps", 0) - car.laps_done) if s.kind == "race" else None
+        forecast = self._tyre_forecast(car)
+        t = car.tyres
+        ty = y + 38
+        if t is not None:
+            # 2x2 tyre grid: temperature on top (colour = working window), wear underneath
+            temps = getattr(t, "temps", None)
+            for k, wear in enumerate(t.corner_wear()):
+                cell = pygame.Rect(x + 10 + (k % 2) * 54, ty + (k // 2) * 41, 50, 38)
+                wcol = GREEN if wear < 0.5 else YELLOW if wear < 0.75 else (255, 90, 90)
+                pygame.draw.rect(screen, (24, 26, 32), cell, border_radius=6)
+                pygame.draw.rect(screen, wcol, (cell.x, cell.bottom - 4, int(cell.w * (1 - wear)), 4),
+                                 border_bottom_left_radius=6, border_bottom_right_radius=6)
+                if temps is not None:
+                    tc = self._temp_color(temps[k], t.optimal)
+                    pygame.draw.rect(screen, tc, cell, 2, border_radius=6)
+                    img = f.small_bold.render(f"{temps[k]:.0f}°", True, tc)
+                    screen.blit(img, img.get_rect(midtop=(cell.centerx, cell.y + 2)))
+                img = f.tiny.render(f"{(1 - wear) * 100:.0f}%", True, (170, 170, 180))
+                screen.blit(img, img.get_rect(midbottom=(cell.centerx, cell.bottom - 5)))
+            comp = t.compound
+            rx = x + 122
+            pygame.draw.circle(screen, (15, 15, 18), (rx + 13, ty + 13), 13)
+            pygame.draw.circle(screen, comp.color, (rx + 13, ty + 13), 13, 3)
+            draw_text(screen, comp.letter, f.small_bold, comp.color, (rx + 13, ty + 13), anchor="center", shadow=False)
+            draw_text(screen, comp.name, f.small_bold, WHITE, (rx + 32, ty - 2), shadow=False)
+            draw_text(screen, f"{t.laps} Rd. alt", f.tiny, GREY, (rx + 32, ty + 15), shadow=False)
+            life = 1.0 - t.wear
+            col = GREEN if t.wear < 0.5 else YELLOW if t.wear < 0.75 else (255, 90, 90)
+            pygame.draw.rect(screen, (45, 45, 52), (rx, ty + 34, 106, 7), border_radius=3)
+            pygame.draw.rect(screen, col, (rx, ty + 34, int(106 * life), 7), border_radius=3)
+            if forecast is None:
+                l1, l2, fcol = "Prognose", "nach 1. Runde", GREY
+            elif t.wear >= 0.75:
+                l1, l2, fcol = "Reifen am", "Limit!", (255, 90, 90)
+            else:
+                l1 = f"~{round(forecast)} Rd. übrig"
+                ok = remaining is not None and forecast >= remaining - 0.5
+                l2 = "bis ins Ziel" if ok else (f"Ziel in {remaining}" if remaining is not None else "")
+                fcol = GREEN if ok else YELLOW if remaining is not None else WHITE
+            draw_text(screen, l1, f.tiny, fcol, (rx, ty + 48), shadow=False)
+            draw_text(screen, l2, f.tiny, fcol, (rx, ty + 63), shadow=False)
+        # car condition chips
+        d = car.damage
+        cy = y + 122
+        for k, (label, v) in enumerate((("FLÜGEL", d.front_wing), ("HECK", d.rear), ("AUFH.", d.suspension),
+                                        ("BODEN", d.floor), ("KÜHL.", d.cooling))):
+            chip = pygame.Rect(x + 10 + k * 44, cy, 42, 16)
+            col = (52, 58, 66) if v < 0.05 else YELLOW if v < 0.4 else (255, 80, 70)
+            pygame.draw.rect(screen, col, chip, border_radius=4)
+            img = f.tiny.render(tr(label), True, (230, 232, 236) if v < 0.05 else (20, 20, 24))
+            if img.get_width() > chip.w - 4:
+                img = pygame.transform.smoothscale(img, (chip.w - 4, img.get_height()))
+            screen.blit(img, img.get_rect(center=chip.center))
+        cy += 22
+        # fuel
+        if car.fuel_per_lap > 0:
+            need = (remaining - (car.distance % s.track.length) / s.track.length) if remaining else None
+            short = need is not None and car.fuel_laps < need - 0.05
+            fcol = (255, 90, 90) if car.out_of_fuel or short else YELLOW if car.fuel_laps < 1.5 else (200, 200, 210)
+            draw_text(screen, "SPRIT", f.tiny, GREY, (x + 12, cy), shadow=False)
+            pygame.draw.rect(screen, (45, 45, 52), (x + 56, cy + 4, 70, 7), border_radius=3)
+            frac = min(1.0, car.fuel_laps / max(1.0, need if need else car.fuel_laps or 1.0))
+            pygame.draw.rect(screen, fcol, (x + 56, cy + 4, int(70 * frac), 7), border_radius=3)
+            ftxt = f"{car.fuel:.0f} kg " + (f"{car.fuel_laps - need:+.1f}" if need is not None else
+                                            f"{car.fuel_laps:.1f} Rd.")
+            draw_text(screen, ftxt, f.tiny, fcol, (x + 132, cy), shadow=False)
+        cy += 18
+        gap, trend = self._gap_trend(s, car, standings)
         if s.is_manager_car(car):
             pending = s.team_orders.get(car, {}).get("compound", "none")
             hint = "B: Box-Anweisung · TAB: 2. Fahrer"
             if pending not in ("none", None):
                 hint = f"Anweisung: {COMPOUNDS[pending].name} ..."
-            draw_text(screen, hint, f.tiny, (120, 200, 255), (x + 12, y + h - 68), shadow=False)
-        if car.profile.number:
-            title += f" · #{car.profile.number}"
-        draw_text(screen, title[:28], f.tiny, GREY if car is s.player else WHITE, (x + 12, y + 10), shadow=False)
-        if car is not s.player:
-            sub = car.profile.team + (f" · KI {car.profile.brain}/{car.profile.checkpoint}" if not car.is_player else "")
-            draw_text(screen, sub[:38], f.tiny, (130, 130, 140), (x + 12, y + 26), shadow=False)
-        cy = y + 46
-        t = car.tyres
-        remaining = None
-        if s.kind == "race":
-            remaining = max(0, getattr(s, "total_laps", 0) - car.laps_done)
-        forecast = self._tyre_forecast(car)
-        if t is not None:
-            comp = t.compound
-            pygame.draw.circle(screen, (15, 15, 18), (x + 24, cy + 14), 13)
-            pygame.draw.circle(screen, comp.color, (x + 24, cy + 14), 13, 3)
-            draw_text(screen, comp.letter, f.small_bold, comp.color, (x + 24, cy + 14), anchor="center", shadow=False)
-            life = 1.0 - t.wear
-            col = GREEN if t.wear < 0.5 else YELLOW if t.wear < 0.75 else (255, 90, 90)
-            draw_text(screen, f"{comp.name} · {t.laps} Rd.", f.small_bold, WHITE, (x + 46, cy - 1), shadow=False)
-            pygame.draw.rect(screen, (45, 45, 52), (x + 46, cy + 22, 108, 8), border_radius=3)
-            pygame.draw.rect(screen, col, (x + 46, cy + 22, int(108 * life), 8), border_radius=3)
-            draw_text(screen, f"{life * 100:.0f}%", f.small_bold, col, (x + 160, cy + 16), shadow=False)
-            for k, wear in enumerate(t.corner_wear()):
-                c = GREEN if wear < 0.5 else YELLOW if wear < 0.75 else (255, 90, 90)
-                pygame.draw.rect(screen, c, (x + 206 + (k % 2) * 13, cy + 2 + (k // 2) * 14, 10, 11), border_radius=2)
-            cy += 38
-            if forecast is None:
-                fc = "Prognose nach der ersten Runde"
-                fcol = GREY
-            elif t.wear >= 0.75:
-                fc, fcol = "Reifen über dem Limit!", (255, 90, 90)
-            else:
-                n = round(forecast)
-                fc = f"Hält noch ~{n} Runde{'' if n == 1 else 'n'}"
-                fcol = WHITE
-                if remaining is not None:
-                    fc += " · reicht bis ins Ziel" if forecast >= remaining - 0.5 else f" · Ziel in {remaining}"
-                    fcol = GREEN if forecast >= remaining - 0.5 else YELLOW
-            draw_text(screen, fc, f.tiny, fcol, (x + 12, cy), shadow=False)
-            cy += 22
-        d = car.damage
-        parts = d.parts()[:3]
-        if not parts:
-            draw_text(screen, "Auto: keine Schäden", f.tiny, (150, 200, 160), (x + 12, cy), shadow=False)
-        else:
-            text = " · ".join(f"{n} {v * 100:.0f}%" for n, v in parts)
-            worst = max(v for _, v in parts)
-            draw_text(screen, text[:40], f.tiny, (255, 90, 90) if worst > 0.4 else YELLOW, (x + 12, cy), shadow=False)
-        cy += 20
-        if car.fuel_per_lap > 0 or car.plank_per_lap > 0:
-            if car.fuel_per_lap > 0:
-                need = (remaining - (car.distance % s.track.length) / s.track.length) if remaining else None
-                short = need is not None and car.fuel_laps < need - 0.05
-                fcol = (255, 90, 90) if car.out_of_fuel or short else YELLOW if car.fuel_laps < 1.5 else WHITE
-                ftxt = f"Sprit {car.fuel:.1f} kg · " + (f"Reserve {car.fuel_laps - need:+.1f}" if need is not None
-                                                        else f"{car.fuel_laps:.1f} Rd.")
-                fw = draw_text(screen, ftxt, f.tiny, fcol, (x + 12, cy), shadow=False).right
-            else:
-                fw = x
-            if car.plank_per_lap > 0:
-                pw = car.plank_wear
-                pcol = (255, 90, 90) if pw > PLANK_LIMIT_MM else YELLOW if pw > 0.8 * PLANK_LIMIT_MM else                     (150, 200, 160)
-                ptxt = f"Planke {pw:.2f}"
-                if fw + 10 + f.tiny.size(tr(ptxt))[0] > x + w - 12:
-                    cy += 18            # no room next to the fuel line (long translations)
-                draw_text(screen, ptxt, f.tiny, pcol, (x + w - 12, cy), anchor="topright", shadow=False)
-            cy += 20
-        gap, trend = self._gap_trend(s, car, standings)
-        if s.kind == "race" and gap is not None:
-            trend_txt = "" if trend is None else (f"  ({trend:+.1f}/Rd.)")
-            draw_text(screen, f"Vordermann: {gap:.2f}s{trend_txt}", f.tiny, WHITE, (x + 12, cy), shadow=False)
-            cy += 20
+            draw_text(screen, hint, f.tiny, (120, 200, 255), (x + 12, cy), shadow=False)
+            cy += 17
+        elif s.kind == "race" and gap is not None:
+            draw_text(screen, "VORDERMANN", f.tiny, GREY, (x + 12, cy), shadow=False)
+            draw_text(screen, f"{gap:.2f}s", f.small_bold, WHITE, (x + 120, cy - 3), anchor="topright", shadow=False)
+            if trend is not None and abs(trend) >= 0.05:
+                closing = trend < 0
+                tcol = GREEN if closing else (255, 110, 90)
+                ax, ay = x + 132, cy + 7
+                tri = [(ax, ay + 5), (ax + 10, ay + 5), (ax + 5, ay - 5)] if closing else \
+                    [(ax, ay - 5), (ax + 10, ay - 5), (ax + 5, ay + 5)]
+                pygame.draw.polygon(screen, tcol, tri)
+                draw_text(screen, f"{abs(trend):.1f}s/Rd.", f.tiny, tcol, (x + 148, cy), shadow=False)
+            cy += 17
         info = []
         if car.pit_stops:
             info.append(f"Stopps {car.pit_stops}")
@@ -568,12 +776,17 @@ class HUD:
         if car.vmax > 30:
             vmax, unit = speed_in(car.vmax * PX_PER_S_TO_KMH, s.game.settings.units)
             info.append(f"Vmax {vmax:.0f}")
+        if car.plank_per_lap > 0:
+            info.append(f"Planke {car.plank_wear:.2f}")
         if info:
-            draw_text(screen, " · ".join(tr(i) for i in info)[:42], f.tiny, (180, 180, 190), (x + 12, cy), shadow=False)
+            plank_hot = car.plank_per_lap > 0 and car.plank_wear > 0.8 * PLANK_LIMIT_MM
+            draw_text(screen, " · ".join(tr(i) for i in info)[:44], f.tiny, YELLOW if plank_hot else (170, 170, 180),
+                      (x + 12, cy), shadow=False)
+        # radio
         msg, col = self._radio(s, car, forecast, remaining, gap, trend)
-        ry = y + h - 50
-        pygame.draw.rect(screen, (28, 30, 38), (x + 8, ry, w - 16, 42), border_radius=6)
-        pygame.draw.rect(screen, col, (x + 8, ry, 3, 42), border_radius=2)
+        ry = y + h - 48
+        pygame.draw.rect(screen, (28, 30, 38), (x + 8, ry, w - 16, 40), border_radius=6)
+        pygame.draw.rect(screen, col, (x + 8, ry, 3, 40), border_radius=2)
         draw_text(screen, "FUNK", f.tiny, GREY, (x + 18, ry + 4), shadow=False)
         words, line, lines = tr(msg).split(), "", []
         for word in words:
@@ -585,7 +798,7 @@ class HUD:
                 line = trial
         lines.append(line)
         for k, ln in enumerate(lines[:2]):
-            draw_text(screen, ln, f.tiny, col, (x + 66, ry + 6 + k * 16), shadow=False)
+            draw_text(screen, ln, f.tiny, col, (x + 66, ry + 5 + k * 16), shadow=False)
 
     def _race_control(self, screen: pygame.Surface, s: "Session") -> None:
         log = s.stewards.log
@@ -610,7 +823,7 @@ class HUD:
         p = s.focus
         i = standings.index(p)
         cx = SCREEN_WIDTH // 2
-        y = SCREEN_HEIGHT - 70
+        y = 52 if s.view3d and s.r3d.cockpit else SCREEN_HEIGHT - 70
         boxes: list[tuple[str, str, tuple[int, int, int], str]] = []
         if not s.race_started:
             return
@@ -636,7 +849,7 @@ class HUD:
     def _delta_panel(self, screen: pygame.Surface, s: "Session") -> None:
         f = self.f
         p = s.focus
-        x, y = SCREEN_WIDTH // 2 - 110, SCREEN_HEIGHT - 70
+        x, y = SCREEN_WIDTH // 2 - 110, 52 if s.view3d and s.r3d.cockpit else SCREEN_HEIGHT - 70
         draw_panel(screen, (x, y, 220, 54))
         draw_text(screen, "DELTA ZUR BESTZEIT", f.tiny, GREY, (x + 10, y + 8), shadow=False)
         d = p.live_delta()

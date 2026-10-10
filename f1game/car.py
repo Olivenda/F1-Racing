@@ -171,6 +171,11 @@ class Car:
         self.pit_stop_timer = 0.0
         self.pit_stopped = False
         self.pit_stops = 0
+        self.pit_service: dict | None = None     # the stop in progress: elapsed time, wheel timings, problems
+        self.pit_hold = False                    # serviced, the crew holds the car until the lane is clear
+        self.pit_wheels_off: list[bool] | None = None
+        self.pit_lift = 0.0                      # how far the jacks have lifted the car (3D view)
+        self.pit_last_stop: float | None = None  # stationary time of the last stop
         self.damage = Damage()
         self.damage.multiplier = 0.0
         self.dnf = False
@@ -194,6 +199,11 @@ class Car:
         self.collision_flash = 0.0
         self.slipstream = 0.0
         self.slip_target = 0.0
+        self.dirty_air = 0.0            # 0..1 turbulent wake of a car close ahead: costs front grip in corners
+        self.dirty_target = 0.0
+        self.on_kerb = False
+        self.wheelspin = 0.0            # 0..1, only without traction control (assists off)
+        self.locking = False            # front tyres locked under braking, only without ABS (assists off)
         self.straight_mode = False
         self.straight_mode_time = 0.0
         self.fuel = 0.0                 # kg on board
@@ -420,9 +430,14 @@ class Car:
         tyre_grip = self.tyre_grip
         top = self.top_speed
         top *= self.damage.top_speed_factor * (self.tyres.top_speed if self.tyres else 1.0)
+        track = self.track
+        hw = track.half_width
+        self.on_kerb = bool(track.curb_segment) and track.curb_segment[self.idx] and \
+            hw - 8.0 < abs(self.lateral) < hw + 2.0 and not self.in_pit
         grip = LATERAL_GRIP * perf.aero * sf.grip * tyre_grip * self.grip_bonus * self.damage.grip_factor * \
             (GRASS_GRIP_FACTOR * sf.grass_grip if self.on_grass else 1.0) * \
-            (STRAIGHT_MODE_GRIP if self.straight_mode else 1.0) * (0.55 if self.puncture else 1.0)
+            (STRAIGHT_MODE_GRIP if self.straight_mode else 1.0) * (0.55 if self.puncture else 1.0) * \
+            (1.0 - 0.09 * self.dirty_air) * (0.94 if self.on_kerb else 1.0)
         engine = ENGINE_ACCEL * self.engine_factor * perf.engine * sf.engine * self.damage.engine_factor * \
             (self.tyres.traction if self.tyres else 1.0) * \
             (GRASS_ENGINE_FACTOR if self.on_grass else 1.0)
@@ -436,6 +451,25 @@ class Car:
 
         steer_target = clamp(self.steer_input + self.damage.steer_bias, -1.0, 1.0)
         self.steer_angle = approach(self.steer_angle, steer_target, STEER_RATE * sf.steer_rate * dt)
+
+        # driver aids: without them (assist level 0, human drivers only) the rear tyres spin up on the way out
+        # of slow corners and the fronts lock when braking hard while still turning in
+        raw = getattr(self, "assist_level", 2) == 0 and getattr(self, "autopilot", None) is None
+        self.wheelspin = 0.0
+        self.locking = False
+        if raw and not self.on_grass and vf > 15.0:
+            sr = vf / top
+            if self.throttle > 0.6 and sr < 0.5:
+                excess = self.throttle * (1.0 - sr / 0.5) * (0.3 + self.lateral_use) - 0.45
+                if excess > 0:
+                    self.wheelspin = min(1.0, excess * 2.0)
+                    engine *= 1.0 - 0.35 * self.wheelspin
+                    if abs(self.steer_angle) > 0.15:
+                        # power oversteer: the rear steps out towards the outside of the corner
+                        self.spin += math.copysign(self.wheelspin * 1.4 * dt, self.steer_angle)
+            if self.brake > 0.9 and vf > 100.0 and (abs(self.steer_input) > 0.3 or self.track.wetness > 0.3):
+                self.locking = True
+                brake_force *= 0.88
 
         acc = 0.0
         gear_cap = 1e9
@@ -474,7 +508,7 @@ class Car:
             new_vf = max(rev_cap, vf - 400.0 * dt) if vf > rev_cap else rev_cap
 
         speed = max(abs(new_vf), 1.0)
-        turn = sf.turn * (sf.brake_turn if braking_forward else 1.0)
+        turn = sf.turn * (sf.brake_turn if braking_forward else 1.0) * (0.55 if self.locking else 1.0)
         k_geom, k_grip = math.tan(MAX_STEER_ANGLE) / WHEELBASE, grip * turn / (speed * speed)
         k_max = min(k_geom, k_grip)
         self.at_grip_limit = k_grip < k_geom
@@ -500,7 +534,9 @@ class Car:
         if self.tyres is not None:
             lateral_use = min(1.2, abs(vf2 * yaw_rate) / max(grip, 1.0))
             self.lateral_use = lateral_use
-            self.tyres.update(dt, lateral_use, self.brake, self.throttle, abs(vl2), abs(vf2) > 5.0)
+            self.tyres.update(dt, lateral_use, self.brake, self.throttle,
+                              abs(vl2) + 110.0 * self.wheelspin + (90.0 if self.locking else 0.0), abs(vf2) > 5.0,
+                              max(0.0, vf2) / top, math.copysign(lateral_use, yaw_rate))
         if vf2 > 5.0 and not self.session_done:
             self._consume(dt, vf2 / top)
 

@@ -76,7 +76,7 @@ EXACT: dict[str, str] = {
     "TV-Regie (Zuschauer)": "TV director (spectator)", "FPS anzeigen": "Show FPS", "Vollbild": "Fullscreen",
     "Einheiten": "Units", "Bildrate": "Frame rate", "Partikel & Effekte": "Particles & effects",
     "Kantenglättung": "Anti-aliasing", "Kanten glätten": "Smooth edges",
-    "Hoch (2x Supersampling)": "High (2x supersampling)",
+    "Hoch (1,5x Supersampling)": "High (1.5x supersampling)",
     # pit menu / race strategy
     "BOXENSTOPP": "PIT STOP", "nicht angefordert": "not ordered", "angefordert": "ordered", "DU BEKOMMST": "YOU GET", "angefordert - zur Boxeneinfahrt fahren":
         "ordered - drive into the pit entry", "noch nicht angefordert": "not ordered yet",
@@ -248,6 +248,23 @@ EXACT: dict[str, str] = {
     "SCHWARZ-WEISSE FLAGGE - nächster Verstoß wird bestraft": "BLACK AND WHITE FLAG - next offence will be penalised",
     "wiederholte Track-Limits-Verstöße": "repeated track limits violations",
     "Verfolger": "Chase", "Weit": "Wide", "Onboard": "Onboard", "TV-Helikopter": "TV helicopter",
+    "DOPPELSTOPP - hinter dem Teamkollegen warten": "DOUBLE STACK - wait behind your team-mate",
+    "vorne links": "front left", "vorne rechts": "front right", "hinten links": "rear left",
+    "hinten rechts": "rear right", "WARTEN": "HOLD",
+    "ERS-Ausfall": "ERS failure", "Motor im Notlaufprogramm": "engine in limp mode",
+    "Getriebeproblem": "gearbox problem", "Unterboden beschädigt": "damaged floor", "Lenkungsproblem": "steering problem",
+    "Prognose": "Forecast", "nach 1. Runde": "after lap 1", "Reifen am": "Tyres at the", "Limit!": "limit!",
+    "bis ins Ziel": "to the finish", "VORDERMANN": "CAR AHEAD", "REIFEN °C": "TYRES °C", "FLÜGEL": "WING",
+    "HECK": "REAR", "AUFH.": "SUSP.", "BODEN": "FLOOR", "KÜHL.": "COOL.", "LOCK": "LOCK",
+    "Nasenkamera": "Nose cam", "Streckenkamera": "Trackside TV cam", "Grafikdetails": "Graphics detail",
+    "HUD-Stil": "HUD style", "Klassisch": "Classic", "GERADE": "STRAIGHT", "KURVE": "CORNER",
+    "Niedrig: nur Strecke und Autos. Mittel: + Tribünen, Banden, Bremsschilder, Startampel, Grasstreifen, "
+    "Partikel in 3D. Hoch: + Rückspiegel im Cockpit, Linsenreflexe, Vignette, Regentropfen auf der Linse.":
+        "Low: just track and cars. Medium: + grandstands, billboards, brake boards, start gantry, grass stripes, "
+        "3D particles. High: + live cockpit mirrors, lens flare, vignette, rain drops on the lens.",
+    "Modern: Schaltlichter, Auto-Status mit Reifenverschleiß, Reifentemperaturen, Schäden und Sprit. "
+    "Klassisch: die alte Anzeige.":
+        "Modern: shift lights, car status with tyre wear, tyre temperatures, damage and fuel. Classic: the old display.",
     "SIEG! Herzlichen Glückwunsch!": "VICTORY! Congratulations!", "Platz 2 - starkes Rennen!": "P2 - strong race!",
     "Platz 3 - aufs Podium gefahren!": "P3 - onto the podium!", "Ausgefallen - nächstes Mal!": "Retired - next time!",
     "FAHRER DES TAGES": "DRIVER OF THE DAY", "Teilnahme": "Participation", "SAISON ABBRECHEN": "ABANDON SEASON",
@@ -904,7 +921,14 @@ TEMPLATES: list[tuple[str, str]] = [
     ("WELTMEISTER: {}", "WORLD CHAMPION: {}"), ("{} bis Rennende", "{} to the finish"),
     ("Grand Prix von {} · Positionsverlauf über {#} Runden", "{} Grand Prix · positions over {} laps"),
     ("Voraus {}", "Ahead {}"), ("TEAMZIEL: {}", "TEAM GOAL: {}"), ("Kamera: {} (3D mit V)", "Camera: {} (3D with V)"),
-    ("Kamera: {}", "Camera: {}"), ("Zeitraffer x{#}", "Time warp x{}"),
+    ("Kamera: {}", "Camera: {}"), ("{#} Rd.", "{} laps"), ("Planke {#}", "Plank {}"), ("~{#} Rd. übrig", "~{} laps left"), ("Ziel in {#}", "finish in {}"),
+    ("{#} Rd. alt", "{} laps old"), ("{#}s/Rd.", "{}s/lap"), ("{#} kg {#}", "{} kg {}"), ("{#} kg {#} Rd.", "{} kg {} laps"),
+    ("TECHNIK: {} - {}", "TECHNICAL: {} - {}"), ("DEFEKT: {} - Auto bringen!", "FAILURE: {} - bring it home!"),
+    ("Wir haben ein Problem: {}. Bring das Auto ins Ziel.", "We have a problem: {}. Bring the car home."),
+    ("{}: Doppelstopp, wartet hinter dem Teamkollegen", "{}: double stack, waiting behind the team-mate"),
+    ("PROBLEM AM RAD {}!", "PROBLEM WITH THE {} WHEEL!"), ("{}: langsamer Stopp - Rad {}", "{}: slow stop - {} wheel"),
+    ("Schnellster Boxenstopp: {} {#}s", "Fastest pit stop: {} {}s"), ("BOXENSTOPP {#}s", "PIT STOP {}s"),
+    ("{} Boxenstopp {#}s -> {}", "{} pit stop {}s -> {}"), ("Stopp {#}s  ·  GO GO GO!", "Stop {}s  ·  GO GO GO!"), ("Zeitraffer x{#}", "Time warp x{}"),
     ("BOX: {}-Reifen in dieser Runde", "BOX: {} tyres this lap"), ("{} ist schon in der Boxengasse", "{} is already in the pit lane"),
     ("Box für {}: {}", "Box for {}: {}"), ("{}: Stopp absagen", "{}: cancel stop"),
     ("ANWEISUNG  {}  (B = ändern)", "ORDER  {}  (B = change)"), ("Teamchef: Box, Box - {}!", "Team principal: box, box - {}!"),

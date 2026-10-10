@@ -42,6 +42,8 @@ class Game:
         pygame.mixer.pre_init(22050, -16, 2, 1024)       # 512 underran on slow frames (crackling)
         pygame.init()
         pygame.display.set_caption("Gulivers Gieles F1 Game")
+        icon_surface = pygame.image.load('dein_icon.png')
+        pygame.display.set_icon(icon_surface)
         self.settings = UserSettings.load()
         set_language(self.settings.language)
         self.sound = SoundSystem(self.settings.sound)

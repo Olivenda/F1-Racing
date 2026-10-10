@@ -13,7 +13,8 @@ from .championship import FORMATS, Championship
 from .profiles import recording_stats
 from .sound import VOLUMES
 from .tyres import ALL_COMPOUNDS, COMPOUND_ORDER, COMPOUNDS
-from .user_settings import ANTIALIAS_LEVELS, ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, GEARBOX_MODES, TYRE_WEAR_MODES, UNITS, speed_in
+from .user_settings import (ANTIALIAS_LEVELS, ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, GEARBOX_MODES,
+                            GRAPHICS_LEVELS, HUD_STYLES, TYRE_WEAR_MODES, UNITS, speed_in)
 from .settings import (CYAN, DIFFICULTY_LEVELS, F1_RED, GREEN, GREY, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .track import TRACK_DEFS
@@ -490,7 +491,8 @@ class SetupScreen:
 class SettingsScreen:
 
     ROWS = ["Sprache", "Spielername", "Lenkrad & Controller", "Fahrhilfen", "Ansicht", "Schaden", "Reifenverschleiß", "Wetter", "Getriebe", "Safety Car",
-            "TV-Regie (Zuschauer)", "Sound", "Einheiten", "Partikel & Effekte", "Kantenglättung", "Bildrate", "FPS anzeigen",
+            "TV-Regie (Zuschauer)", "Sound", "Einheiten", "Partikel & Effekte", "Grafikdetails", "Kantenglättung",
+            "HUD-Stil", "Bildrate", "FPS anzeigen",
             "Vollbild", "ZURÜCK"]
     HELP = {
         "Spielername": "Tippen zum Ändern, Rücktaste löscht. Erscheint in Zeitentabellen und auf dem Podium.",
@@ -519,6 +521,11 @@ class SettingsScreen:
         "Partikel & Effekte": "Reifenrauch, Funken bei Einschlägen, Staub neben der Strecke und Bremsspuren auf "
                               "dem Asphalt.",
         "Bildrate": "Höhere Bildrate = flüssiger, braucht mehr Rechenleistung.",
+        "Grafikdetails": "Niedrig: nur Strecke und Autos. Mittel: + Tribünen, Banden, Bremsschilder, Startampel, "
+                         "Grasstreifen, Partikel in 3D. Hoch: + Rückspiegel im Cockpit, Linsenreflexe, Vignette, "
+                         "Regentropfen auf der Linse.",
+        "HUD-Stil": "Modern: Schaltlichter, Auto-Status mit Reifenverschleiß, Reifentemperaturen, Schäden und "
+                    "Sprit. Klassisch: die alte Anzeige.",
         "Vollbild": "Skaliert das Spiel auf den ganzen Bildschirm.",
         "ZURÜCK": "Einstellungen werden automatisch gespeichert.",
     }
@@ -553,6 +560,8 @@ class SettingsScreen:
             "Einheiten": UNITS[st.units][0],
             "Partikel & Effekte": EFFECT_LEVELS[st.effects],
             "Kantenglättung": ANTIALIAS_LEVELS[st.antialias],
+            "Grafikdetails": GRAPHICS_LEVELS[st.graphics],
+            "HUD-Stil": HUD_STYLES[st.hud_style],
             "Bildrate": f"{st.fps} FPS",
             "Vollbild": "An" if st.fullscreen else "Aus",
         }.get(row, "")
@@ -598,6 +607,11 @@ class SettingsScreen:
         elif row == "Partikel & Effekte":
             keys = list(EFFECT_LEVELS)
             st.effects = keys[(keys.index(st.effects) + delta) % len(keys)]
+        elif row == "Grafikdetails":
+            keys = list(GRAPHICS_LEVELS)
+            st.graphics = keys[(keys.index(st.graphics) + delta) % len(keys)]
+        elif row == "HUD-Stil":
+            st.hud_style = "classic" if st.hud_style == "modern" else "modern"
         elif row == "Kantenglättung":
             keys = list(ANTIALIAS_LEVELS)
             st.antialias = keys[(keys.index(st.antialias) + delta) % len(keys)]

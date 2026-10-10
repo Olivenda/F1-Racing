@@ -1,5 +1,5 @@
 {
- "enabled": true,
+ "enabled": false,
  "devices": {
   "Xbox 360 Controller": {
    "kind": "gamepad",
@@ -37,11 +37,11 @@
     "view": -1,
     "continue": 0
    },
-   "deadzone": 0.3,
-   "linearity": 1.8,
+   "deadzone": 0.06,
+   "linearity": 1.4,
    "saturation": 1.0,
-   "pedal_deadzone": 0.06,
-   "rumble": 1.0,
+   "pedal_deadzone": 0.04,
+   "rumble": 0.7,
    "rotation": 0,
    "ffb": 0.7,
    "ffb_invert": false,
@@ -91,6 +91,21 @@
   ],
   "pause": [
    112
+  ],
+  "pit_up": [
+   105
+  ],
+  "pit_down": [
+   107
+  ],
+  "pit_left": [
+   106
+  ],
+  "pit_right": [
+   108
+  ],
+  "pit_ok": [
+   117
   ]
  }
 }

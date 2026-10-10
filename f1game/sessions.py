@@ -16,11 +16,11 @@ from .physics import handle_collisions
 from .player_car import Player_Car
 from .profiles import AUTOPILOT_BRAIN, PLAYER_PROFILE, DriverProfile, driver_grip
 from .effects import Effects
-from .render3d import Renderer3D
+from .render3d import CAMERA_MODES, Renderer3D
 from .pit_menu import PitMenu, crew_choice
 from .pitlane import PIT_ACCEL, PIT_DECEL, SPEED_LIMIT
 from .car_setup import CarSetup, recommended
-from .career_events import FAILURES, failure_chance
+from .career_events import DEFAULT_RELIABILITY, FAILURES, MINOR_FAILURES, RETIRE_SHARE, failure_chance
 from .tyres import ALL_COMPOUNDS, COMPOUNDS, COMPOUND_ORDER, TyreSet
 from .weather import Weather
 from .utils import approach
@@ -112,6 +112,9 @@ class Camera:
 
 
 REFUEL_KG_PER_S: float = 11.0
+SLOW_STOP_CHANCE: float = 0.06        # a wheel nut that won't come off / goes on cross-threaded
+WHEEL_NAMES = ("vorne links", "vorne rechts", "hinten links", "hinten rechts")
+QUEUE_GAP: float = 46.0               # double stack: the second car waits this far behind the box
 PIT_GUIDE: Color = (0, 210, 255)
 ORANGE_CALL: Color = (255, 150, 40)
 
@@ -149,7 +152,7 @@ class Session:
         self.fastest_lap: tuple[float, str] | None = None
         self._label_cache: dict[str, pygame.Surface] = {}
         self.view3d = config.view3d
-        self.r3d = Renderer3D()
+        self.r3d = self._new_r3d()
         self.fx = Effects(track, game.settings.effects)
         self.stewards = Stewards(self)
         self.overview = False
@@ -178,6 +181,19 @@ class Session:
         self.host_finished = False
         if config.objective and config.player is not None:
             self.message(f"TEAMZIEL: {config.objective}", (255, 200, 40), 5.0)
+
+    def _new_r3d(self) -> Renderer3D:
+        r3d = Renderer3D()
+        r3d.mode = int(getattr(self.game.settings, "camera_mode", 0)) % len(CAMERA_MODES)
+        return r3d
+
+    def gantry_lights(self) -> int | None:
+        """Start lights on the gantry: 0-5 red lights in the race start sequence, -1 green (pit exit open)."""
+        if self.kind != "race":
+            return -1
+        if getattr(self, "race_started", True):
+            return 0
+        return getattr(self, "lights_on", 0)
 
     def expected_duration(self) -> float:
         """Rough session length in seconds, so the rain forecast spans the session."""
@@ -239,7 +255,7 @@ class Session:
             self.player.keyset, self.player2.keyset = "wasd", "arrows"
             for p in self.players:
                 self.cameras[p] = Camera()
-                self.r3ds[p] = Renderer3D()
+                self.r3ds[p] = self._new_r3d()
         else:
             self.game.controls.assign_players(1)
         own = [k for k, c in enumerate(self.cars) if c.profile.team == self.config.focus_team]
@@ -421,7 +437,13 @@ class Session:
             self._focus_by_position((key - pygame.K_1) % 10)
             return
         if key == pygame.K_k:
-            self.message(f"Kamera: {self.r3d.next_mode()}" + ("" if self.view3d else " (3D mit V)"), WHITE, 1.2)
+            name = self.r3d.next_mode(-1 if getattr(event, "mod", 0) & pygame.KMOD_SHIFT else 1)
+            for r3d in self.r3ds.values():
+                if r3d is not self.r3d:
+                    r3d.mode, r3d._initialized = self.r3d.mode, False
+            self.game.settings.camera_mode = self.r3d.mode
+            self.game.settings.save()
+            self.message(f"Kamera: {name}" + ("" if self.view3d else " (3D mit V)"), WHITE, 1.2)
             return
         if key == pygame.K_m:
             self.overview = not self.overview
@@ -603,6 +625,7 @@ class Session:
                 self._update_slipstream()
             for car in self.cars:
                 car.slipstream = approach(car.slipstream, car.slip_target, h * 2.5)
+                car.dirty_air = approach(car.dirty_air, car.dirty_target, h * 4.0)
         self.stewards.update()
         self.time += h
 
@@ -627,6 +650,18 @@ class Session:
         active = [c for c in self.cars if not c.is_ghost and not c.frozen]
         for car in self.cars:
             target = 0.0
+            dirty = 0.0
+            if car in active and car.speed_fwd > 80.0:
+                # dirty air: right behind another car (any speed) the front wing loses downforce
+                fx, fy = math.cos(car.heading), math.sin(car.heading)
+                for other in active:
+                    if other is car:
+                        continue
+                    dx, dy = other.pos.x - car.pos.x, other.pos.y - car.pos.y
+                    along = dx * fx + dy * fy
+                    if 20.0 < along < 110.0 and abs(-dx * fy + dy * fx) < 24.0:
+                        dirty = max(dirty, 1.0 - (along - 20.0) / 90.0)
+            car.dirty_target = dirty
             if car in active and car.speed_fwd > 250.0:
                 fx, fy = math.cos(car.heading), math.sin(car.heading)
                 px, py = car.pos.x, car.pos.y
@@ -848,6 +883,7 @@ class Session:
                 return
         if ds < 40.0 and car.speed_fwd > 0:
             car.pit_state = "lane"
+            car.pit_service, car.pit_hold, car.pit_wheels_off, car.pit_lift = None, False, None, 0.0
             car.pit_u = ds
             car.pit_entry_lat = car.lateral
             car.pit_box_u = self._box_of(car)
@@ -862,9 +898,17 @@ class Session:
         pit = self.track.pit
         assert pit is not None
         v = max(0.0, car.speed_fwd)
+        service = car.pit_service
+        if service is not None and (car.pit_stop_timer > 0 or car.pit_hold):
+            service["t"] += h
+            e = service["t"]
+            wheels = service.get("wheels")
+            car.pit_wheels_off = [off <= e < on for off, on in wheels] if wheels else None
+            car.pit_lift = 1.4 if car.pit_stop_timer > 0.15 else max(0.0, car.pit_lift - h * 9.0)
         if car.pit_stop_timer > 0:
             car.pit_stop_timer -= h
             if car.pit_stop_timer <= 0:
+                car.pit_hold = True
                 plan = car.pit_plan or {}
                 if car.pit_compound not in COMPOUNDS and car.puncture and car.tyres is not None:
                     car.pit_compound = car.tyres.compound.key   # a punctured tyre gets replaced regardless
@@ -883,12 +927,24 @@ class Session:
                 car.pit_plan = None
                 car.pit_stops += 1
                 car.pit_laps.append(car.laps_done + 1)
-                if car is not self.player:
-                    self.add_feed(f"{car.short} Boxenstopp -> {COMPOUNDS[car.pit_compound].name}")
             v = 0.0
+        elif car.pit_hold:
+            # safe release: wait while a car is coming down the lane right behind
+            v = 0.0
+            held = car.pit_service["t"] - car.pit_service["total"] if car.pit_service else 9.0
+            if held > 1.5 or self._lane_clear(car):
+                self._release(car)
         else:
             if not car.pit_stopped:
-                target = min(SPEED_LIMIT, math.sqrt(2.0 * PIT_DECEL * max(0.0, car.pit_box_u - car.pit_u)))
+                busy = self._box_busy(car)
+                stop_u = car.pit_box_u - (QUEUE_GAP if busy else 0.0)
+                target = min(SPEED_LIMIT, math.sqrt(2.0 * PIT_DECEL * max(0.0, stop_u - car.pit_u)))
+                if busy and car.pit_u > stop_u - 60 and not getattr(car, "_queued", False):
+                    car._queued = True
+                    if car is self.player or car is self.player2:
+                        self.message("DOPPELSTOPP - hinter dem Teamkollegen warten", (255, 210, 40), 2.5)
+                    else:
+                        self.add_feed(f"{car.short}: Doppelstopp, wartet hinter dem Teamkollegen")
             elif car.pit_u < pit.length - pit.RAMP:
                 target = SPEED_LIMIT
             else:
@@ -905,10 +961,30 @@ class Session:
                 fuel_time = plan.get("fuel", 0.0) * car.fuel_per_lap / REFUEL_KG_PER_S
                 wing_time = 0.8 if plan.get("front_wing", 0) else 0.0
                 tyres = car.pit_compound in COMPOUNDS
-                base = self.stop_time(car) if tyres else 0.0
+                car._queued = False
+                # the crew is good but not a machine: every stop varies a little, now and then one goes wrong
+                base = self.stop_time(car) * random.uniform(0.93, 1.10) if tyres else 0.0
+                problem = None
+                wheels = None
+                if tyres:
+                    normal = base
+                    if random.random() < SLOW_STOP_CHANCE:
+                        problem = random.randrange(4)
+                        base += random.uniform(1.5, 4.5)
+                    wheels = []
+                    for k in range(4):
+                        off = random.uniform(0.35, 0.55)
+                        on = base - 0.2 if k == problem else normal - random.uniform(0.25, 0.45)
+                        wheels.append((off, max(off + 0.6, on)))
                 # tyres, fuel and the wing adjustment happen in parallel; repairs come on top
-                car.pit_stop_timer = max(base, fuel_time, wing_time, 0.8) + repair + served + \
-                    (0.0 if car is self.player else random.uniform(0.0, 0.8))
+                car.pit_stop_timer = max(base, fuel_time, wing_time, 0.8) + repair + served
+                car.pit_service = {"t": 0.0, "total": car.pit_stop_timer, "wheels": wheels, "problem": problem}
+                if problem is not None:
+                    where = WHEEL_NAMES[problem]
+                    if car is self.player or car is self.player2:
+                        self.message(f"PROBLEM AM RAD {where.upper()}!", (255, 110, 90), 3.0)
+                    else:
+                        self.add_feed(f"{car.short}: langsamer Stopp - Rad {where}")
                 v = 0.0
                 if car is self.player:
                     parts = [f"Reifen: {COMPOUNDS[car.pit_compound].name}" if tyres else "Reifen bleiben drauf"]
@@ -928,9 +1004,69 @@ class Session:
         car.throttle, car.brake, car.steer_input = (0.3 if v > 0 else 0.0), 0.0, 0.0
         if car.pit_u >= pit.length:
             car.pit_state = None
+            car.pit_wheels_off, car.pit_lift, car.pit_hold = None, 0.0, False
             car.auto_gear()
             car.ghost_timer = 1.2
             car.spin = 0.0
+
+    def _box_busy(self, car: Car) -> bool:
+        """Double stack: a team-mate is still being serviced (or held) in the shared box."""
+        for other in self.cars:
+            if other is car or other.profile.team != car.profile.team or other.pit_state != "lane":
+                continue
+            if other.pit_stopped and (other.pit_stop_timer > 0 or other.pit_hold) and \
+                    abs(other.pit_u - car.pit_box_u) < 30.0:
+                return True
+        return False
+
+    def _lane_clear(self, car: Car) -> bool:
+        for other in self.cars:
+            if other is car or other.pit_state != "lane" or other.speed_fwd < 30.0:
+                continue
+            if car.pit_u - 80.0 < other.pit_u < car.pit_u + 6.0:
+                return False
+        return True
+
+    def _release(self, car: Car) -> None:
+        car.pit_hold = False
+        car.pit_wheels_off = None
+        car.pit_lift = 0.0
+        service = car.pit_service
+        if service is None:
+            return
+        stationary = service["t"]
+        car.pit_last_stop = stationary
+        tyres = service.get("wheels") is not None
+        best = getattr(self, "fastest_stop", None)
+        if tyres and (best is None or stationary < best[0]):
+            self.fastest_stop = (stationary, car.profile.team)
+            if best is not None:
+                self.add_feed(f"Schnellster Boxenstopp: {car.profile.team} {stationary:.2f}s")
+        if car is self.player or car is self.player2:
+            col = PURPLE if tyres and self.fastest_stop[1] == car.profile.team and \
+                self.fastest_stop[0] == stationary else GREEN if stationary < 3.0 else YELLOW
+            self.message(f"BOXENSTOPP {stationary:.2f}s", col, 2.5)
+        else:
+            name = COMPOUNDS[car.pit_compound].name if car.pit_compound in COMPOUNDS else "-"
+            self.add_feed(f"{car.short} Boxenstopp {stationary:.1f}s -> {name}")
+
+    def pit_crews(self) -> list[tuple[Vector2, float, Color, "Car | None"]]:
+        """Every team's box in the pit lane: (position, heading, team colour, car on its way in / being serviced)."""
+        pit = self.track.pit
+        if pit is None:
+            return []
+        colors = {g[3]: g[2] for g in self.garages()}
+        out = []
+        for team, u in self._boxes.items():
+            p, heading = pit.pose(u)
+            car = None
+            for c in self.cars:
+                if c.profile.team == team and c.pit_state == "lane" and \
+                        (not c.pit_stopped or c.pit_stop_timer > 0 or c.pit_hold or c.pit_u < c.pit_box_u + 70):
+                    if car is None or c.pit_stopped:
+                        car = c
+            out.append((p, heading, colors.get(team, (200, 200, 200)), car))
+        return out
 
     def note_sector(self, car: Car, k: int, t: float) -> None:
         if self.best_sectors[k] is None or t < self.best_sectors[k]:
@@ -1102,10 +1238,14 @@ class Session:
     def _draw_view(self, screen: pygame.Surface, rain: bool = True) -> None:
         if self.view3d:
             self.r3d.antialias = self.game.settings.antialias
+            self.r3d.detail = getattr(self.game.settings, "graphics", "high")
+            positions = {c: k + 1 for k, c in enumerate(self.standings())}
             self.r3d.draw(screen, self.track, self.cars + self.extra_objects(), self.cars[self.cam_index],
                           self.show_brake_line,
                           self.game.fonts.tiny, self.garages(), rain=self.weather.rain,
-                          guide=self.pit_guide(self.cars[self.cam_index]))
+                          guide=self.pit_guide(self.cars[self.cam_index]), fx=self.fx,
+                          lights=self.gantry_lights(), positions=positions, frame_dt=self._frame_dt,
+                          crews=self.pit_crews())
             if rain:
                 self.weather.draw(screen, self._frame_dt, view3d=True)
             return
@@ -1409,24 +1549,43 @@ class RaceSession(Session):
 
     def _plan_failures(self) -> None:
         self.failures: dict[str, str] = {}
-        self._failure_at: dict[Car, float] = {}
-        if not self.config.reliability:
+        self._failure_at: dict[Car, tuple[float, bool]] = {}
+        mode = self.config.damage
+        if mode == "off":
             return
         L = self.track.length
+        rel_map = self.config.reliability or {}
+        # short races give the parts less time to break
+        length = min(1.0, 0.35 + self.total_laps / 20)
+        can_retire = mode == "dnf" or self.config.career
         for car in self.cars:
-            rel = self.config.reliability.get(car.profile.team)
-            if rel is not None and random.random() < failure_chance(rel):
-                self._failure_at[car] = random.uniform(0.1, 0.95) * self.total_laps * L
+            rel = rel_map.get(car.profile.team, DEFAULT_RELIABILITY)
+            if random.random() < failure_chance(rel) * length:
+                retire = can_retire and random.random() < RETIRE_SHARE
+                self._failure_at[car] = (random.uniform(0.1, 0.95) * self.total_laps * L, retire)
 
     def _check_failures(self) -> None:
-        for car, at in list(self._failure_at.items()):
+        for car, (at, retire) in list(self._failure_at.items()):
             if car.dnf or car.session_done:
                 del self._failure_at[car]
             elif car.distance >= at:
                 del self._failure_at[car]
-                why = random.choice(FAILURES)
-                self.failures[car.name] = why
-                self.retire(car, why)
+                if retire:
+                    why = random.choice(FAILURES)
+                    self.failures[car.name] = why
+                    self.retire(car, why)
+                    continue
+                why, part, factor = random.choice(MINOR_FAILURES)
+                if part == "engine":
+                    car.engine_factor *= factor
+                else:
+                    car.grip_bonus *= factor
+                self.add_feed(f"TECHNIK: {car.short} - {why}")
+                self.stewards.announce(f"TECHNIK: {car.short} - {why}", "info")
+                if car is self.player or car is self.player2:
+                    self.message(f"DEFEKT: {why} - Auto bringen!", (255, 160, 60), 4.0)
+                    car.radio_msg = (f"Wir haben ein Problem: {why}. Bring das Auto ins Ziel.", (255, 160, 60),
+                                     self.time + 6.0)
 
     def _check_reaction(self) -> None:
         p = self.player

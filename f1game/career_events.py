@@ -125,5 +125,14 @@ def base_reliability(rating: float) -> float:
     return max(0.955, min(0.99, 0.975 + (rating - 1.0) * 0.6))
 
 
+# partial failures: the car carries on, but slower. (reason, what suffers, factor)
+MINOR_FAILURES = [("ERS-Ausfall", "engine", 0.92), ("Motor im Notlaufprogramm", "engine", 0.95),
+                  ("Getriebeproblem", "engine", 0.96), ("Unterboden beschädigt", "grip", 0.96),
+                  ("Lenkungsproblem", "grip", 0.97)]
+DEFAULT_RELIABILITY = 0.982     # outside the career (no team reliability values)
+RETIRE_SHARE = 0.5              # share of failures that end the race (where retirements are switched on)
+
+
 def failure_chance(reliability: float) -> float:
-    return max(0.0, (1.0 - reliability) * 2.0)
+    """Chance of a technical problem in one race: rare - roughly one car every four races across the field."""
+    return max(0.0, (1.0 - reliability) * 0.8)

@@ -21,17 +21,19 @@ SPARK_COLORS = [(255, 240, 160), (255, 200, 60), (255, 140, 30)]
 
 
 class Particle:
-    __slots__ = ("x", "y", "vx", "vy", "life", "max_life", "size", "grow", "color", "kind")
+    __slots__ = ("x", "y", "vx", "vy", "life", "max_life", "size", "grow", "color", "kind", "z", "vz")
 
     def __init__(self, x: float, y: float, vx: float, vy: float, life: float, size: float, grow: float,
-                 color: tuple[int, int, int], kind: str) -> None:
+                 color: tuple[int, int, int], kind: str, z: float = 2.0, vz: float = 0.0) -> None:
         self.x, self.y, self.vx, self.vy = x, y, vx, vy
         self.life = self.max_life = life
         self.size, self.grow, self.color, self.kind = size, grow, color, kind
+        self.z, self.vz = z, vz       # height above the road (3D view)
 
 
 class Effects:
-    """2D-view eye candy: tyre smoke, grass/gravel dust, sparks and skid marks burnt into the track surface."""
+    """Eye candy for both views: tyre smoke, grass/gravel dust, rain spray, sparks (impacts and the plank
+    scraping the road at top speed) and skid marks burnt into the track surface (2D)."""
 
     def __init__(self, track: "Track", level: str = "high") -> None:
         self.track = track
@@ -70,8 +72,9 @@ class Effects:
             lat = abs(car.vel.dot(right))
             rear = car.pos - fwd * (CAR_LENGTH * 0.33)
             wl, wr = rear - right * (CAR_WIDTH * 0.40), rear + right * (CAR_WIDTH * 0.40)
-            lock = car.brake > 0.85 and car.sliding and speed > 80
-            spin = car.throttle > 0.9 and 3 < car.speed_fwd < 70 and getattr(session, "race_started", True)
+            lock = (car.brake > 0.85 and car.sliding or getattr(car, "locking", False)) and speed > 80
+            spin = car.throttle > 0.9 and 3 < car.speed_fwd < 70 and getattr(session, "race_started", True) or \
+                getattr(car, "wheelspin", 0.0) > 0.3
             slide = lat > 75 and speed > 50
             if hit > 25 and not fast:
                 n = int(min(18, 4 + hit / 25) * dense)
@@ -80,7 +83,8 @@ class Effects:
                     v = random.uniform(80, 320)
                     self._emit(car.pos.x + random.uniform(-8, 8), car.pos.y + random.uniform(-8, 8),
                                car.vel.x * 0.4 + math.cos(a) * v, car.vel.y * 0.4 + math.sin(a) * v,
-                               random.uniform(0.15, 0.45), 2.0, 0.0, random.choice(SPARK_COLORS), "spark")
+                               random.uniform(0.15, 0.45), 2.0, 0.0, random.choice(SPARK_COLORS), "spark",
+                               random.uniform(1.0, 5.0), random.uniform(20, 140))
             if car.on_grass and speed > 40 and not car.in_pit:
                 if random.random() < min(1.0, speed / 260) * dense * dt * 40:
                     col = self.track.definition.runoff_color
@@ -88,7 +92,7 @@ class Effects:
                     for w in (wl, wr):
                         self._emit(w.x, w.y, -car.vel.x * 0.15 + random.uniform(-30, 30),
                                    -car.vel.y * 0.15 + random.uniform(-30, 30), random.uniform(0.5, 1.0),
-                                   random.uniform(3, 5), 14.0, col, "dust")
+                                   random.uniform(3, 5), 14.0, col, "dust", 1.0, random.uniform(8, 26))
             elif (car.damage.cooling > 0.45 or car.damage.rear > 0.6) and speed > 30 and not car.in_pit:
                 # a holed radiator or broken gearbox trails smoke
                 heavy = max(car.damage.cooling, car.damage.rear)
@@ -96,20 +100,30 @@ class Effects:
                     back = car.pos - fwd * (CAR_LENGTH * 0.5)
                     self._emit(back.x, back.y, car.vel.x * 0.3 + random.uniform(-15, 15),
                                car.vel.y * 0.3 + random.uniform(-15, 15), random.uniform(0.8, 1.5),
-                               random.uniform(3, 5), 18.0, (70, 70, 74), "smoke")
+                               random.uniform(3, 5), 18.0, (70, 70, 74), "smoke", 4.0, 10.0)
             elif self.track.wetness > 0.15 and speed > 120 and not car.in_pit:
                 # spray off the rear tyres - the wetter and faster, the bigger the cloud
                 if random.random() < min(1.0, speed / 400) * self.track.wetness * dense * dt * 60:
                     for w in (wl, wr):
                         self._emit(w.x, w.y, car.vel.x * 0.55 + random.uniform(-25, 25),
                                    car.vel.y * 0.55 + random.uniform(-25, 25), random.uniform(0.35, 0.7),
-                                   random.uniform(3, 5), 26.0, SPRAY, "smoke")
+                                   random.uniform(3, 5), 26.0, SPRAY, "smoke", 2.0, random.uniform(6, 16))
             elif (slide or lock or spin) and not car.in_pit:
                 if random.random() < dense * dt * 45:
                     for w in (wl, wr):
                         self._emit(w.x + random.uniform(-2, 2), w.y + random.uniform(-2, 2),
                                    car.vel.x * 0.25 + random.uniform(-20, 20), car.vel.y * 0.25 + random.uniform(-20, 20),
-                                   random.uniform(0.6, 1.3), random.uniform(3, 5), 20.0, SMOKE, "smoke")
+                                   random.uniform(0.6, 1.3), random.uniform(3, 5), 20.0, SMOKE, "smoke", 1.5,
+                                   random.uniform(4, 12))
+            if speed > car.top_speed * 0.86 and not car.on_grass and not car.in_pit and not fast                     and random.random() < dense * dt * 7:
+                # the plank and skid blocks scrape the asphalt at top speed: a shower of sparks behind the car
+                under = car.pos - fwd * (CAR_LENGTH * 0.38)
+                for _ in range(random.randint(3, 7)):
+                    off = random.uniform(-CAR_WIDTH * 0.3, CAR_WIDTH * 0.3)
+                    self._emit(under.x + right.x * off, under.y + right.y * off,
+                               car.vel.x * 0.6 + random.uniform(-40, 40), car.vel.y * 0.6 + random.uniform(-40, 40),
+                               random.uniform(0.12, 0.35), 2.0, 0.0, random.choice(SPARK_COLORS), "spark",
+                               0.4, random.uniform(10, 70))
             marking = (slide or lock or spin) and not car.on_grass and not car.in_pit
             prev = self._wheels.get(cid)
             if marking and prev is not None and self.track.surface is not None:
@@ -131,6 +145,13 @@ class Effects:
             p.vx -= p.vx * min(1.0, drag * dt)
             p.vy -= p.vy * min(1.0, drag * dt)
             p.size += p.grow * dt
+            p.z += p.vz * dt
+            if p.kind == "spark":
+                p.vz -= 320.0 * dt
+                if p.z < 0:
+                    p.z, p.vz = 0.0, -p.vz * 0.35
+            else:
+                p.vz -= p.vz * min(1.0, 1.2 * dt)
             keep.append(p)
         self.parts = keep
 

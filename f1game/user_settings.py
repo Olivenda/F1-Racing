@@ -15,8 +15,10 @@ ASSIST_NAMES = ["Aus", "Mittel (Stabilität + Bremslinie)", "Voll (+ automatisch
 UNITS = {"kmh": ("km/h", 1.0), "mph": ("mph", 0.621371)}
 FPS_OPTIONS = [30, 60, 120, 144]
 EFFECT_LEVELS = {"off": "Aus", "low": "Niedrig", "high": "Hoch"}
-ANTIALIAS_LEVELS = {"off": "Aus", "edges": "Kanten glätten", "high": "Hoch (2x Supersampling)"}
+ANTIALIAS_LEVELS = {"off": "Aus", "edges": "Kanten glätten", "high": "Hoch (1,5x Supersampling)"}
 GEARBOX_MODES = {"auto": "Automatik", "manual": "Sequenziell (selbst schalten)"}
+GRAPHICS_LEVELS = {"low": "Niedrig", "medium": "Mittel", "high": "Hoch"}
+HUD_STYLES = {"modern": "Modern", "classic": "Klassisch"}
 
 
 def speed_in(kmh: float, units: str) -> tuple[float, str]:
@@ -45,6 +47,9 @@ class UserSettings:
     antialias: str = "edges"
     net_address: str = ""
     net_port: int = 56543
+    graphics: str = "high"
+    hud_style: str = "modern"
+    camera_mode: int = 0
 
     @property
     def tyre_wear_factor(self) -> float:
@@ -72,6 +77,12 @@ class UserSettings:
             settings.effects = "high"
         if settings.antialias not in ANTIALIAS_LEVELS:
             settings.antialias = "edges"
+        if settings.graphics not in GRAPHICS_LEVELS:
+            settings.graphics = "high"
+        if settings.hud_style not in HUD_STYLES:
+            settings.hud_style = "modern"
+        if not isinstance(settings.camera_mode, int) or settings.camera_mode < 0:
+            settings.camera_mode = 0
         if settings.gearbox not in GEARBOX_MODES:
             settings.gearbox = "auto"
         if settings.weather not in ("dry", "dynamic", "wet"):

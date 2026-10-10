@@ -47,16 +47,17 @@ class Weather:
                 self.points.append((t, max(0.15, min(1.0, base + rng.uniform(-0.3, 0.25)))))
                 t += rng.uniform(40, 90)
         elif mode == "dynamic":
-            # dry start, one or two showers of different strength somewhere in the session
-            self.points.append((0.0, 0.0 if rng.random() < 0.75 else rng.uniform(0.3, 0.6)))
-            t = rng.uniform(0.15, 0.45) * duration
-            for _ in range(rng.choice((1, 1, 2))):
-                peak = rng.uniform(0.35, 1.0)
-                build, hold, clear = rng.uniform(20, 50), rng.uniform(30, 0.35 * duration), rng.uniform(20, 60)
-                self.points += [(t, 0.0), (t + build, peak), (t + build + hold, peak * rng.uniform(0.6, 1.0)),
-                                (t + build + hold + clear, 0.0)]
-                t += build + hold + clear + rng.uniform(0.15, 0.4) * duration
-            self.points.append((max(t, duration + 120), 0.0))
+            # at most ONE change per session: either a dry start and rain that sets in and stays, or a wet
+            # start that clears up and the track dries
+            t = rng.uniform(0.25, 0.6) * duration
+            ramp = rng.uniform(25, 60)
+            end = max(t + ramp, duration) + 120
+            if rng.random() < 0.7:
+                peak = rng.uniform(0.35, 0.95)
+                self.points += [(0.0, 0.0), (t, 0.0), (t + ramp, peak), (end, peak * rng.uniform(0.8, 1.0))]
+            else:
+                start = rng.uniform(0.35, 0.75)
+                self.points += [(0.0, start), (t, start * rng.uniform(0.8, 1.0)), (t + ramp, 0.0), (end, 0.0)]
         else:
             self.points = [(0.0, 0.0), (duration + 120, 0.0)]
         self.points.sort()
