@@ -752,15 +752,58 @@ static int run_gpu(Batch *b, int npop, int report) {
     return ok;
 }
 
+/* "auto" times both on the real workload (the first generations) and then keeps the faster one: solo runs
+   are thousands of independent jobs (GPU), traffic heats are a few hundred long jobs (usually CPU) */
+static double m_cpu, m_gpu;
+static int m_nj = -1, m_using = -1;
+
+static void announce(int gpu_now, const char *why) {
+    if (gpu_now == m_using) return;
+    m_using = gpu_now;
+    char gname[1024];
+    gpu_names(gname, sizeof gname);
+    if (gpu_now) printf("@USING GPU %s - %s\n", gname, why);
+    else printf("@USING CPU (%d Threads) - %s\n", g_threads, why);
+    fflush(stdout);
+}
+
 static void evaluate(const Job *jobs, int nj, const double *nets, int npop, Style st, float *fit, float *laps,
                      int report) {
     Batch b = {.jobs = jobs, .njobs = nj, .nets = nets, .st = st, .fit = fit, .laps = laps};
-    if (g_use_gpu && (g_force_gpu || nj >= GPU_MIN_JOBS)) {
-        if (run_gpu(&b, npop, report)) return;
+    int gpu = 0;
+    const char *why = "";
+    if (g_use_gpu && g_force_gpu) {
+        gpu = 1;
+        why = "nur GPU gewählt";
+    } else if (g_use_gpu && !report) {
+        gpu = nj >= GPU_MIN_JOBS;       /* checkpoint benchmarks: small, quick */
+    } else if (g_use_gpu) {
+        if (nj != m_nj) { m_nj = nj; m_cpu = m_gpu = 0.0; }
+        if (m_gpu == 0.0 && m_cpu == 0.0) { gpu = nj >= GPU_MIN_JOBS; why = "messe Tempo"; }
+        else if (m_gpu == 0.0) { gpu = 1; why = "messe Tempo"; }
+        else if (m_cpu == 0.0) { gpu = 0; why = "messe Tempo"; }
+        else {
+            /* switch only for a clear gain (10 %), not back and forth on noise */
+            gpu = m_using == 1 ? !(m_cpu < 0.9 * m_gpu) : m_gpu < 0.9 * m_cpu;
+            static char buf[160];
+            snprintf(buf, sizeof buf, "schneller (GPU %.2fs, CPU %.2fs pro Generation)", m_gpu, m_cpu);
+            why = buf;
+        }
+    }
+    if (report) announce(gpu, why);
+    double t0 = now_s();
+    if (gpu) {
+        if (run_gpu(&b, npop, report)) {
+            if (report && !g_force_gpu) m_gpu = now_s() - t0;
+            return;
+        }
         printf("GPU-Lauf fehlgeschlagen - weiter auf der CPU.\n@DEVICE CPU (%d Threads)\n", g_threads);
         g_use_gpu = 0;
+        if (report) announce(0, "GPU-Fehler");
+        t0 = now_s();
     }
     run_cpu(&b, report);
+    if (report && g_use_gpu) m_cpu = now_s() - t0;
 }
 
 /* ================================================================ genetic algorithm (training.py Trainer) */

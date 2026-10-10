@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 MODES = ["base", "balanced", "aggressive", "cautious", "clone"]
 DEFAULT_GENS = {"base": 60, "balanced": 20, "aggressive": 20, "cautious": 20, "clone": 15}
 # training engines: the native trainer (ctrain/f1train.exe, ~1000x faster) on GPU+CPU or CPU only, or Python
-ENGINES = [("c", "auto", "C - GPU + CPU (schnellste)"), ("c", "cpu", "C - nur CPU"),
+ENGINES = [("c", "auto", "C - GPU + CPU (schnellste)"), ("c", "gpu", "C - nur GPU"), ("c", "cpu", "C - nur CPU"),
            ("py", "", "Python (langsam, mit Live-Ansicht)")]
 POPULATION_STEPS = {"py": (16, 96, 8), "c": (16, 8000, 0)}
 
@@ -125,7 +125,7 @@ class TrainingScreen:
 
     def _gpu_label(self) -> str:
         if not self._uses_gpu:
-            return "- (nur bei C - GPU + CPU)"
+            return "- (nur bei C mit GPU)"
         cur = self.game.settings.train_gpu
         return next((lb for k, lb in self._gpu_choices() if k == cur), "automatisch")
 
@@ -265,6 +265,18 @@ class TrainingScreen:
                 draw_text(screen, "<  >", f.large, YELLOW, (px + pw - 40, ry + 25), anchor="midright")
             draw_text(screen, row.upper(), f.tiny, GREY, (px + 30, ry + 8), shadow=False)
             draw_text(screen, values[row], f.medium, WHITE, (px + 30, ry + 24), shadow=False)
+        if self.ROWS[self.sel] in ("GPU", "Trainer") and self.engine == "c":
+            hint = ("Solo-Training (Basis): tausende kurze Läufe - ideal für die GPU. Verkehrs-Modi: wenige lange "
+                    "Rennen mit 11 Autos - die CPU ist bis ca. 4.500 Netze schneller. 'GPU + CPU' misst beides in "
+                    "den ersten Generationen und nimmt das Schnellere, 'nur GPU' erzwingt die Grafikkarte.")
+            words, line, y = tr(hint).split(), "", 492
+            for w in words:
+                if f.tiny.size(line + " " + w)[0] > 1150:
+                    draw_text(screen, line, f.tiny, CYAN, (60, y), shadow=False)
+                    line, y = w, y + 17
+                else:
+                    line = (line + " " + w).strip()
+            draw_text(screen, line, f.tiny, CYAN, (60, y), shadow=False)
 
         info = pygame.Rect(650, 140, 570, 330)
         draw_panel(screen, info, PANEL, 220)
@@ -385,6 +397,9 @@ class TrainingScreen:
         draw_text(screen, f"{nt.device or 'startet ...'} · Lauf {nt.task_done}/{nt.task_total} · "
                           f"Population {nt.population} · Echtzeit {elapsed / 60:.1f} min · x{speed} Echtzeit",
                   f.tiny, GREY, (top.x + 14, top.y + 84), shadow=False)
+        if nt.using:
+            draw_text(screen, f"Rechnet gerade auf: {nt.using}", f.tiny, CYAN, (top.right - 14, top.y + 14),
+                      anchor="topright", shadow=False)
         prog = (nt.generation + nt.task_done / max(1, nt.task_total)) / max(1, nt.target)
         if nt.saved_path:
             prog = 1.0

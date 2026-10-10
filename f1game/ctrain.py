@@ -137,6 +137,7 @@ class NativeTraining:
         self.history: list[dict[str, float]] = []
         self.log: list[str] = []
         self.device = ""
+        self.using = ""                 # what is computing right now and why (auto picks the faster one)
         self.speed = 0.0                # simulated seconds per real second
         self.done = False
         self.failed = False
@@ -174,6 +175,9 @@ class NativeTraining:
             elif tag == "@HIST" and len(parts) >= 4:
                 self.history.append({"gen": int(parts[1]), "best": float(parts[2]), "mean": float(parts[3])})
                 self.generation = int(parts[1])
+            elif tag == "@USING":
+                self.using = line[len("@USING "):]
+                self.log.append("Rechnet jetzt auf: " + self.using)
             elif tag == "@DEVICE":
                 self.device = line[len("@DEVICE "):]
             elif tag == "@DONE":

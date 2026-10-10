@@ -1360,3 +1360,15 @@ TEMPLATES += [
     ("{#}  (Gen {#})", "{}  (gen {})"), ("{#} / Ø {#}", "{} / avg {}"),
 ]
 EXACT.update({"Stärkste GPU": "Strongest GPU", "Alle GPUs zusammen": "All GPUs together"})
+EXACT.update({
+    "C - nur GPU": "C - GPU only", "- (nur bei C mit GPU)": "- (only with C and a GPU)",
+    "Solo-Training (Basis): tausende kurze Läufe - ideal für die GPU. Verkehrs-Modi: wenige lange Rennen mit 11 "
+    "Autos - die CPU ist bis ca. 4.500 Netze schneller. 'GPU + CPU' misst beides in den ersten Generationen und "
+    "nimmt das Schnellere, 'nur GPU' erzwingt die Grafikkarte.":
+        "Solo training (base): thousands of short runs - ideal for the GPU. Traffic modes: a few long races with 11 "
+        "cars - the CPU is faster up to about 4,500 networks. 'GPU + CPU' measures both in the first generations "
+        "and uses the faster one, 'GPU only' forces the graphics card.",
+})
+TEMPLATES += [("Rechnet gerade auf: {}", "Computing on: {}"), ("Rechnet jetzt auf: {}", "Now computing on: {}"),
+              ("{} - messe Tempo", "{} - measuring speed"), ("{} - nur GPU gewählt", "{} - GPU only chosen"),
+              ("{} - schneller (GPU {}s, CPU {}s pro Generation)", "{} - faster (GPU {}s, CPU {}s per generation)")]
