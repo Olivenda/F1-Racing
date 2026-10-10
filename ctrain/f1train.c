@@ -459,6 +459,7 @@ typedef void *cl_platform_id, *cl_device_id, *cl_context, *cl_command_queue, *cl
 #define CL_MEM_READ_ONLY (1 << 2)
 #define CL_MEM_COPY_HOST_PTR (1 << 5)
 #define CL_DEVICE_NAME 0x102B
+#define CL_DEVICE_BOARD_NAME_AMD 0x4038
 #define CL_DEVICE_MAX_COMPUTE_UNITS 0x1002
 #define CL_PROGRAM_BUILD_LOG 0x1183
 
@@ -516,6 +517,16 @@ static int cl_load(void) {
     return 1;
 }
 
+/* AMD's driver names the chip ("gfx1036"); its board-name query has the product name ("AMD Radeon(TM) Graphics") */
+static void device_name(cl_device_id dev, char *out, size_t cap) {
+    out[0] = 0;
+    char board[256] = "";
+    if (cl.GetDeviceInfo(dev, CL_DEVICE_BOARD_NAME_AMD, sizeof board, board, NULL) == 0 && board[0])
+        snprintf(out, cap, "%s", board);
+    else
+        cl.GetDeviceInfo(dev, CL_DEVICE_NAME, cap, out, NULL);
+}
+
 /* every OpenCL GPU of every platform (NVIDIA, AMD, Intel...), numbered in a stable order */
 static int gpu_list(cl_device_id *out, int cap) {
     if (!cl_load()) return 0;
@@ -534,7 +545,7 @@ static int gpu_list(cl_device_id *out, int cap) {
 
 static int gpu_setup(Gpu *g, cl_device_id dev) {
     g->dev = dev;
-    cl.GetDeviceInfo(dev, CL_DEVICE_NAME, sizeof g->name, g->name, NULL);
+    device_name(dev, g->name, sizeof g->name);
     cl.GetDeviceInfo(dev, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof g->units, &g->units, NULL);
     if (g->units < 1) g->units = 1;
     cl_int err;
@@ -1258,7 +1269,7 @@ int main(int argc, char **argv) {
             for (int k = 0; k < n; k++) {
                 char name[256] = "";
                 cl_uint cu = 0;
-                cl.GetDeviceInfo(devs[k], CL_DEVICE_NAME, sizeof name, name, NULL);
+                device_name(devs[k], name, sizeof name);
                 cl.GetDeviceInfo(devs[k], CL_DEVICE_MAX_COMPUTE_UNITS, sizeof cu, &cu, NULL);
                 printf("@GPU %d %u %s\n", k, cu, name);
             }
