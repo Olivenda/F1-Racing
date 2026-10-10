@@ -1296,3 +1296,66 @@ PATTERNS: list[tuple[str, object]] = [
      lambda m: "New talents on the driver market: " + re.sub(r"(\d+) J\., Potenzial (\d+)", r"\1 y/o, potential \2",
                                                               m.group(1))),
 ]
+
+# digital flags, HUD assistance, settings tabs, mouse menus, GPU picker
+EXACT.update({
+    "GRÜNE FLAGGE": "GREEN FLAG", "GELBE FLAGGE": "YELLOW FLAG", "DOPPELT GELB": "DOUBLE YELLOW",
+    "SAFETY CAR": "SAFETY CAR", "VIRTUAL SAFETY CAR": "VIRTUAL SAFETY CAR", "SCHWARZ-WEISS": "BLACK AND WHITE",
+    "ZIELFLAGGE": "CHEQUERED FLAG", "Abstand halten · nicht überholen": "Keep the gap · no overtaking",
+    "Delta einhalten · nicht überholen": "Keep to the delta · no overtaking", "Strecke frei": "Track clear",
+    "Rennen beendet": "Race finished", "Track Limits - letzte Warnung": "Track limits - final warning",
+    "LINKS": "LEFT", "RECHTS": "RIGHT", "MITTE": "CENTRE",
+    "WEITER (P)": "RESUME (P)", "NEUSTART (R)": "RESTART (R)", "HAUPTMENÜ (ESC)": "MAIN MENU (ESC)",
+    "ALLGEMEIN": "GENERAL", "FAHREN": "DRIVING", "GRAFIK": "GRAPHICS", "HUD & KAMERA": "HUD & CAMERA",
+    "Grafik-Voreinstellung": "Graphics preset", "HUD-Assistenz": "HUD assistance", "Startkamera": "Starting camera",
+    "ZURÜCK (ESC)": "BACK (ESC)", "EINRICHTEN": "SET UP",
+    "TAB Kategorie · Pfeile wählen/ändern · Maus klicken (Rechtsklick zurück) · ESC zurück":
+        "TAB category · arrows select/change · click with the mouse (right click back) · ESC back",
+    "Leistung": "Performance", "Ausgewogen": "Balanced", "Qualität": "Quality", "Kanten": "Edges",
+    "Hoch 1,5x": "High 1.5x", "Sequenziell": "Sequential", "Flaggen": "Flags", "2D": "2D", "3D": "3D",
+    "Benutzerdefiniert": "Custom", "Keine Hilfen": "No assistance", "Digitale Flaggen": "Digital flags",
+    "Flaggen + Spotter + Warnungen": "Flags + spotter + warnings",
+    "Nur die Tafeln an der Strecke zeigen Flaggen.": "Only the panels beside the track show flags.",
+    "Flaggen-Anzeige": "Flag display", "Bildschirmränder blinken": "Flashing screen edges",
+    "Spotter-Pfeile": "Spotter arrows", "Warnung: Auto voraus": "Warning: car ahead",
+    "Strecke, Autos, Himmel": "Track, cars, sky", "Tribünen, Banden, Startampel": "Grandstands, barriers, start lights",
+    "Digitale Flaggen-Tafeln": "Digital flag panels", "Boxencrews, Partikel in 3D": "Pit crews, 3D particles",
+    "Rückspiegel, Linsenreflexe, Vignette": "Mirrors, lens flares, vignette", "LEISTUNGSBEDARF": "PERFORMANCE COST",
+    "Mittel: Stabilitätskontrolle + farbige Bremslinie. Voll: zusätzlich automatische Bremshilfe vor Kurven. Aus: "
+    "durchdrehende Räder und blockierende Reifen möglich.":
+        "Medium: stability control + coloured braking line. Full: also automatic braking help before corners. "
+        "Off: wheelspin and locking tyres are possible.",
+    "Trocken: nie Regen. Wechselhaft: höchstens ein Wetterwechsel pro Rennen. Regen: nasses Rennen. Bei Nässe "
+    "Intermediates (grün) oder Wets (blau) holen.":
+        "Dry: never rains. Changeable: at most one weather change per race. Rain: wet race. In the wet, fit "
+        "intermediates (green) or wets (blue).",
+    "Stellt Grafikdetails, Kantenglättung und Effekte auf einmal ein. Leistung: maximale Bildrate. Qualität: alles an.":
+        "Sets graphics detail, anti-aliasing and effects in one go. Performance: maximum frame rate. "
+        "Quality: everything on.",
+    "Niedrig: nur Strecke und Autos. Mittel: + Tribünen, Banden, Bremsschilder, Startampel, digitale "
+    "Flaggen-Tafeln, Partikel in 3D. Hoch: + Rückspiegel im Cockpit, Linsenreflexe, Vignette, Regentropfen auf "
+    "der Linse.":
+        "Low: only track and cars. Medium: + grandstands, barriers, brake boards, start lights, digital flag panels, "
+        "3D particles. High: + cockpit mirrors, lens flares, vignette, raindrops on the lens.",
+    "Kanten glätten kostet kaum Leistung. Hoch rendert in 1,5-facher Auflösung - schöner, aber deutlich langsamer.":
+        "Smoothing edges costs hardly anything. High renders at 1.5x resolution - nicer, but much slower.",
+    "Aus: keine Hilfen. Flaggen: digitale Flaggen-Anzeige (gelb, doppelt gelb, blau, SC, VSC, grün, schwarz-weiß, "
+    "Zielflagge). Voll: + blinkende Bildschirmränder, Spotter-Pfeile für Autos neben dir und Warnung vor langsamen "
+    "Autos voraus.":
+        "Off: no assistance. Flags: digital flag display (yellow, double yellow, blue, SC, VSC, green, black and "
+        "white, chequered). Full: + flashing screen edges, spotter arrows for cars alongside and a warning for slow "
+        "cars ahead.",
+    "Mit dieser Kamera startet die 3D-Ansicht. Im Rennen mit K wechseln (Shift+K zurück).":
+        "The 3D view starts with this camera. Switch with K in the race (Shift+K back).",
+    "GPU": "GPU", "automatisch": "automatic", "- (nur bei C - GPU + CPU)": "- (only with C - GPU + CPU)",
+    "BESTE": "BEST", "BESTER Ø": "BEST AVG", "LETZTE GEN": "LAST GEN",
+})
+TEMPLATES += [
+    ("{} überrundet dich", "{} is lapping you"),
+    ("Sektor {#} · nicht überholen", "Sector {} · no overtaking"),
+    ("Sektor {#} · Gefahr, langsam!", "Sector {} · danger, slow down!"),
+    ("LANGSAMES AUTO VORAUS · {#} m · {}", "SLOW CAR AHEAD · {} m · {}"),
+    ("{}  ({#}% Motor · {#}% Kurventempo)", "{}  ({}% engine · {}% corner speed)"),
+    ("Stärkste: {}", "Strongest: {}"), ("Alle {#} GPUs zusammen", "All {} GPUs together"),
+    ("{#}  (Gen {#})", "{}  (gen {})"), ("{#} / Ø {#}", "{} / avg {}"),
+]

@@ -14,6 +14,7 @@ from .profiles import recording_stats
 from .settings import CYAN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW
 from .track import Track
 from .training import REWARD_STYLES, Trainer
+from .i18n import tr
 from .utils import draw_panel, draw_text, mouse_item
 
 if TYPE_CHECKING:
@@ -28,13 +29,13 @@ POPULATION_STEPS = {"py": (16, 96, 8), "c": (16, 8000, 0)}
 
 
 class TrainingScreen:
-    ROWS = ["Modus", "Trainer", "Generationen", "Population", "START"]
+    ROWS = ["Modus", "Trainer", "GPU", "Generationen", "Population", "START"]
     FRAME_BUDGET = 0.028
     TURBO_BUDGET = 0.075
 
     def __init__(self, game: "Game") -> None:
         self.game = game
-        self.sel = 4
+        self.sel = 5
         self.mode_i = 0
         self.engine_i = 0
         self.gens = DEFAULT_GENS["base"]
@@ -87,6 +88,13 @@ class TrainingScreen:
                 self.engine_i = (self.engine_i + d) % len(ENGINES)
                 self.population = 400 if self.engine == "c" else 40
                 self._load_saved()
+            elif row == "GPU" and self._uses_gpu:
+                choices = self._gpu_choices()
+                keys = [k for k, _ in choices]
+                cur = self.game.settings.train_gpu
+                k = keys.index(cur) if cur in keys else 0
+                self.game.settings.train_gpu = keys[(k + d) % len(keys)]
+                self.game.settings.save()
             elif row == "Generationen":
                 self.gens = max(2, min(1000 if self.engine == "c" else 300, self.gens + d * 5))
             elif row == "Population":
@@ -96,6 +104,28 @@ class TrainingScreen:
                 self.population = max(lo, min(hi, self.population + d * step))
         elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
             self._start()
+
+    @property
+    def _uses_gpu(self) -> bool:
+        return self.engine == "c" and ENGINES[self.engine_i][1] != "cpu"
+
+    def _gpu_choices(self) -> list[tuple[str, str]]:
+        """(setting value, label): the strongest GPU, every single one and - with several - all together."""
+        gpus = ctrain.list_gpus()
+        if not gpus:
+            return [("best", "automatisch")]
+        strongest = max(gpus, key=lambda g: g[1])
+        out = [("best", f"Stärkste: {strongest[2]}")]
+        out += [(str(n), f"{n + 1}: {name}") for n, _cu, name in gpus]
+        if len(gpus) > 1:
+            out.append(("all", f"Alle {len(gpus)} GPUs zusammen"))
+        return out
+
+    def _gpu_label(self) -> str:
+        if not self._uses_gpu:
+            return "- (nur bei C - GPU + CPU)"
+        cur = self.game.settings.train_gpu
+        return next((lb for k, lb in self._gpu_choices() if k == cur), "automatisch")
 
     @property
     def engine(self) -> str:
@@ -152,7 +182,7 @@ class TrainingScreen:
             saved = self._saved_progress()
             fresh = saved is not None and saved[2] != self.population      # other population: start over
             self.native = ctrain.NativeTraining(self.mode, self.gens, self.population, ENGINES[self.engine_i][1],
-                                                fresh=fresh)
+                                                fresh=fresh, gpu=self.game.settings.train_gpu)
         except OSError as exc:
             self.error = f"C-Trainer startet nicht: {exc}"
             return
@@ -215,21 +245,22 @@ class TrainingScreen:
         draw_panel(screen, (px, py, pw, 340), PANEL, 220)
         values = {"Modus": REWARD_STYLES[self.mode].title, "Generationen": str(self.gens),
                   "Population": f"{self.population} Netze",
-                  "Trainer": "Python (Klon-Training)" if self.mode == "clone" else ENGINES[self.engine_i][2]}
+                  "Trainer": "Python (Klon-Training)" if self.mode == "clone" else ENGINES[self.engine_i][2],
+                  "GPU": self._gpu_label()}
         for i, row in enumerate(self.ROWS):
-            ry = py + 10 + i * 64
+            ry = py + 6 + i * 55
             sel = i == self.sel
             if row == "START":
                 col = (40, 110, 200) if sel else (20, 50, 90)
-                pygame.draw.rect(screen, col, (px + 20, ry + 8, pw - 40, 54), border_radius=8)
-                mouse_item((px + 20, ry + 8, pw - 40, 54), self, i)
-                draw_text(screen, "TRAINING STARTEN", f.large, WHITE, (px + pw // 2, ry + 35), anchor="center")
+                pygame.draw.rect(screen, col, (px + 20, ry + 6, pw - 40, 46), border_radius=8)
+                mouse_item((px + 20, ry + 6, pw - 40, 46), self, i)
+                draw_text(screen, "TRAINING STARTEN", f.large, WHITE, (px + pw // 2, ry + 29), anchor="center")
                 continue
-            mouse_item((px + 12, ry, pw - 24, 56), self, i, key=None, arrows=True)
+            mouse_item((px + 12, ry, pw - 24, 50), self, i, key=None, arrows=True)
             if sel:
-                pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, 56), border_radius=6)
-                pygame.draw.rect(screen, (40, 110, 200), (px + 12, ry, 5, 56), border_radius=2)
-                draw_text(screen, "<  >", f.large, YELLOW, (px + pw - 40, ry + 28), anchor="midright")
+                pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, 50), border_radius=6)
+                pygame.draw.rect(screen, (40, 110, 200), (px + 12, ry, 5, 50), border_radius=2)
+                draw_text(screen, "<  >", f.large, YELLOW, (px + pw - 40, ry + 25), anchor="midright")
             draw_text(screen, row.upper(), f.tiny, GREY, (px + 30, ry + 8), shadow=False)
             draw_text(screen, values[row], f.medium, WHITE, (px + 30, ry + 24), shadow=False)
 
@@ -391,10 +422,24 @@ class TrainingScreen:
         draw_text(screen, "FITNESS PRO GENERATION", f.tiny, GREY, (rect.x + 12, rect.y + 8), shadow=False)
         draw_text(screen, "beste", f.tiny, YELLOW, (rect.right - 110, rect.y + 8), shadow=False)
         draw_text(screen, "Durchschnitt", f.tiny, (90, 160, 255), (rect.right - 70, rect.y + 8), shadow=False)
+        best = max(hist, key=lambda h: h["best"]) if hist else None
+        best_mean = max(hist, key=lambda h: h["mean"]) if hist else None
+        # the records so far, always in view
+        x = rect.x + 12
+        stats = [("BESTE", f"{best['best']:.0f}  (Gen {best['gen']})" if best else "-", YELLOW),
+                 ("BESTER Ø", f"{best_mean['mean']:.0f}  (Gen {best_mean['gen']})" if best_mean else "-",
+                  (90, 160, 255)),
+                 ("LETZTE GEN", f"{hist[-1]['best']:.0f} / Ø {hist[-1]['mean']:.0f}" if hist else "-", WHITE)]
+        for label, value, col in stats:
+            draw_text(screen, label, f.tiny, GREY, (x, rect.y + 26), shadow=False)
+            r = draw_text(screen, value, f.medium, col, (x + f.tiny.size(tr(label))[0] + 8, rect.y + 22),
+                          shadow=False)
+            x = r.right + 26
         if len(hist) < 2:
-            draw_text(screen, "Kurve erscheint nach der 2. Generation", f.small, GREY, rect.center, anchor="center")
+            draw_text(screen, "Kurve erscheint nach der 2. Generation", f.small, GREY, rect.move(0, 14).center,
+                      anchor="center")
             return
-        area = rect.inflate(-40, -50).move(8, 10)
+        area = rect.inflate(-40, -76).move(8, 22)
         lo = min(min(h["mean"] for h in hist), 0.0)
         hi = max(h["best"] for h in hist)
         span = max(1.0, hi - lo)
@@ -403,6 +448,10 @@ class TrainingScreen:
             pts = [(area.x + area.w * i / (len(hist) - 1), area.bottom - area.h * (h[key] - lo) / span)
                    for i, h in enumerate(hist)]
             pygame.draw.lines(screen, col, False, pts, 2)
+        # dashed line at the best result so far
+        by = area.bottom - area.h * (best["best"] - lo) / span
+        for dx in range(0, area.w, 14):
+            pygame.draw.line(screen, (150, 130, 40), (area.x + dx, by), (area.x + min(area.w, dx + 7), by))
         draw_text(screen, f"{hi:.0f}", f.tiny, GREY, (rect.x + 6, area.y - 4), shadow=False)
         draw_text(screen, f"{lo:.0f}", f.tiny, GREY, (rect.x + 6, area.bottom - 10), shadow=False)
 

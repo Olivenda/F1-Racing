@@ -55,6 +55,7 @@ class UserSettings:
     graphics: str = "high"
     hud_style: str = "modern"
     hud_assist: str = "full"
+    train_gpu: str = "best"         # C trainer: "best" (strongest GPU), "all" or a GPU number from --list-gpus
     camera_mode: int = 0
 
     @property
@@ -87,6 +88,9 @@ class UserSettings:
             settings.graphics = "high"
         if settings.hud_style not in HUD_STYLES:
             settings.hud_style = "modern"
+        if not isinstance(settings.train_gpu, str) or not (settings.train_gpu in ("best", "all")
+                                                          or settings.train_gpu.isdigit()):
+            settings.train_gpu = "best"
         if settings.hud_assist not in HUD_ASSIST:
             settings.hud_assist = "full"
         if not isinstance(settings.camera_mode, int) or settings.camera_mode < 0:

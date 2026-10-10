@@ -100,11 +100,33 @@ def build(log=print) -> bool:
     return True
 
 
+_gpus: list[tuple[int, int, str]] | None = None
+
+
+def list_gpus() -> list[tuple[int, int, str]]:
+    """The OpenCL GPUs the C trainer can use: (number, compute units, name). Asked once per game start."""
+    global _gpus
+    if _gpus is None:
+        _gpus = []
+        if EXE.exists():
+            try:
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                out = subprocess.run([str(EXE), "x", "--list-gpus"], capture_output=True, text=True, timeout=15,
+                                     encoding="utf-8", errors="replace", creationflags=flags).stdout
+            except (OSError, subprocess.SubprocessError):
+                out = ""
+            for line in out.splitlines():
+                parts = line.split(maxsplit=3)
+                if len(parts) == 4 and parts[0] == "@GPU" and parts[1].isdigit() and parts[2].isdigit():
+                    _gpus.append((int(parts[1]), int(parts[2]), parts[3].strip()))
+    return _gpus
+
+
 class NativeTraining:
     """The C trainer as a child process; stdout lines are parsed for the UI ('@'-lines carry progress)."""
 
     def __init__(self, mode: str, generations: int, population: int, device: str = "auto",
-                 fresh: bool = False) -> None:
+                 fresh: bool = False, gpu: str = "best") -> None:
         self.mode = mode
         self.target = generations
         self.population = population
@@ -120,7 +142,7 @@ class NativeTraining:
         self.saved_path: str | None = None
         self._lines: queue.Queue[str] = queue.Queue()
         cmd = [str(EXE), mode, "--generations", str(generations), "--population", str(population),
-               "--device", device, "--data", str(DATA_FILE), "--brains", str(BRAIN_DIR)]
+               "--device", device, "--gpu", gpu, "--data", str(DATA_FILE), "--brains", str(BRAIN_DIR)]
         if fresh:
             cmd.append("--fresh")
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)

@@ -523,7 +523,7 @@ class HUD:
         if flag is not None:
             board = led_board(flag, phase, 28, 16, 4)
             x, y = 238, 156
-            w = max(board.get_width(), 150) + 16
+            w = max(board.get_width(), f.tiny.size(tr(self._flag_detail(s, car, flag)))[0], 150) + 20
             draw_panel(screen, (x, y, w, board.get_height() + 58), (12, 13, 18), 225)
             col = FLAG_COLORS[flag]
             pygame.draw.rect(screen, col, (x, y, w, 3), border_radius=2)

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from .track import Track
 
 GREEN_TIME = 6.0          # green panels after a yellow / safety car period has ended
-DOUBLE_YELLOW = 420.0     # panels this close before the incident show double yellow
+DOUBLE_YELLOW = 900.0     # panels this close before the incident (~150 m) show double yellow
 BLUE_AHEAD = 260.0        # a panel shows blue while a blue-flagged car is this far before it
 CHEQUERED_TIME = 8.0
 
@@ -74,17 +74,18 @@ def post_states(session: "Session") -> list[str]:
     cleared = getattr(rc, "cleared", {}) if rc is not None else {}
     blue_cars = [c.s for c in session.cars if getattr(c, "blue_for", None) is not None and not c.in_pit]
     winner = getattr(session, "winner_time", None)
+    sectors = [_sector(track, track.cum[i]) for i, _side in posts]
     for k, (i, _side) in enumerate(posts):
         s = track.cum[i]
-        sector = _sector(track, s)
+        sector = sectors[k]
         if k == 0 and winner is not None:
             states[k] = "chequered"
         elif sector in yellow:
             spot = spots.get(sector)
             ahead = (spot - s) % L if spot is not None else L
             states[k] = "yellow2" if ahead < DOUBLE_YELLOW else "yellow"
-        elif (sector - 1) % 3 in yellow or cleared.get(sector, 0.0) > now:
-            # first panel after a yellow sector (or a sector just cleared): green, the danger is over
+        elif sectors[k - 1] in yellow or cleared.get(sector, 0.0) > now:
+            # the first panel after a yellow zone (or a sector just cleared): green, the danger is over
             states[k] = "green"
         elif any(0.0 < (s - cs) % L < BLUE_AHEAD for cs in blue_cars):
             states[k] = "blue"
