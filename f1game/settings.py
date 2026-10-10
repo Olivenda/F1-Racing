@@ -17,11 +17,11 @@ WHEELBASE: float = 24.0
 CAR_MASS: float = 1.0
 CAR_INERTIA: float = CAR_MASS * (CAR_LENGTH ** 2 + CAR_WIDTH ** 2) / 12.0
 
-TOP_SPEED: float = 540.0
-ENGINE_ACCEL: float = 350.0
-ENGINE_FADE: float = 0.35
+TOP_SPEED: float = 500.0
+ENGINE_ACCEL: float = 100.0
+ENGINE_FADE: float = 0.30
 DRAG_SHARE: float = 1.0 - ENGINE_FADE
-BRAKE_DECEL: float = 800.0
+BRAKE_DECEL: float = 250.0
 # braking comes from downforce like on a real F1 car: strong at top speed, much weaker in slow corners
 BRAKE_LOW_SPEED: float = 0.48      # share of BRAKE_DECEL when (nearly) stopped
 BRAKE_HIGH_SPEED: float = 0.86     # share at top speed
@@ -32,8 +32,8 @@ REVERSE_MAX_SPEED: float = 90.0
 ROLLING_FRICTION: float = 22.0
 COAST_DRAG: float = 0.6         # share of the air drag felt while coasting (no throttle, no brake)
 LATERAL_GRIP: float = 620.0
-MAX_STEER_ANGLE: float = 0.60
-STEER_RATE: float = 8.0
+MAX_STEER_ANGLE: float = 0.50
+STEER_RATE: float = 7.0
 SLIP_RECOVERY: float = 2.2
 SPIN_DAMPING: float = 3.0
 
@@ -51,7 +51,7 @@ RESTITUTION_WALL: float = 0.12
 CAR_FRICTION_COEFF: float = 0.25
 SPIN_TRANSFER: float = 0.55
 
-GEAR_THRESHOLDS: tuple[float, ...] = (85.0, 153.0, 220.0, 288.0, 355.0, 423.0, 486.0)
+GEAR_THRESHOLDS: tuple[float, ...] = (85.0, 153.0, 220.0, 288.0, 355.0, 423.0, 456.0)
 
 DIFFICULTY_LEVELS: dict[str, float] = {"Leicht": 0.86, "Mittel": 0.94, "Schwer": 1.0}
 AI_CONTROL_INTERVAL: float = 1.0 / 30.0
