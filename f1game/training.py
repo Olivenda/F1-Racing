@@ -72,6 +72,7 @@ class Evaluation:
         self.traffic = traffic
         self.stop_after_lap = stop_after_lap
         self.is_race_start_phase = False
+        self.kind = "training"          # AI_Car racecraft asks the session kind
         self.cars: list[AI_Car] = []
         setup = recommended(track)
         for k, net in enumerate(nets):

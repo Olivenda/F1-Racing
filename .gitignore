@@ -10,3 +10,8 @@ data/records.json
 data/settings.json
 data/setups.json
 data/brains/*.bak*
+
+# native trainer (built locally, see ctrain/build.bat)
+ctrain/f1train.exe
+data/train_data.bin
+data/brains/*.ctrain.state*

@@ -163,7 +163,8 @@ class Session:
         self.team_orders: dict[Car, dict] = {}
         self.failures: dict[str, str] = {}
         self.pit_menu = PitMenu()
-        self.weather = Weather(config.weather, config.weather_seed + {"practice": 0, "qualifying": 1}.get(self.kind, 2), self.expected_duration())
+        self.weather = Weather(config.weather, config.weather_seed + {"practice": 0, "qualifying": 1}.get(self.kind, 2),
+                               self.expected_duration(), weekend_seed=config.weather_seed)
         track.wetness = self.weather.wetness
         self._frame_dt = 0.0
         self._weather_note = ""

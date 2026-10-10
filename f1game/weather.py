@@ -22,15 +22,24 @@ if TYPE_CHECKING:
 WEATHER_MODES = {"dry": "Trocken", "dynamic": "Wechselhaft", "wet": "Regen"}
 WET_THRESHOLD = 0.22      # above this slicks are slower than intermediates
 FULL_WET_THRESHOLD = 0.68  # above this full wets beat intermediates
+WET_WEEKEND_CHANCE = 0.33  # "dynamic": share of weekends with rain in the forecast
+SHOWER_CHANCE = 0.7        # ...and the chance that a session of such a weekend actually gets a shower
 
 
 class Weather:
 
-    def __init__(self, mode: str, seed: int, duration: float) -> None:
-        """duration: rough length of the session in seconds, the forecast covers it."""
+    def __init__(self, mode: str, seed: int, duration: float, weekend_seed: int | None = None) -> None:
+        """duration: rough length of the session in seconds, the forecast covers it.
+        weekend_seed: shared by all sessions of a weekend, decides whether rain is in the forecast at all."""
         rng = random.Random(seed)
         self.mode = mode
         self.points: list[tuple[float, float]] = []   # (time, rain) keyframes
+        if mode == "dynamic":
+            # changeable weather is the exception: about one weekend in three has rain about, and even then not
+            # every session gets a shower - a wet race roughly every fourth to fifth weekend
+            wet_weekend = random.Random(seed if weekend_seed is None else weekend_seed).random() < WET_WEEKEND_CHANCE
+            if not wet_weekend or rng.random() >= SHOWER_CHANCE:
+                mode = "dry"
         if mode == "wet":
             base = rng.uniform(0.45, 0.85)
             t = 0.0
@@ -56,7 +65,6 @@ class Weather:
         self.time = 0.0
         self._drops: list[list[float]] = [[rng.uniform(0, SCREEN_WIDTH), rng.uniform(0, SCREEN_HEIGHT),
                                            rng.uniform(0.6, 1.0)] for _ in range(260)]
-        self._tint: pygame.Surface | None = None
 
     def forecast(self, t: float) -> float:
         pts = self.points
@@ -128,11 +136,11 @@ class Weather:
     def draw(self, screen: pygame.Surface, dt: float, cam_vel: tuple[float, float] = (0.0, 0.0),
              view3d: bool = False) -> None:
         if self.wetness > 0.03 or self.rain > 0.03:
-            dark = int(70 * min(1.0, 0.35 * self.wetness + 0.75 * self.rain))
-            if self._tint is None:
-                self._tint = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-            self._tint.fill((20, 30, 48, dark))
-            screen.blit(self._tint, (0, 0))
+            # dst * (1 - a) + tint * a as two blend fills: no full-screen alpha blit (that cost several ms)
+            a = 70 * min(1.0, 0.35 * self.wetness + 0.75 * self.rain) / 255
+            keep = int(255 * (1 - a))
+            screen.fill((keep, keep, keep), special_flags=pygame.BLEND_RGB_MULT)
+            screen.fill((int(20 * a), int(30 * a), int(48 * a)), special_flags=pygame.BLEND_RGB_ADD)
         if self.rain <= 0.03:
             return
         n = int(len(self._drops) * min(1.0, self.rain * 1.2))

@@ -224,6 +224,21 @@ class Renderer3D:
             self._scaled[key] = out
         return out
 
+    def _sky_for(self, rain: float) -> pygame.Surface:
+        """The sky blended towards the grey rain sky, pre-mixed in 16 steps: an alpha blit of the whole
+        (supersampled) sky every frame cost ~10 ms."""
+        level = 0 if rain <= 0.03 else max(1, round(min(1.0, rain * 1.6) * 16))
+        key = ("sky", level, self.ss)
+        out = self._scaled.get(key)
+        if out is None:
+            out = self._big(self.sky).convert()
+            if level:
+                over = self._big(self.rain_sky).convert()
+                over.set_alpha(level * 255 // 16)
+                out.blit(over, (0, 0))
+            self._scaled[key] = out
+        return out
+
     def _clip(self, pts: Sequence[CamPoint]) -> list[CamPoint]:
         out: list[CamPoint] = []
         n = len(pts)
@@ -289,11 +304,7 @@ class Renderer3D:
                     rain: float) -> list[tuple[tuple[float, float], "Car"]]:
         self._setup()
         d = track.definition
-        surf.blit(self._big(self.sky), (0, 0))
-        if rain > 0.03:
-            rain_sky = self._big(self.rain_sky)
-            rain_sky.set_alpha(int(255 * min(1.0, rain * 1.6)))
-            surf.blit(rain_sky, (0, 0))
+        surf.blit(self._sky_for(rain), (0, 0))
         ground = self._ground_cache.get(d.grass)
         if ground is None:
             ground = vertical_gradient((SCREEN_WIDTH, SCREEN_HEIGHT - int(HORIZON_Y) + 120),

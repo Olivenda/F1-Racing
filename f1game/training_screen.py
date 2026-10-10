@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pygame
 from pygame.math import Vector2
 
+from . import ctrain
 from .hud import draw_network
 from .profiles import recording_stats
 from .settings import CYAN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW
@@ -20,26 +21,33 @@ if TYPE_CHECKING:
 
 MODES = ["base", "balanced", "aggressive", "cautious", "clone"]
 DEFAULT_GENS = {"base": 60, "balanced": 20, "aggressive": 20, "cautious": 20, "clone": 15}
+# training engines: the native trainer (ctrain/f1train.exe, ~1000x faster) on GPU+CPU or CPU only, or Python
+ENGINES = [("c", "auto", "C - GPU + CPU (schnellste)"), ("c", "cpu", "C - nur CPU"),
+           ("py", "", "Python (langsam, mit Live-Ansicht)")]
+POPULATION_STEPS = {"py": (16, 96, 8), "c": (16, 8000, 0)}
 
 
 class TrainingScreen:
-    ROWS = ["Modus", "Generationen", "Population", "START"]
+    ROWS = ["Modus", "Trainer", "Generationen", "Population", "START"]
     FRAME_BUDGET = 0.028
     TURBO_BUDGET = 0.075
 
     def __init__(self, game: "Game") -> None:
         self.game = game
-        self.sel = 3
+        self.sel = 4
         self.mode_i = 0
+        self.engine_i = 0
         self.gens = DEFAULT_GENS["base"]
-        self.population = 40
+        self.population = 400
         self.trainer: Trainer | None = None
+        self.native: ctrain.NativeTraining | None = None
         self.error: str | None = None
         self.log: list[str] = []
         self.turbo = False
         self.started_at = 0.0
         self._overview: dict[str, tuple[pygame.Surface, float, Vector2]] = {}
         self.rec_files, self.rec_samples = recording_stats()
+        self._load_saved()
 
     @property
     def mode(self) -> str:
@@ -47,6 +55,11 @@ class TrainingScreen:
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type != pygame.KEYDOWN:
+            return
+        if self.native is not None:
+            if event.key == pygame.K_ESCAPE or (self.native.done and event.key == pygame.K_RETURN):
+                self.native.stop()
+                self._leave()
             return
         if self.trainer is not None:
             if event.key == pygame.K_t:
@@ -64,14 +77,48 @@ class TrainingScreen:
             d = -1 if event.key in (pygame.K_LEFT, pygame.K_a) else 1
             row = self.ROWS[self.sel]
             if row == "Modus":
+                was = self.engine
                 self.mode_i = (self.mode_i + d) % len(MODES)
                 self.gens = DEFAULT_GENS[self.mode]
+                if self.engine != was:
+                    self.population = 400 if self.engine == "c" else 40
+                self._load_saved()
+            elif row == "Trainer":
+                self.engine_i = (self.engine_i + d) % len(ENGINES)
+                self.population = 400 if self.engine == "c" else 40
+                self._load_saved()
             elif row == "Generationen":
-                self.gens = max(2, min(300, self.gens + d * 5))
+                self.gens = max(2, min(1000 if self.engine == "c" else 300, self.gens + d * 5))
             elif row == "Population":
-                self.population = max(16, min(96, self.population + d * 8))
+                lo, hi, step = POPULATION_STEPS[self.engine]
+                if not step:        # C: big populations are cheap - grow in ~25 % steps
+                    step = max(8, int(self.population * 0.25) // 8 * 8)
+                self.population = max(lo, min(hi, self.population + d * step))
         elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
             self._start()
+
+    @property
+    def engine(self) -> str:
+        """'c' or 'py' - clone training (backprop on your recordings) only exists in Python."""
+        return "py" if self.mode == "clone" else ENGINES[self.engine_i][0]
+
+    def _saved_progress(self) -> tuple[int, int, int] | None:
+        """(generation, target, population) of a paused native run of this mode."""
+        try:
+            with open(ctrain.state_file(self.mode), "rb") as fh:
+                raw = fh.read(32)
+        except OSError:
+            return None
+        if len(raw) < 32 or raw[:4] != b"F1CS":
+            return None
+        target, pop, gen = (int.from_bytes(raw[k:k + 4], "little") for k in (8, 12, 16))
+        return gen, target, pop
+
+    def _load_saved(self) -> None:
+        """A paused C run of this mode: show its settings, START continues it."""
+        saved = self._saved_progress() if self.engine == "c" else None
+        if saved is not None:
+            self.gens, self.population = saved[1], saved[2]
 
     def _start(self) -> None:
         self.error = None
@@ -79,6 +126,9 @@ class TrainingScreen:
             self.error = "Zuerst das Basis-Netz trainieren."
             return
         tracks = list(self.game.tracks.values())
+        if self.engine == "c":
+            self._start_native(tracks)
+            return
         try:
             self.trainer = Trainer(self.mode, tracks, self.gens, self.population, self.game.brains,
                                    log=self._log)
@@ -88,16 +138,39 @@ class TrainingScreen:
             return
         self.started_at = time.time()
 
+    def _start_native(self, tracks: list[Track]) -> None:
+        try:
+            ctrain.export_training_data(tracks)
+        except OSError as exc:
+            self.error = f"Streckendaten konnten nicht geschrieben werden: {exc}"
+            return
+        build_log: list[str] = []
+        if not ctrain.build(build_log.append):
+            self.error = build_log[-1] if build_log else "C-Trainer fehlt (ctrain/build.bat)."
+            return
+        try:
+            saved = self._saved_progress()
+            fresh = saved is not None and saved[2] != self.population      # other population: start over
+            self.native = ctrain.NativeTraining(self.mode, self.gens, self.population, ENGINES[self.engine_i][1],
+                                                fresh=fresh)
+        except OSError as exc:
+            self.error = f"C-Trainer startet nicht: {exc}"
+            return
+        self.started_at = time.time()
+
     def _log(self, msg: str) -> None:
         self.log.append(msg)
         self.log = self.log[-9:]
 
     def _leave(self) -> None:
-        if self.trainer is not None and self.trainer.done:
+        if (self.trainer is not None and self.trainer.done) or (self.native is not None and self.native.saved_path):
             self.game.reload_brains()
         self.game.go_to_menu()
 
     def update(self, dt: float) -> None:
+        if self.native is not None:
+            self.native.poll()
+            return
         tr = self.trainer
         if tr is None or tr.done:
             return
@@ -125,7 +198,9 @@ class TrainingScreen:
 
     def draw(self, screen: pygame.Surface) -> None:
         screen.fill((14, 15, 20))
-        if self.trainer is None:
+        if self.native is not None:
+            self._draw_native(screen)
+        elif self.trainer is None:
             self._draw_setup(screen)
         else:
             self._draw_training(screen)
@@ -137,11 +212,12 @@ class TrainingScreen:
         draw_text(screen, "Neuroevolution: Netze fahren, die besten vererben ihre Gewichte weiter.", f.small, GREY,
                   (86, 86))
         px, py, pw = 60, 140, 560
-        draw_panel(screen, (px, py, pw, 330), PANEL, 220)
+        draw_panel(screen, (px, py, pw, 340), PANEL, 220)
         values = {"Modus": REWARD_STYLES[self.mode].title, "Generationen": str(self.gens),
-                  "Population": f"{self.population} Netze"}
+                  "Population": f"{self.population} Netze",
+                  "Trainer": "Python (Klon-Training)" if self.mode == "clone" else ENGINES[self.engine_i][2]}
         for i, row in enumerate(self.ROWS):
-            ry = py + 16 + i * 66
+            ry = py + 10 + i * 64
             sel = i == self.sel
             if row == "START":
                 col = (40, 110, 200) if sel else (20, 50, 90)
@@ -172,10 +248,16 @@ class TrainingScreen:
             lines += ["", f"Trainingsdaten: {self.rec_files} Aufnahmen, {self.rec_samples} Samples",
                       "Jede deiner Sessions wird automatisch aufgezeichnet."]
         lines += ["", f"Ergebnis: data/brains/{self.mode}.json (Backup der alten Datei)"]
+        saved = self._saved_progress() if self.engine == "c" else None
+        if saved is not None:
+            lines.append(f"Pausiert bei Gen. {saved[0]}/{saved[1]} (Pop. {saved[2]}) - START setzt fort")
+            if saved[2] != self.population:
+                lines.append("Andere Population gewählt: START beginnt neu")
         for i, line in enumerate(lines):
             draw_text(screen, line, f.mono, (210, 210, 215), (info.x + 20, info.y + 96 + i * 21), shadow=False)
         if self.error:
-            draw_text(screen, self.error, f.small_bold, (255, 110, 110), (60, 490))
+            for i, chunk in enumerate(_chunks(self.error, 110)[:4]):
+                draw_text(screen, chunk, f.small_bold, (255, 110, 110), (60, 492 + i * 22))
         draw_text(screen, "ENTER Start · ESC zurück · Pfeiltasten wählen", f.small, GREY,
                   (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30), anchor="center")
 
@@ -252,15 +334,61 @@ class TrainingScreen:
             draw_text(screen, "T Turbo · ESC abbrechen (ohne Speichern)", f.tiny, GREY,
                       (SCREEN_WIDTH - 20, SCREEN_HEIGHT - 8), anchor="bottomright")
 
-    def _draw_chart(self, screen: pygame.Surface, rect: pygame.Rect) -> None:
+    def _draw_native(self, screen: pygame.Surface) -> None:
+        """Progress of the C trainer running in its own process."""
         f = self.game.fonts
-        tr = self.trainer
-        assert tr is not None
+        nt = self.native
+        assert nt is not None
+        top = pygame.Rect(16, 16, 1248, 150)
+        draw_panel(screen, top, PANEL, 230)
+        draw_text(screen, f"{REWARD_STYLES[nt.mode].title.upper()} · C-TRAINER", f.medium, CYAN,
+                  (top.x + 14, top.y + 10))
+        gen_shown = min(nt.generation + (0 if nt.done else 1), max(1, nt.target))
+        draw_text(screen, f"Generation {gen_shown}/{nt.target}", f.large, WHITE, (top.x + 14, top.y + 38))
+        elapsed = time.time() - self.started_at
+        speed = f"{nt.speed:,.0f}".replace(",", ".")
+        draw_text(screen, f"{nt.device or 'startet ...'} · Lauf {nt.task_done}/{nt.task_total} · "
+                          f"Population {nt.population} · Echtzeit {elapsed / 60:.1f} min · x{speed} Echtzeit",
+                  f.tiny, GREY, (top.x + 14, top.y + 84), shadow=False)
+        prog = (nt.generation + nt.task_done / max(1, nt.task_total)) / max(1, nt.target)
+        if nt.saved_path:
+            prog = 1.0
+        pygame.draw.rect(screen, (45, 45, 52), (top.x + 14, top.y + 116, top.w - 28, 12), border_radius=4)
+        pygame.draw.rect(screen, (40, 110, 200), (top.x + 14, top.y + 116, (top.w - 28) * min(1.0, prog), 12),
+                         border_radius=4)
+
+        lg = pygame.Rect(16, 176, 1248, 310)
+        draw_panel(screen, lg, PANEL, 230)
+        draw_text(screen, "PROTOKOLL", f.tiny, GREY, (lg.x + 14, lg.y + 8), shadow=False)
+        lines = [chunk for line in nt.log for chunk in _chunks(line, 150)][-15:]
+        for i, chunk in enumerate(lines):
+            draw_text(screen, chunk, f.tiny, (210, 210, 215), (lg.x + 14, lg.y + 28 + i * 18), shadow=False)
+        self._draw_chart(screen, pygame.Rect(16, 498, 1248, 206), nt.history)
+
+        if nt.done:
+            shade = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            shade.fill((0, 0, 0, 170))
+            screen.blit(shade, (0, 0))
+            title = "TRAINING ABGESCHLOSSEN" if nt.saved_path else "C-TRAINER BEENDET"
+            draw_text(screen, title, f.big, WHITE, (SCREEN_WIDTH // 2, 290), anchor="center")
+            sub = f"Gespeichert: {nt.saved_path}" if nt.saved_path else (nt.log[-1] if nt.log else "")
+            draw_text(screen, sub, f.small, GREY, (SCREEN_WIDTH // 2, 340), anchor="center")
+            draw_text(screen, "ENTER: zurück zum Menü (neue Gehirne werden sofort verwendet)" if nt.saved_path
+                      else "ENTER: zurück zum Menü", f.medium, CYAN, (SCREEN_WIDTH // 2, 390), anchor="center")
+        else:
+            draw_text(screen, "ESC pausieren - jede fertige Generation ist gespeichert, START setzt später fort",
+                      f.tiny, GREY, (SCREEN_WIDTH - 20, SCREEN_HEIGHT - 8), anchor="bottomright")
+
+    def _draw_chart(self, screen: pygame.Surface, rect: pygame.Rect,
+                    hist: list[dict[str, float]] | None = None) -> None:
+        f = self.game.fonts
+        if hist is None:
+            assert self.trainer is not None
+            hist = self.trainer.history
         draw_panel(screen, rect, PANEL, 230)
         draw_text(screen, "FITNESS PRO GENERATION", f.tiny, GREY, (rect.x + 12, rect.y + 8), shadow=False)
         draw_text(screen, "beste", f.tiny, YELLOW, (rect.right - 110, rect.y + 8), shadow=False)
         draw_text(screen, "Durchschnitt", f.tiny, (90, 160, 255), (rect.right - 70, rect.y + 8), shadow=False)
-        hist = tr.history
         if len(hist) < 2:
             draw_text(screen, "Kurve erscheint nach der 2. Generation", f.small, GREY, rect.center, anchor="center")
             return
