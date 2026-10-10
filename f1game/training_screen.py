@@ -14,7 +14,7 @@ from .profiles import recording_stats
 from .settings import CYAN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW
 from .track import Track
 from .training import REWARD_STYLES, Trainer
-from .utils import draw_panel, draw_text
+from .utils import draw_panel, draw_text, mouse_item
 
 if TYPE_CHECKING:
     from .game import Game
@@ -222,8 +222,10 @@ class TrainingScreen:
             if row == "START":
                 col = (40, 110, 200) if sel else (20, 50, 90)
                 pygame.draw.rect(screen, col, (px + 20, ry + 8, pw - 40, 54), border_radius=8)
+                mouse_item((px + 20, ry + 8, pw - 40, 54), self, i)
                 draw_text(screen, "TRAINING STARTEN", f.large, WHITE, (px + pw // 2, ry + 35), anchor="center")
                 continue
+            mouse_item((px + 12, ry, pw - 24, 56), self, i, key=None, arrows=True)
             if sel:
                 pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, 56), border_radius=6)
                 pygame.draw.rect(screen, (40, 110, 200), (px + 12, ry, 5, 56), border_radius=2)

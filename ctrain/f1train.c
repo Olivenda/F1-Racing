@@ -3,6 +3,8 @@
  * f1train - native trainer for the F1 game's neural drivers (the C/GPU version of train.py).
  *
  *   f1train base|balanced|aggressive|cautious|all [--generations N] [--population N] [--device auto|cpu|gpu]
+ *           [--gpu best|all|N]   (which OpenCL GPU: the strongest, all of them or one by its number;
+ *                                 --list-gpus shows them)
  *           [--threads N] [--seed N] [--warm] [--fresh] [--data data/train_data.bin] [--brains data/brains]
  *
  * data/train_data.bin comes from the game (python train.py --export, or the KI-Training screen writes it).
@@ -317,6 +319,7 @@ typedef struct {
 
 static char brains_dir[512] = "data/brains";
 static int g_threads, g_use_gpu, g_force_gpu;
+static int g_gpu_pick = -2;    /* -2 the strongest GPU, -1 all GPUs, else the number from --list-gpus */
 /* "auto": the GPU only pays off with many independent jobs (big solo populations); a handful of traffic heats
    or the checkpoint benchmarks run much faster on the CPU threads */
 #define GPU_MIN_JOBS 1000
@@ -481,17 +484,26 @@ static struct {
     cl_int (*ReleaseMemObject)(cl_mem);
 } cl;
 
-static struct {
+typedef struct {
     cl_device_id dev;
     cl_context ctx;
     cl_command_queue q;
     cl_kernel k_init, k_run;
     cl_mem tinfo, arr[8], aero;
     int eval_size;
+    cl_uint units;
+    double rate;                /* measured jobs per second (load balancing between GPUs), 0 = not yet */
     char name[256];
-} gpu;
+} Gpu;
 
-static int gpu_init(void) {
+#define MAX_GPUS 8
+static Gpu gpus[MAX_GPUS];
+static int n_gpus;
+
+static int cl_load(void) {
+    static int loaded = -1;
+    if (loaded >= 0) return loaded;
+    loaded = 0;
     HMODULE lib = LoadLibraryA("OpenCL.dll");
     if (!lib) { printf("GPU: OpenCL.dll nicht gefunden.\n"); return 0; }
 #define LOAD(f) cl.f = (typeof(cl.f))(void (*)(void))GetProcAddress(lib, "cl" #f); if (!cl.f) { printf("GPU: cl" #f " fehlt.\n"); return 0; }
@@ -500,109 +512,243 @@ static int gpu_init(void) {
     LOAD(SetKernelArg) LOAD(EnqueueNDRangeKernel) LOAD(EnqueueReadBuffer) LOAD(EnqueueWriteBuffer) LOAD(Finish)
     LOAD(ReleaseMemObject)
 #undef LOAD
+    loaded = 1;
+    return 1;
+}
+
+/* every OpenCL GPU of every platform (NVIDIA, AMD, Intel...), numbered in a stable order */
+static int gpu_list(cl_device_id *out, int cap) {
+    if (!cl_load()) return 0;
     cl_platform_id plats[8];
     cl_uint np = 0;
-    if (cl.GetPlatformIDs(8, plats, &np) != 0 || np == 0) { printf("GPU: keine OpenCL-Plattform.\n"); return 0; }
-    int found = 0;
-    for (cl_uint i = 0; i < np && !found; i++) {
+    if (cl.GetPlatformIDs(8, plats, &np) != 0 || np == 0) return 0;
+    int n = 0;
+    for (cl_uint i = 0; i < np && n < cap; i++) {
+        cl_device_id devs[MAX_GPUS];
         cl_uint nd = 0;
-        if (cl.GetDeviceIDs(plats[i], CL_DEVICE_TYPE_GPU, 1, &gpu.dev, &nd) == 0 && nd > 0) found = 1;
+        if (cl.GetDeviceIDs(plats[i], CL_DEVICE_TYPE_GPU, MAX_GPUS, devs, &nd) != 0) continue;
+        for (cl_uint k = 0; k < nd && n < cap; k++) out[n++] = devs[k];
     }
-    if (!found) { printf("GPU: kein OpenCL-Grafikchip gefunden.\n"); return 0; }
-    cl.GetDeviceInfo(gpu.dev, CL_DEVICE_NAME, sizeof gpu.name, gpu.name, NULL);
+    return n;
+}
+
+static int gpu_setup(Gpu *g, cl_device_id dev) {
+    g->dev = dev;
+    cl.GetDeviceInfo(dev, CL_DEVICE_NAME, sizeof g->name, g->name, NULL);
+    cl.GetDeviceInfo(dev, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof g->units, &g->units, NULL);
+    if (g->units < 1) g->units = 1;
     cl_int err;
-    gpu.ctx = cl.CreateContext(NULL, 1, &gpu.dev, NULL, NULL, &err);
+    g->ctx = cl.CreateContext(NULL, 1, &dev, NULL, NULL, &err);
     if (err) return 0;
-    gpu.q = cl.CreateCommandQueue(gpu.ctx, gpu.dev, 0, &err);
+    g->q = cl.CreateCommandQueue(g->ctx, dev, 0, &err);
     if (err) return 0;
     const char *src = SIM_SOURCE;
-    cl_program prog = cl.CreateProgramWithSource(gpu.ctx, 1, &src, NULL, &err);
+    cl_program prog = cl.CreateProgramWithSource(g->ctx, 1, &src, NULL, &err);
     if (err) return 0;
-    if (cl.BuildProgram(prog, 1, &gpu.dev, "-cl-single-precision-constant -cl-fast-relaxed-math", NULL, NULL) != 0) {
+    if (cl.BuildProgram(prog, 1, &dev, "-cl-single-precision-constant -cl-fast-relaxed-math", NULL, NULL) != 0) {
         static char logbuf[16384];
-        cl.GetProgramBuildInfo(prog, gpu.dev, CL_PROGRAM_BUILD_LOG, sizeof logbuf - 1, logbuf, NULL);
-        printf("GPU: Kernel lässt sich nicht bauen:\n%.3000s\n", logbuf);
+        cl.GetProgramBuildInfo(prog, dev, CL_PROGRAM_BUILD_LOG, sizeof logbuf - 1, logbuf, NULL);
+        printf("GPU %s: Kernel lässt sich nicht bauen:\n%.3000s\n", g->name, logbuf);
         return 0;
     }
     cl_kernel k_size = cl.CreateKernel(prog, "eval_size", &err);
-    gpu.k_init = cl.CreateKernel(prog, "eval_init_k", &err);
-    gpu.k_run = cl.CreateKernel(prog, "eval_run_k", &err);
+    g->k_init = cl.CreateKernel(prog, "eval_init_k", &err);
+    g->k_run = cl.CreateKernel(prog, "eval_run_k", &err);
     if (err) return 0;
-    cl_mem out = cl.CreateBuffer(gpu.ctx, CL_MEM_READ_WRITE, sizeof(int), NULL, &err);
+    cl_mem out = cl.CreateBuffer(g->ctx, CL_MEM_READ_WRITE, sizeof(int), NULL, &err);
     size_t one = 1;
     cl.SetKernelArg(k_size, 0, sizeof(cl_mem), &out);
-    cl.EnqueueNDRangeKernel(gpu.q, k_size, 1, NULL, &one, NULL, 0, NULL, NULL);
-    cl.EnqueueReadBuffer(gpu.q, out, 1, 0, sizeof(int), &gpu.eval_size, 0, NULL, NULL);
+    cl.EnqueueNDRangeKernel(g->q, k_size, 1, NULL, &one, NULL, 0, NULL, NULL);
+    cl.EnqueueReadBuffer(g->q, out, 1, 0, sizeof(int), &g->eval_size, 0, NULL, NULL);
     cl.ReleaseMemObject(out);
     /* tracks as float */
     TrackInfo ti[MAX_TRACKS];
     for (int k = 0; k < n_tracks; k++) ti[k] = tracks[k].info;
-    gpu.tinfo = cl.CreateBuffer(gpu.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(TrackInfo) * n_tracks, ti, &err);
+    g->tinfo = cl.CreateBuffer(g->ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(TrackInfo) * n_tracks, ti, &err);
     double *src_arr[8] = {T_cx, T_cy, T_tx, T_ty, T_nx, T_ny, T_cum, T_lo};
     float *tmp = malloc(sizeof(float) * T_total);
     for (int a = 0; a < 8; a++) {
         for (int i = 0; i < T_total; i++) tmp[i] = (float)src_arr[a][i];
-        gpu.arr[a] = cl.CreateBuffer(gpu.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * T_total, tmp, &err);
+        g->arr[a] = cl.CreateBuffer(g->ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * T_total, tmp, &err);
     }
     free(tmp);
-    gpu.aero = cl.CreateBuffer(gpu.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int) * T_total, T_aero, &err);
-    return err == 0 && gpu.eval_size > 0;
+    g->aero = cl.CreateBuffer(g->ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int) * T_total, T_aero, &err);
+    return err == 0 && g->eval_size > 0;
 }
 
-static void set_track_args(cl_kernel k, int first) {
-    cl.SetKernelArg(k, first, sizeof(cl_mem), &gpu.tinfo);
-    for (int a = 0; a < 8; a++) cl.SetKernelArg(k, first + 1 + a, sizeof(cl_mem), &gpu.arr[a]);
-    cl.SetKernelArg(k, first + 9, sizeof(cl_mem), &gpu.aero);
+/* the chosen GPU (g_gpu_pick) or all usable ones */
+static int gpu_init(void) {
+    cl_device_id devs[MAX_GPUS];
+    int n = gpu_list(devs, MAX_GPUS);
+    if (n == 0) { printf("GPU: kein OpenCL-Grafikchip gefunden.\n"); return 0; }
+    if (g_gpu_pick >= n) { printf("GPU %d gibt es nicht (nur 0-%d) - nehme die stärkste.\n", g_gpu_pick, n - 1); g_gpu_pick = -2; }
+    if (g_gpu_pick == -2) {     /* the one with the most compute units (usually the graphics card) */
+        cl_uint best = 0;
+        for (int i = 0; i < n; i++) {
+            cl_uint cu = 0;
+            cl.GetDeviceInfo(devs[i], CL_DEVICE_MAX_COMPUTE_UNITS, sizeof cu, &cu, NULL);
+            if (cu > best || g_gpu_pick < 0) { best = cu; g_gpu_pick = i; }
+        }
+    }
+    n_gpus = 0;
+    for (int i = 0; i < n; i++) {
+        if (g_gpu_pick >= 0 && i != g_gpu_pick) continue;
+        if (gpu_setup(&gpus[n_gpus], devs[i])) n_gpus++;
+        else printf("GPU %d nicht nutzbar - übersprungen.\n", i);
+    }
+    return n_gpus > 0;
+}
+
+static void gpu_names(char *out, size_t cap) {
+    out[0] = 0;
+    for (int i = 0; i < n_gpus; i++) {
+        size_t len = strlen(out);
+        snprintf(out + len, cap - len, "%s%s", i ? " + " : "", gpus[i].name);
+    }
+}
+
+static void set_track_args(Gpu *g, cl_kernel k, int first) {
+    cl.SetKernelArg(k, first, sizeof(cl_mem), &g->tinfo);
+    for (int a = 0; a < 8; a++) cl.SetKernelArg(k, first + 1 + a, sizeof(cl_mem), &g->arr[a]);
+    cl.SetKernelArg(k, first + 9, sizeof(cl_mem), &g->aero);
+}
+
+/* one GPU's share of the jobs */
+typedef struct {
+    int first, count;
+    cl_mem jobs, nets, states, fit, laps, dbuf;
+    int *done;
+    size_t global, local;
+    int finished;
+} Slice;
+
+static int slice_start(Gpu *g, Slice *sl, Batch *b, const float *netf, int npop) {
+    cl_int err;
+    int nj = sl->count;
+    sl->jobs = cl.CreateBuffer(g->ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(Job) * nj,
+                               (void *)(b->jobs + sl->first), &err);
+    if (err) return 0;
+    sl->nets = cl.CreateBuffer(g->ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * npop * N_PARAMS,
+                               (void *)netf, &err);
+    if (err) return 0;
+    sl->states = cl.CreateBuffer(g->ctx, CL_MEM_READ_WRITE, (size_t)g->eval_size * nj, NULL, &err);
+    if (err) return 0;
+    sl->fit = cl.CreateBuffer(g->ctx, CL_MEM_READ_WRITE, sizeof(float) * nj * MAX_HEAT, NULL, &err);
+    if (err) return 0;
+    sl->laps = cl.CreateBuffer(g->ctx, CL_MEM_READ_WRITE, sizeof(float) * nj * MAX_HEAT, NULL, &err);
+    if (err) return 0;
+    sl->done = calloc(nj, sizeof(int));
+    sl->dbuf = cl.CreateBuffer(g->ctx, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(int) * nj, sl->done, &err);
+    if (err) return 0;
+    sl->local = 64;
+    sl->global = ((size_t)nj + sl->local - 1) / sl->local * sl->local;
+    cl.SetKernelArg(g->k_init, 0, sizeof(cl_mem), &sl->jobs);
+    cl.SetKernelArg(g->k_init, 1, sizeof(cl_mem), &sl->states);
+    cl.SetKernelArg(g->k_init, 2, sizeof(int), &nj);
+    set_track_args(g, g->k_init, 3);
+    if (cl.EnqueueNDRangeKernel(g->q, g->k_init, 1, NULL, &sl->global, &sl->local, 0, NULL, NULL)) return 0;
+    int steps = 600;
+    Style st = b->st;
+    cl.SetKernelArg(g->k_run, 0, sizeof(cl_mem), &sl->states);
+    cl.SetKernelArg(g->k_run, 1, sizeof(int), &nj);
+    cl.SetKernelArg(g->k_run, 2, sizeof(int), &steps);
+    cl.SetKernelArg(g->k_run, 3, sizeof(cl_mem), &sl->nets);
+    cl.SetKernelArg(g->k_run, 4, sizeof(cl_mem), &sl->fit);
+    cl.SetKernelArg(g->k_run, 5, sizeof(cl_mem), &sl->laps);
+    cl.SetKernelArg(g->k_run, 6, sizeof(cl_mem), &sl->dbuf);
+    cl.SetKernelArg(g->k_run, 7, sizeof(Style), &st);
+    set_track_args(g, g->k_run, 8);
+    return 1;
+}
+
+static void slice_free(Slice *sl) {
+    cl_mem *m[] = {&sl->jobs, &sl->nets, &sl->states, &sl->fit, &sl->laps, &sl->dbuf};
+    for (int i = 0; i < 6; i++) if (*m[i]) cl.ReleaseMemObject(*m[i]);
+    free(sl->done);
+}
+
+static double now_s(void);
+
+typedef struct {
+    Gpu *g;
+    Slice *sl;
+    Batch *b;
+    double t0;
+    int multi, ok;
+    volatile LONG progress;
+} GpuRun;
+
+/* run in slices (~5 s of sim time) so no single kernel trips the Windows GPU watchdog */
+static DWORD WINAPI gpu_thread(LPVOID arg) {
+    GpuRun *r = arg;
+    Gpu *g = r->g;
+    Slice *sl = r->sl;
+    r->ok = 1;
+    for (;;) {
+        if (cl.EnqueueNDRangeKernel(g->q, g->k_run, 1, NULL, &sl->global, &sl->local, 0, NULL, NULL) ||
+            cl.EnqueueReadBuffer(g->q, sl->dbuf, 1, 0, sizeof(int) * sl->count, sl->done, 0, NULL, NULL)) {
+            r->ok = 0;
+            return 0;
+        }
+        int c = 0;
+        for (int j = 0; j < sl->count; j++) c += sl->done[j];
+        r->progress = c;
+        if (c == sl->count) break;
+    }
+    if (r->multi) {
+        double rate = sl->count / fmax(1e-3, now_s() - r->t0);
+        g->rate = g->rate > 0 ? 0.5 * g->rate + 0.5 * rate : rate;
+    }
+    size_t off = (size_t)sl->first * MAX_HEAT, n = sizeof(float) * sl->count * MAX_HEAT;
+    if (cl.EnqueueReadBuffer(g->q, sl->fit, 1, 0, n, r->b->fit + off, 0, NULL, NULL) ||
+        cl.EnqueueReadBuffer(g->q, sl->laps, 1, 0, n, r->b->laps + off, 0, NULL, NULL))
+        r->ok = 0;
+    return 0;
 }
 
 static int run_gpu(Batch *b, int npop, int report) {
-    cl_int err;
     int nj = b->njobs;
     float *netf = malloc(sizeof(float) * (size_t)npop * N_PARAMS);
     for (size_t i = 0; i < (size_t)npop * N_PARAMS; i++) netf[i] = (float)b->nets[i];
-    cl_mem jobs = cl.CreateBuffer(gpu.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(Job) * nj, (void *)b->jobs, &err);
-    cl_mem nets = cl.CreateBuffer(gpu.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * npop * N_PARAMS, netf, &err);
-    cl_mem states = cl.CreateBuffer(gpu.ctx, CL_MEM_READ_WRITE, (size_t)gpu.eval_size * nj, NULL, &err);
-    cl_mem fit = cl.CreateBuffer(gpu.ctx, CL_MEM_READ_WRITE, sizeof(float) * nj * MAX_HEAT, NULL, &err);
-    cl_mem laps = cl.CreateBuffer(gpu.ctx, CL_MEM_READ_WRITE, sizeof(float) * nj * MAX_HEAT, NULL, &err);
-    int *done = calloc(nj, sizeof(int));
-    cl_mem dbuf = cl.CreateBuffer(gpu.ctx, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(int) * nj, done, &err);
+    /* split the jobs over the GPUs by their measured speed (first run: compute units, the fast one gets more) */
+    Slice sl[MAX_GPUS];
+    memset(sl, 0, sizeof sl);
+    double weight[MAX_GPUS], total = 0;
+    for (int g = 0; g < n_gpus; g++) total += weight[g] = gpus[g].rate > 0 ? gpus[g].rate : (double)gpus[g].units;
+    int first = 0, ok = 1, used = 0;
+    double t0 = now_s();
+    for (int g = 0; g < n_gpus && first < nj; g++) {
+        int share = g == n_gpus - 1 ? nj - first : (int)(nj * weight[g] / total);
+        if (share <= 0) continue;
+        sl[g].first = first;
+        sl[g].count = share;
+        first += share;
+        used = g + 1;
+        if (!slice_start(&gpus[g], &sl[g], b, netf, npop)) { ok = 0; break; }
+    }
     free(netf);
-    if (err) { free(done); return 0; }
-    size_t local = 64, global = ((size_t)nj + local - 1) / local * local;
-    cl.SetKernelArg(gpu.k_init, 0, sizeof(cl_mem), &jobs);
-    cl.SetKernelArg(gpu.k_init, 1, sizeof(cl_mem), &states);
-    cl.SetKernelArg(gpu.k_init, 2, sizeof(int), &nj);
-    set_track_args(gpu.k_init, 3);
-    if (cl.EnqueueNDRangeKernel(gpu.q, gpu.k_init, 1, NULL, &global, &local, 0, NULL, NULL)) { free(done); return 0; }
-    /* run in slices (~5 s of sim time) so no single kernel trips the Windows GPU watchdog */
-    int steps = 600;
-    Style st = b->st;
-    cl.SetKernelArg(gpu.k_run, 0, sizeof(cl_mem), &states);
-    cl.SetKernelArg(gpu.k_run, 1, sizeof(int), &nj);
-    cl.SetKernelArg(gpu.k_run, 2, sizeof(int), &steps);
-    cl.SetKernelArg(gpu.k_run, 3, sizeof(cl_mem), &nets);
-    cl.SetKernelArg(gpu.k_run, 4, sizeof(cl_mem), &fit);
-    cl.SetKernelArg(gpu.k_run, 5, sizeof(cl_mem), &laps);
-    cl.SetKernelArg(gpu.k_run, 6, sizeof(cl_mem), &dbuf);
-    cl.SetKernelArg(gpu.k_run, 7, sizeof(Style), &st);
-    set_track_args(gpu.k_run, 8);
-    int ok = 1;
-    for (;;) {
-        if (cl.EnqueueNDRangeKernel(gpu.q, gpu.k_run, 1, NULL, &global, &local, 0, NULL, NULL)) { ok = 0; break; }
-        if (cl.EnqueueReadBuffer(gpu.q, dbuf, 1, 0, sizeof(int) * nj, done, 0, NULL, NULL)) { ok = 0; break; }
-        int cnt = 0;
-        for (int j = 0; j < nj; j++) cnt += done[j];
-        if (report) { printf("@TASK %d %d\n", cnt, nj); fflush(stdout); }
-        if (cnt == nj) break;
-    }
     if (ok) {
-        cl.EnqueueReadBuffer(gpu.q, fit, 1, 0, sizeof(float) * nj * MAX_HEAT, b->fit, 0, NULL, NULL);
-        cl.EnqueueReadBuffer(gpu.q, laps, 1, 0, sizeof(float) * nj * MAX_HEAT, b->laps, 0, NULL, NULL);
+        /* every GPU runs its share in its own thread, so a slow one never holds up a fast one */
+        HANDLE th[MAX_GPUS];
+        GpuRun run[MAX_GPUS];
+        int nth = 0;
+        for (int g = 0; g < used; g++) {
+            if (!sl[g].count) continue;
+            run[nth] = (GpuRun){.g = &gpus[g], .sl = &sl[g], .b = b, .t0 = t0, .multi = n_gpus > 1};
+            th[nth] = CreateThread(NULL, 0, gpu_thread, &run[nth], 0, NULL);
+            nth++;
+        }
+        while (WaitForMultipleObjects(nth, th, TRUE, 250) == WAIT_TIMEOUT) {
+            if (report) {
+                long cnt = 0;
+                for (int k = 0; k < nth; k++) cnt += run[k].progress;
+                printf("@TASK %ld %d\n", cnt, nj);
+                fflush(stdout);
+            }
+        }
+        for (int k = 0; k < nth; k++) { CloseHandle(th[k]); ok &= run[k].ok; }
     }
-    cl.ReleaseMemObject(jobs); cl.ReleaseMemObject(nets); cl.ReleaseMemObject(states);
-    cl.ReleaseMemObject(fit); cl.ReleaseMemObject(laps); cl.ReleaseMemObject(dbuf);
-    free(done);
+    for (int g = 0; g < used; g++) slice_free(&sl[g]);
     return ok;
 }
 
@@ -1061,6 +1207,20 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--seed") && v) { seed = strtoull(v, NULL, 10); i++; }
         else if (!strcmp(a, "--threads") && v) { g_threads = atoi(v); i++; }
         else if (!strcmp(a, "--device") && v) { device = v; i++; }
+        else if (!strcmp(a, "--gpu") && v) { g_gpu_pick = !strcmp(v, "all") ? -1 : !strcmp(v, "best") ? -2 : atoi(v); i++; }
+        else if (!strcmp(a, "--list-gpus")) {
+            /* "@GPU <n> <compute units> <name>" per OpenCL GPU, for the game's GPU picker */
+            cl_device_id devs[MAX_GPUS];
+            int n = gpu_list(devs, MAX_GPUS);
+            for (int k = 0; k < n; k++) {
+                char name[256] = "";
+                cl_uint cu = 0;
+                cl.GetDeviceInfo(devs[k], CL_DEVICE_NAME, sizeof name, name, NULL);
+                cl.GetDeviceInfo(devs[k], CL_DEVICE_MAX_COMPUTE_UNITS, sizeof cu, &cu, NULL);
+                printf("@GPU %d %u %s\n", k, cu, name);
+            }
+            return 0;
+        }
         else if (!strcmp(a, "--data") && v) { data = v; i++; }
         else if (!strcmp(a, "--brains") && v) { snprintf(brains_dir, sizeof brains_dir, "%s", v); i++; }
         else if (!strcmp(a, "--warm")) warm = 1;
@@ -1074,7 +1234,7 @@ int main(int argc, char **argv) {
     }
     if (!mode) {
         printf("f1train base|balanced|aggressive|cautious|all [--generations N] [--population N]\n"
-               "        [--device auto|cpu|gpu] [--threads N] [--seed N] [--warm] [--fresh]\n"
+               "        [--device auto|cpu|gpu] [--gpu best|all|N] [--list-gpus] [--threads N] [--seed N] [--warm] [--fresh]\n"
                "        [--data data/train_data.bin] [--brains data/brains]\n");
         return 1;
     }
@@ -1096,10 +1256,12 @@ int main(int argc, char **argv) {
         if (!g_use_gpu && !strcmp(device, "gpu")) die("Keine nutzbare GPU (OpenCL) gefunden.");
         g_force_gpu = !strcmp(device, "gpu");
     }
+    char gname[1024];
+    gpu_names(gname, sizeof gname);
     if (g_use_gpu && !g_force_gpu)
         printf("Gerät: GPU %s (OpenCL) für große Populationen (ab %d Läufen), sonst CPU mit %d Threads\n"
-               "@DEVICE GPU %s + CPU (%d Threads)\n", gpu.name, GPU_MIN_JOBS, g_threads, gpu.name, g_threads);
-    else if (g_use_gpu) printf("Gerät: GPU %s (OpenCL)\n@DEVICE GPU %s\n", gpu.name, gpu.name);
+               "@DEVICE GPU %s + CPU (%d Threads)\n", gname, GPU_MIN_JOBS, g_threads, gname, g_threads);
+    else if (g_use_gpu) printf("Gerät: GPU %s (OpenCL)\n@DEVICE GPU %s\n", gname, gname);
     else printf("Gerät: CPU, %d Threads\n@DEVICE CPU (%d Threads)\n", g_threads, g_threads);
     fflush(stdout);
     signal(SIGINT, on_sigint);

@@ -27,7 +27,8 @@ from .sound import SoundSystem
 from .training_screen import TrainingScreen
 from .user_settings import UserSettings
 from .net import NetPlay
-from .utils import clear_render_caches, draw_panel, draw_text, vertical_gradient
+from .utils import (clear_render_caches, draw_mouse_hints, draw_panel, draw_text, mouse_items_reset, mouse_to_keys,
+                    vertical_gradient)
 
 
 class GameState(Protocol):
@@ -120,6 +121,10 @@ class Game:
                     self.running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_F12:
                     self.screenshot()
+                elif event.type in (pygame.MOUSEMOTION, pygame.MOUSEWHEEL, pygame.MOUSEBUTTONDOWN) and                         not in_session and not getattr(self.state, "handles_mouse", False) and                         not getattr(self.state, "mouse_blocked", False):
+                    # keyboard menus: the mouse arrives as the keys they already understand
+                    for key_event in mouse_to_keys(event):
+                        self._menu_event(key_event)
                 else:
                     if event.type == pygame.KEYDOWN and not isinstance(self.state, Session):
                         if event.key in (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT):
@@ -138,10 +143,23 @@ class Game:
                     self.state.update(dt)
                 if self.net is not None and self.net.role == "host":
                     self.net.host_tick(dt)
+                if not isinstance(self.state, Session):
+                    mouse_items_reset()
                 self.state.draw(self.screen)
+                if not isinstance(self.state, Session) and not getattr(self.state, "handles_mouse", False):
+                    draw_mouse_hints(self.screen)
             self._draw_toast()
             pygame.display.flip()
         pygame.quit()
+
+    def _menu_event(self, event: pygame.event.Event) -> None:
+        if event.key in (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT):
+            self.sound.ui("click")
+        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            self.sound.ui("confirm")
+        elif event.key == pygame.K_ESCAPE:
+            self.sound.ui("back")
+        self.state.handle_event(event)
 
     def screenshot(self) -> None:
         folder = DATA_DIR / "screenshots"

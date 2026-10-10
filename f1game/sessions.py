@@ -407,6 +407,11 @@ class Session:
             self.focus_car(order[pos])
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.paused:
+            for rect, key in getattr(self.game.hud, "pause_buttons", ()):
+                if rect.collidepoint(event.pos):
+                    self.handle_event(pygame.event.Event(pygame.KEYDOWN, key=key, mod=0, unicode="", scancode=0))
+                    return
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             x, y = event.pos
             row = (y - 182) // self.game.hud.tower_row_h(len(self.cars))

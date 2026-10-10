@@ -10,7 +10,7 @@ import pygame
 from .net import DEFAULT_PORT, NetPlay, local_addresses
 from .screens import _Background, _wrap
 from .settings import CYAN, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW
-from .utils import draw_panel, draw_text
+from .utils import draw_panel, draw_text, mouse_item
 
 if TYPE_CHECKING:
     from .game import Game
@@ -145,7 +145,11 @@ class NetLobbyScreen:
                 col = (ACCENT if row != "ZURÜCK" else (120, 120, 130)) if selected else (50, 50, 58)
                 pygame.draw.rect(screen, col, (px + 20, ry + 4, pw - 40, rh - 8), border_radius=8)
                 draw_text(screen, row, f.medium, WHITE, (px + pw // 2, ry + rh // 2), anchor="center")
+                if not self.busy:
+                    mouse_item((px + 20, ry + 4, pw - 40, rh - 8), self, i)
                 continue
+            if not self.busy:
+                mouse_item((px + 12, ry, pw - 24, rh - 4), self, i, key=None, arrows=row == "Rolle")
             if selected:
                 pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, rh - 4), border_radius=6)
                 pygame.draw.rect(screen, ACCENT, (px + 12, ry, 5, rh - 4), border_radius=2)

@@ -17,7 +17,7 @@ import pygame
 from .controls import ACTIONS, AXES, DEVICE_KINDS, KEY_ACTIONS, KEY_DRIVE, AxisBinding, DeviceProfile
 from .screens import _Background, _wrap
 from .settings import CYAN, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW
-from .utils import draw_panel, draw_text
+from .utils import draw_panel, draw_text, mouse_item
 
 if TYPE_CHECKING:
     from .game import Game
@@ -231,6 +231,11 @@ class ControlsScreen:
                 self._leave()
             else:
                 self._go("hub")
+
+    @property
+    def mouse_blocked(self) -> bool:
+        """While waiting for a key/button/axis to bind, the mouse must not send keys."""
+        return bool(self.capture_axis or self.capture_button or self.capture_key)
 
     def _rows(self) -> list[str]:
         if self.page == "hub":
@@ -708,7 +713,14 @@ class ControlsScreen:
                 col = (120, 120, 130) if selected else (50, 50, 58)
                 pygame.draw.rect(screen, col, (px + 20, ry + 3, pw - 40, rh - 4), border_radius=8)
                 draw_text(screen, "ZURÜCK", f.small_bold, WHITE, (px + pw // 2, ry + 1 + rh // 2), anchor="center")
+                mouse_item((px + 20, ry + 3, pw - 40, rh - 4), self, i)
                 continue
+            if self.page == "hub":
+                mouse_item((px + 12, ry, pw - 24, rh - 2), self, i)
+            elif self.page == "tuning":
+                mouse_item((px + 12, ry, pw - 24, rh - 2), self, i, key=None, arrows=True)
+            else:
+                mouse_item((px + 12, ry, pw - 24, rh - 2), self, i, key=None)
             if selected:
                 pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, rh - 2), border_radius=6)
                 pygame.draw.rect(screen, ACCENT, (px + 12, ry, 5, rh - 2), border_radius=2)
@@ -725,6 +737,7 @@ class ControlsScreen:
                 cells = self._bind_cells(row)
                 for k, text in enumerate(cells):
                     x = px + 300 + k * 200
+                    mouse_item((x - 8, ry + 2, 190, rh - 6), self, (i, k), attr=("sel", "col"))
                     if selected and k == self.col:
                         pygame.draw.rect(screen, (60, 62, 74), (x - 8, ry + 2, 190, rh - 6), border_radius=5)
                         if capturing:

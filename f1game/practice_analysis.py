@@ -25,7 +25,7 @@ from .settings import (CYAN, GREEN, GREY, PANEL, PANEL_LIGHT, PURPLE, PX_PER_S_T
                        WHITE, YELLOW)
 from .tyres import COMPOUND_ORDER, COMPOUNDS
 from .user_settings import speed_in
-from .utils import draw_panel, draw_text, format_time
+from .utils import draw_panel, draw_text, format_time, mouse_item
 
 if TYPE_CHECKING:
     from .game import Game
@@ -325,12 +325,14 @@ class PracticeAnalysisScreen:
             w = f.small_bold.size(name)[0] + 30
             active = k == self.tab
             pygame.draw.rect(screen, CYAN if active else (40, 42, 52), (x, 94, w, 30), border_radius=6)
+            mouse_item((x, 94, w, 30), self, k, attr="tab", key=None, hover=False)
             draw_text(screen, name, f.small_bold, (10, 12, 16) if active else WHITE, (x + w // 2, 109),
                       anchor="center", shadow=False)
             x += w + 8
         (self._tab_overview, self._tab_sectors, self._tab_style, self._tab_setup, self._tab_strategy)[self.tab](screen)
-        draw_text(screen, f"Links/rechts Tabs · ENTER {self.continue_label} · G Garage · Pfeile blättern · ESC Menü",
-                  f.small, GREY, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 18), anchor="center")
+        hint = draw_text(screen, f"Links/rechts Tabs · ENTER {self.continue_label} · G Garage · Pfeile blättern · "
+                                 "ESC Menü", f.small, GREY, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 18), anchor="center")
+        mouse_item(hint, self, self.tab, attr="tab", hover=False)      # click the hint line = continue
 
     def _lines(self, screen: pygame.Surface, box: pygame.Rect, title: str,
                lines: list[tuple[str, str, tuple[int, int, int]]], label_w: int = 150) -> None:

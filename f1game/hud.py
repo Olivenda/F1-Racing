@@ -1052,8 +1052,16 @@ class HUD:
         shade.fill((0, 0, 0, 160))
         screen.blit(shade, (0, 0))
         draw_text(screen, "PAUSE", self.f.huge, WHITE, (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 40), anchor="center")
-        draw_text(screen, "P: Weiter    R: Neustart    ESC: Hauptmenü", self.f.medium, GREY,
-                  (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 30), anchor="center")
+        # clickable buttons (keys P / R / ESC still work)
+        mouse = pygame.mouse.get_pos()
+        self.pause_buttons = []
+        for k, (label, key) in enumerate((("WEITER (P)", pygame.K_p), ("NEUSTART (R)", pygame.K_r),
+                                          ("HAUPTMENÜ (ESC)", pygame.K_ESCAPE))):
+            rect = pygame.Rect(SCREEN_WIDTH // 2 - 330 + k * 225, SCREEN_HEIGHT // 2 + 12, 210, 40)
+            hover = rect.collidepoint(mouse)
+            pygame.draw.rect(screen, F1_RED if hover else (44, 46, 56), rect, border_radius=8)
+            draw_text(screen, label, self.f.small_bold, WHITE, rect.center, anchor="center", shadow=False)
+            self.pause_buttons.append((rect, key))
         draw_text(screen, f"{s.title}  ·  {s.track.name}  ·  F12: Screenshot", self.f.small, (150, 150, 160),
                   (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 90), anchor="center", shadow=False)
         pulse = 0.5 + 0.5 * math.sin(pygame.time.get_ticks() / 300)

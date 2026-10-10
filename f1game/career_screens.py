@@ -17,7 +17,7 @@ from .settings import CYAN, DIFFICULTY_LEVELS, GREEN, GREY, PANEL, PANEL_LIGHT, 
     YELLOW
 from .track import TRACK_DEFS
 from .i18n import tr
-from .utils import draw_panel, draw_text
+from .utils import draw_panel, draw_text, mouse_item
 
 if TYPE_CHECKING:
     from .game import Game
@@ -329,11 +329,13 @@ class CareerSetupScreen(_Screen):
             selected = i == self.sel
             if row in ("START", "ZURÜCK"):
                 h = min(44, rh + 4) if row == "START" else min(34, rh - 4)
+                mouse_item((px + 20, ry + 2, pw - 40, h), self, i)
                 self.button(screen, pygame.Rect(px + 20, ry + 2, pw - 40, h),
                             "KARRIERE STARTEN" if row == "START" else "ZURÜCK", selected,
                             GOLD if row == "START" else (90, 90, 100), f.large if row == "START" else f.medium)
                 continue
             bh = rh - 6
+            mouse_item((px + 12, ry, pw - 24, bh), self, i, key=None, arrows=row not in self.TEXT_ROWS)
             if selected:
                 pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, bh), border_radius=6)
                 pygame.draw.rect(screen, GOLD, (px + 12, ry, 5, bh), border_radius=2)
@@ -441,6 +443,8 @@ class OfferScreen(_Screen):
             y = 112 + k * 92
             rect = pygame.Rect(60, y, 760, 84)
             selected = k == self.sel
+            mouse_item(rect, self, k, key=None)
+            mouse_item((rect.x + 430, rect.y + 38, 160, 22), self, k, key=pygame.K_TAB)
             draw_panel(screen, rect, PANEL_LIGHT if selected else PANEL, 225)
             col = tuple(c.teams[o["team"]]["color"])
             pygame.draw.rect(screen, col, (rect.x, rect.y, 8, rect.h), border_radius=4)
@@ -463,6 +467,7 @@ class OfferScreen(_Screen):
                      _visible(col))
         box = pygame.Rect(850, 112, 390, 540)
         draw_panel(screen, box, PANEL, 215)
+        mouse_item((box.x + 8, box.y + 28, box.w - 16, 48), self, self.demand, attr="demand", key=None, arrows=True)
         draw_text(screen, "VERHANDLUNG", f.tiny, GREY, (box.x + 16, box.y + 12), shadow=False)
         risk = "kein Risiko" if demand <= 1.0 else "geringes Risiko" if demand <= 1.1 else \
             "mittleres Risiko" if demand <= 1.25 else "hohes Risiko!"
@@ -873,6 +878,7 @@ class CareerHub(_Screen):
                     (200, 60, 60) if act == "quit" else (110, 110, 125)
                 font = f.small_bold if r == 0 else f.tiny
                 self.button(screen, pygame.Rect(x, y, bw, h), _fit(label, font, bw - 12), k == self.sel, base, font)
+                mouse_item((x, y, bw, h), self, k)
                 x += bw + 8
         ready, why = c.ready_to_race()
         if not ready and not c.season_over:
@@ -945,7 +951,9 @@ class DevelopmentScreen(_Screen):
             selected = i == self.sel
             if row == "back":
                 self.button(screen, pygame.Rect(box.x + 20, y, box.w - 40, 34), "ZURÜCK", selected, (110, 110, 125))
+                mouse_item((box.x + 20, y, box.w - 40, 34), self, i)
                 continue
+            mouse_item((box.x + 8, y - 3, box.w - 16, 43), self, i, key=None)
             if row == list(FACILITIES)[0]:
                 draw_text(screen, "INFRASTRUKTUR", f.tiny, GREY, (box.x + 20, y - 14), shadow=False)
             if selected:
@@ -1023,6 +1031,7 @@ class SponsorScreen(_Screen):
         for k, o in enumerate(c.sponsor_offers):
             rect = pygame.Rect(60 + k * 395, 130, 370, 440)
             selected = k == self.sel
+            mouse_item(rect, self, k, key=None)
             draw_panel(screen, rect, PANEL_LIGHT if selected else PANEL, 225)
             if selected:
                 pygame.draw.rect(screen, CYAN, rect, 2, border_radius=8)
@@ -1083,6 +1092,7 @@ class PressScreen(_Screen):
         for i, ans in enumerate(press["answers"]):
             rect = pygame.Rect(140, 270 + i * 90, 1000, 76)
             selected = i == self.sel
+            mouse_item(rect, self, i)
             draw_panel(screen, rect, PANEL_LIGHT if selected else PANEL, 225)
             if selected:
                 pygame.draw.rect(screen, GOLD, rect, 2, border_radius=8)
@@ -1214,6 +1224,7 @@ class MarketScreen(_Screen):
             idx = self.scroll + i
             d = c.drivers[name]
             y = box.y + 34 + i * 34
+            mouse_item((box.x + 6, y - 4, box.w - 12, 32), self, idx, key=None)
             if idx == self.sel:
                 pygame.draw.rect(screen, PANEL_LIGHT, (box.x + 6, y - 4, box.w - 12, 32), border_radius=5)
                 pygame.draw.rect(screen, self.accent, (box.x + 6, y - 4, 4, 32), border_radius=2)
@@ -1381,9 +1392,11 @@ class SeasonReviewScreen(_Screen):
                 label = "VERTRAGSANGEBOTE ANSEHEN" if c.kind == "driver" else f"SAISON {c.season + 1} STARTEN"
                 self.button(screen, pygame.Rect(rb.x + 20, rb.bottom - 70, rb.w - 40, 50), label, selected, GOLD,
                             f.medium)
+                mouse_item((rb.x + 20, rb.bottom - 70, rb.w - 40, 50), self, i)
                 continue
             d = c.drivers[row]
             rect = pygame.Rect(rb.x + 14, ry, rb.w - 28, 40)
+            mouse_item(rect, self, i, key=None)
             pygame.draw.rect(screen, PANEL_LIGHT if selected else (30, 32, 40), rect, border_radius=6)
             draw_text(screen, f"{row} · Wertung {d['rating']} · {d['salary']:.1f} Mio", f.small_bold, WHITE,
                       (rect.x + 12, rect.y + 10), shadow=False)
@@ -1458,6 +1471,7 @@ class CareerSlotScreen(_Screen):
             for row, slot in enumerate(SLOTS[kind]):
                 rect = pygame.Rect(x, 146 + row * 150, 560, 136)
                 selected = self.col == col and self.row == row
+                mouse_item(rect, self, (col, row), attr=("col", "row"))
                 draw_panel(screen, rect, PANEL_LIGHT if selected else PANEL, 225)
                 if selected:
                     pygame.draw.rect(screen, accent, rect, 2, border_radius=8)
@@ -1487,6 +1501,7 @@ class CareerSlotScreen(_Screen):
                               anchor="topright", shadow=False)
         self.button(screen, pygame.Rect(SCREEN_WIDTH // 2 - 150, 610, 300, 40), "ZURÜCK", self.row == 3,
                     (110, 110, 125))
+        mouse_item((SCREEN_WIDTH // 2 - 150, 610, 300, 40), self, 3, attr="row")
         draw_text(screen, "Pfeile wählen · ENTER laden/neu · ENTF löschen · ESC Hauptmenü", f.tiny, GREY,
                   (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 40), anchor="center", shadow=False)
         self.draw_status(screen, SCREEN_HEIGHT - 18)

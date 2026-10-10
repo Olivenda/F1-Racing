@@ -13,7 +13,7 @@ from .profiles import Team
 from .settings import CYAN, GREEN, GREY, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH, TOP_SPEED, WHITE, YELLOW
 from .i18n import tr
 from .user_settings import speed_in
-from .utils import draw_panel, draw_text
+from .utils import draw_panel, draw_text, mouse_item
 
 if TYPE_CHECKING:
     from .game import Game
@@ -115,6 +115,7 @@ class GarageScreen:
         for i, key in enumerate(self.keys):
             y = py + 12 + i * rh
             selected = i == self.sel
+            mouse_item((px + 10, y - 4, pw - 20, rh - 4), self, i, key=None, arrows=True)
             if selected:
                 pygame.draw.rect(screen, PANEL_LIGHT, (px + 10, y - 4, pw - 20, rh - 4), border_radius=6)
                 pygame.draw.rect(screen, ACCENT, (px + 10, y - 4, 5, rh - 4), border_radius=2)
@@ -137,6 +138,7 @@ class GarageScreen:
             pygame.draw.circle(screen, (15, 15, 20), (vx, sy), 9, 2)
         fy = py + 12 + len(self.keys) * rh
         selected = self.rows[self.sel] == "fuel"
+        mouse_item((px + 10, fy - 4, pw - 20, 44), self, self.rows.index("fuel"), key=None, arrows=True)
         if selected:
             pygame.draw.rect(screen, PANEL_LIGHT, (px + 10, fy - 4, pw - 20, 44), border_radius=6)
             pygame.draw.rect(screen, ACCENT, (px + 10, fy - 4, 5, 44), border_radius=2)
@@ -152,6 +154,7 @@ class GarageScreen:
         for k, name in enumerate(self.BUTTONS):
             selected = self.rows[self.sel] == name
             rect = pygame.Rect(px + 20 + k * (bw + 10), by, bw, 40)
+            mouse_item(rect, self, self.rows.index(name))
             base = ACCENT if name == "FERTIG" else (100, 100, 115)
             pulse = 0.5 + 0.5 * math.sin(self.t * 4) if selected else 0.0
             col = tuple(int(c * (0.75 + 0.25 * pulse)) for c in base) if selected else tuple(c // 3 for c in base)

@@ -177,15 +177,18 @@ def vertical_gradient(size: tuple[int, int], top: tuple[int, int, int],
 # Menus are keyboard driven. While drawing, a menu registers its rows with mouse_item(); the game loop turns
 # the mouse into the keys the menu already understands: hovering selects a row, a click confirms it (ENTER) or,
 # on the arrow zones of a value row, changes the value (LEFT/RIGHT), the wheel scrolls, right click goes back.
-_MOUSE_ITEMS: list[tuple[pygame.Rect, object, str, int, "int | None", bool]] = []
+_MOUSE_ITEMS: list[tuple] = []
 ARROW_W = 34
+_last_click: tuple = (None, 0)
 
 
-def mouse_item(rect: pygame.Rect | tuple[int, int, int, int], owner: object, index: int, attr: str = "sel",
-               key: int | None = pygame.K_RETURN, arrows: bool = False) -> None:
+def mouse_item(rect: pygame.Rect | tuple[int, int, int, int], owner: object, index: "int | tuple",
+               attr: "str | tuple[str, ...]" = "sel",
+               key: int | None = pygame.K_RETURN, arrows: bool = False, hover: bool = True) -> None:
     """Register a clickable menu entry for this frame. owner.<attr> = index selects it; key is sent on a click
-    (None: a click only selects); arrows: the right end of the row has < > zones sending LEFT/RIGHT."""
-    _MOUSE_ITEMS.append((pygame.Rect(rect), owner, attr, index, key, arrows))
+    (None: a click only selects); arrows: the right end of the row has < > zones sending LEFT/RIGHT;
+    hover: whether pointing at it already selects it (not for tabs)."""
+    _MOUSE_ITEMS.append((pygame.Rect(rect), owner, attr, index, key, arrows, hover))
 
 
 def mouse_items_reset() -> None:
@@ -197,6 +200,15 @@ def _mouse_hit(pos: tuple[int, int]):
         if item[0].collidepoint(pos):
             return item
     return None
+
+
+def _select(item) -> None:
+    """owner.attr = index; attr/index may be tuples for menus with two coordinates (column, row)."""
+    owner, attr, index = item[1], item[2], item[3]
+    pairs = zip(attr, index) if isinstance(attr, tuple) else ((attr, index),)
+    for a, v in pairs:
+        if getattr(owner, a, None) != v:
+            setattr(owner, a, v)
 
 
 def _arrow_zone(item, pos: tuple[int, int]) -> int:
@@ -217,8 +229,8 @@ def mouse_to_keys(event: pygame.event.Event) -> list[pygame.event.Event]:
 
     if event.type == pygame.MOUSEMOTION:
         item = _mouse_hit(event.pos)
-        if item is not None and getattr(item[1], item[2], None) != item[3]:
-            setattr(item[1], item[2], item[3])
+        if item is not None and item[6]:
+            _select(item)
         return []
     if event.type == pygame.MOUSEWHEEL:
         return [key(pygame.K_UP if event.y > 0 else pygame.K_DOWN)] if event.y else []
@@ -228,14 +240,23 @@ def mouse_to_keys(event: pygame.event.Event) -> list[pygame.event.Event]:
         return [key(pygame.K_ESCAPE)]
     if event.button != 1:
         return []
+    if not _MOUSE_ITEMS:
+        return [key(pygame.K_RETURN)]       # screens without rows (results, podium...): click = continue
     item = _mouse_hit(event.pos)
     if item is None:
         return []
-    setattr(item[1], item[2], item[3])
+    _select(item)
     zone = _arrow_zone(item, event.pos)
     if zone:
         return [key(pygame.K_RIGHT if zone > 0 else pygame.K_LEFT)]
-    return [key(item[4])] if item[4] is not None else []
+    if item[4] is not None:
+        return [key(item[4])]
+    # rows where a click only selects: a double click confirms (ENTER)
+    global _last_click
+    now = pygame.time.get_ticks()
+    double = _last_click[0] == (id(item[1]), item[2], item[3]) and now - _last_click[1] < 400
+    _last_click = (None, 0) if double else ((id(item[1]), item[2], item[3]), now)
+    return [key(pygame.K_RETURN)] if double and not item[5] else []
 
 
 def draw_mouse_hints(surface: pygame.Surface) -> None:

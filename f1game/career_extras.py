@@ -13,7 +13,7 @@ from .career_screens import GOLD, MEDAL, RED, _fit, _Screen, _wrap, draw_form, d
 from .championship import FORMATS
 from .settings import CYAN, DIFFICULTY_LEVELS, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, \
     YELLOW
-from .utils import draw_panel, draw_text
+from .utils import draw_panel, draw_text, mouse_item
 
 if TYPE_CHECKING:
     from .game import Game
@@ -194,8 +194,10 @@ class DesignScreen(_RowScreen):
             if row in ("SPEICHERN", "ZURÜCK"):
                 self.button(screen, pygame.Rect(box.x + 20, y + 2, box.w - 40, rh - 8), row, selected,
                             GOLD if row == "SPEICHERN" else (110, 110, 125))
+                mouse_item((box.x + 20, y + 2, box.w - 40, rh - 8), self, i)
                 continue
             r = pygame.Rect(box.x + 10, y, box.w - 20, rh - 4)
+            mouse_item(r, self, i, key=None, arrows=True)
             if selected:
                 self.highlight(screen, r)
             draw_text(screen, row.upper(), f.tiny, GREY, (box.x + 26, r.centery), anchor="midleft", shadow=False)
@@ -280,8 +282,10 @@ class PersonalScreen(_RowScreen):
             if key == "back":
                 self.button(screen, pygame.Rect(box.x + 20, box.bottom - 60, box.w - 40, 40), "ZURÜCK", selected,
                             (110, 110, 125))
+                mouse_item((box.x + 20, box.bottom - 60, box.w - 40, 40), self, i)
                 continue
             r = pygame.Rect(box.x + 12, box.y + 14 + i * 150, box.w - 24, 136)
+            mouse_item(r, self, i, key=None)
             if selected:
                 self.highlight(screen, r)
             name, desc = PERSONAL[key]
@@ -556,8 +560,10 @@ class CareerOptionsScreen(_RowScreen):
             if row in ("SPEICHERN", "ZURÜCK"):
                 self.button(screen, pygame.Rect(box.x + 20, y + 4, box.w - 40, 40), row, selected,
                             GOLD if row == "SPEICHERN" else (110, 110, 125))
+                mouse_item((box.x + 20, y + 4, box.w - 40, 40), self, i)
                 continue
             r = pygame.Rect(box.x + 12, y, box.w - 24, 46)
+            mouse_item(r, self, i, key=None, arrows=True)
             if selected:
                 self.highlight(screen, r)
                 draw_text(screen, "<  >", f.medium, YELLOW, (r.right - 14, r.centery), anchor="midright")

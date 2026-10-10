@@ -21,7 +21,7 @@ from .settings import (CYAN, DIFFICULTY_CORNERING, DIFFICULTY_LEVELS, F1_RED, GR
 from .track import TRACK_DEFS
 from .weather import WEATHER_MODES
 from .i18n import LANGUAGES, set_language, tr
-from .utils import clear_render_caches, draw_panel, draw_text, format_time, vertical_gradient
+from .utils import clear_render_caches, draw_panel, draw_text, format_time, mouse_item, vertical_gradient
 
 if TYPE_CHECKING:
     from .game import Game
@@ -161,6 +161,7 @@ class MainMenu:
             y = 236 + i * 56
             selected = i == self.sel
             slide = 18 if selected else 0
+            mouse_item((40, y, 490, 51), self, i)
             w = 470 if selected else 430
             col = F1_RED if selected else PANEL_LIGHT
             pygame.draw.polygon(screen, col, [(60 + slide, y), (60 + slide + w, y), (40 + slide + w, y + 51),
@@ -371,6 +372,7 @@ class SetupScreen:
                     tuple(c // 3 for c in base)
                 h = 48 if row == "START" else 34
                 pygame.draw.rect(screen, col, (px + 20, ry, pw - 40, h), border_radius=8)
+                mouse_item((px + 20, ry, pw - 40, h), self, i)
                 label = ("ZUSCHAUEN" if self.spectator else "RENNEN STARTEN") if row == "START" else "ZURÜCK"
                 draw_text(screen, label, f.large if row == "START" else f.medium, WHITE,
                           (px + pw // 2, ry + h // 2), anchor="center")
@@ -379,6 +381,9 @@ class SetupScreen:
                 pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, 38), border_radius=6)
                 pygame.draw.rect(screen, accent, (px + 12, ry, 5, 38), border_radius=2)
             draw_text(screen, row.upper(), f.tiny, GREY, (px + 28, ry + 12), shadow=False)
+            setup_row = row == "Fahrzeug-Setup"
+            mouse_item((px + 12, ry, pw - 24, 38), self, i, key=pygame.K_RETURN if setup_row else None,
+                       arrows=not setup_row)
             if row == "Startreifen":
                 comp = COMPOUNDS[ALL_COMPOUNDS[self.c["tyre"]]]
                 pygame.draw.circle(screen, comp.color, (px + 148, ry + 19), 8, 3)
@@ -551,6 +556,7 @@ class SettingsScreen:
              "Bildrate": "fps", "Vollbild": "fullscreen", "FPS anzeigen": "show_fps", "HUD-Stil": "hud_style",
              "HUD-Assistenz": "hud_assist", "Startkamera": "camera_mode"}
     _last = (0, 0)
+    handles_mouse = True
 
     def __init__(self, game: "Game") -> None:
         self.game = game
@@ -1229,6 +1235,7 @@ class ChampionshipScreen:
                 base = accent if row == "START" else (90, 90, 100)
                 col = tuple(int(c * (0.75 + 0.25 * pulse)) for c in base) if selected else tuple(c // 3 for c in base)
                 pygame.draw.rect(screen, col, (px + 20, ry, pw - 40, h), border_radius=8)
+                mouse_item((px + 20, ry, pw - 40, h), self, i)
                 label = "SAISON STARTEN" if row == "START" else "ZURÜCK"
                 draw_text(screen, label, f.large if row == "START" else f.medium, WHITE if row != "START" or not
                           selected else (30, 20, 0), (px + pw // 2, ry + h // 2), anchor="center")
@@ -1237,6 +1244,7 @@ class ChampionshipScreen:
                 pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, 40), border_radius=6)
                 pygame.draw.rect(screen, accent, (px + 12, ry, 5, 40), border_radius=2)
             draw_text(screen, row.upper(), f.tiny, GREY, (px + 28, ry + 13), shadow=False)
+            mouse_item((px + 12, ry, pw - 24, 40), self, i, key=None, arrows=True)
             draw_text(screen, self._value(row), f.small_bold, WHITE, (px + 165, ry + 11), shadow=False)
             if selected:
                 draw_text(screen, "<  >", f.medium, YELLOW, (px + pw - 24, ry + 20), anchor="midright")
@@ -1354,6 +1362,7 @@ class ChampionshipScreen:
             pulse = 0.5 + 0.5 * math.sin(self.t * 4) if selected else 0.0
             col = tuple(int(c * (0.75 + 0.25 * pulse)) for c in base) if selected else tuple(c // 3 for c in base)
             pygame.draw.rect(screen, col, rect, border_radius=8)
+            mouse_item(rect, self, i)
             text_col = (30, 20, 0) if row == "WEITER" and selected else WHITE
             draw_text(screen, labels[row], f.medium if row == "WEITER" else f.small_bold, text_col, rect.center,
                       anchor="center", shadow=False)
