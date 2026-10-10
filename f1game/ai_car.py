@@ -6,10 +6,11 @@ import math
 import random
 from typing import TYPE_CHECKING, Sequence
 
+from . import ai_pace
 from .car import Car
 from .neural import NeuralNetwork
 from .sensors import compute_inputs
-from .settings import AI_CONTROL_INTERVAL, BRAKE_DECEL, CAR_LENGTH, CAR_WIDTH
+from .settings import AI_CONTROL_INTERVAL, BRAKE_DECEL, CAR_LENGTH, CAR_WIDTH, brake_decel
 from .utils import wrap_angle
 
 if TYPE_CHECKING:
@@ -75,15 +76,53 @@ class AI_Car(Car):
         self.engine_factor = engine_factor
         self.driver = NeuralDriver(self, network, marshal)
         self.sees_others = True
+        self.corner_factor = 1.0        # < 1: difficulty caps the speed at a share of the full-strength AI's
+        self._corner_timer = 0.0
+        self._corner_cap = 1e9
+        self._pace_ref: list[float] | None = None
 
     def control(self, dt: float, session: "Session") -> None:
         others = session.cars if self.sees_others else ()
         self.throttle, self.brake, self.steer_input = self.driver.update(
             dt, others, self.track, race_start=session.is_race_start_phase)
+        self._corner_limit(dt)
         if others and self.collide_cars:
             # the first lap is the crowded one: more caution until the field has spread out
             caution = 1.5 if session.kind == "race" and self.laps_done == 0 else 1.0
             self._racecraft(dt, others, caution)
+
+    def _corner_limit(self, dt: float) -> None:
+        """Easier difficulty: never faster than corner_factor x the reference speed of a full-strength AI at this
+        point of the track (see ai_pace), braking for it in time. Cars not held back teach the reference."""
+        track = self.track
+        if self.in_pit or self.frozen:
+            return
+        ref = self._pace_ref
+        if ref is None or len(ref) != track.n:
+            ref = self._pace_ref = ai_pace.profile(track.definition.key, track.n)
+        f = self.corner_factor
+        if f < 1.0:
+            self._corner_timer -= dt
+            if self._corner_timer <= 0.0:
+                self._corner_timer = AI_CONTROL_INTERVAL
+                n, step = track.n, track.WAYPOINT_SPACING
+                brake_k = self.performance()["brake"] * 0.8
+                allowed = 1e9
+                for k in range(0, 40, 2):
+                    v = ref[(self.idx + k) % n] * f
+                    if v > 0.0:
+                        allowed = min(allowed, (v * v + 2.0 * brake_decel(v) * brake_k * k * step) ** 0.5)
+                self._corner_cap = allowed
+            excess = self.speed_fwd - self._corner_cap
+            if excess > 3.0:
+                self.throttle = 0.0
+                self.brake = max(self.brake, min(1.0, max(0.3, excess / 50.0)))
+                return
+            if excess > -12.0:
+                self.throttle = min(self.throttle, 0.4)
+                return
+        if not self.on_grass and self.speed_fwd > ref[self.idx]:
+            ref[self.idx] = self.speed_fwd
 
     # ------------------------------------------------------------------ racecraft
     # The nets only learned to be fast; this layer makes them fair: they lift (and only then brake) instead of

@@ -16,6 +16,7 @@ from .physics import handle_collisions
 from .player_car import Player_Car
 from .profiles import AUTOPILOT_BRAIN, PLAYER_PROFILE, DriverProfile, driver_grip
 from .effects import Effects
+from .flags import post_states
 from .render3d import CAMERA_MODES, Renderer3D
 from .pit_menu import PitMenu, crew_choice
 from .pitlane import PIT_ACCEL, PIT_DECEL, SPEED_LIMIT
@@ -28,7 +29,7 @@ from .sensors import RADAR_RANGE, lookahead_points
 from .race_control import PUNCTURE_WEAR, RaceControl
 from .i18n import tr
 from .stewards import Stewards
-from .settings import (TOP_SPEED, DIFFICULTY_LEVELS, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
+from .settings import (TOP_SPEED, DIFFICULTY_CORNERING, DIFFICULTY_LEVELS, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
                        SCREEN_WIDTH, SLIPSTREAM_RANGE, WHITE, YELLOW, GREEN, Color)
 from .utils import format_time
 
@@ -226,6 +227,7 @@ class Session:
                 net = self.game.brains.network(prof.brain, prof.checkpoint)
                 car = AI_Car(prof, self.track, net, engine_factor=self.config.difficulty * prof.pace)
                 car.grip_bonus = driver_grip(prof.pace)
+                car.corner_factor = DIFFICULTY_CORNERING.get(self.config.difficulty_name, 1.0)
                 car.apply_setup(ai_setup)
             if self.ghost_field:
                 car.collide_cars = False
@@ -1245,7 +1247,7 @@ class Session:
                           self.game.fonts.tiny, self.garages(), rain=self.weather.rain,
                           guide=self.pit_guide(self.cars[self.cam_index]), fx=self.fx,
                           lights=self.gantry_lights(), positions=positions, frame_dt=self._frame_dt,
-                          crews=self.pit_crews())
+                          crews=self.pit_crews(), flags=post_states(self))
             if rain:
                 self.weather.draw(screen, self._frame_dt, view3d=True)
             return
@@ -1758,6 +1760,7 @@ class RaceSession(Session):
             return
         if car.laps_done >= self.total_laps or self.winner_time is not None:
             car.session_done = True
+            car.finished_at = self.time
             car.finish_time = self.time - self.race_start_time + car.penalty_unserved
             car.penalty_unserved = 0.0
             car.retired_ghost = True

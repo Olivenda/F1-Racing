@@ -171,3 +171,84 @@ def vertical_gradient(size: tuple[int, int], top: tuple[int, int, int],
         col = tuple(int(lerp(top[i], bottom[i], t)) for i in range(3))
         pygame.draw.line(surf, col, (0, y), (w, y))
     return surf
+
+
+# ---------------------------------------------------------------------------------------------- mouse in menus
+# Menus are keyboard driven. While drawing, a menu registers its rows with mouse_item(); the game loop turns
+# the mouse into the keys the menu already understands: hovering selects a row, a click confirms it (ENTER) or,
+# on the arrow zones of a value row, changes the value (LEFT/RIGHT), the wheel scrolls, right click goes back.
+_MOUSE_ITEMS: list[tuple[pygame.Rect, object, str, int, "int | None", bool]] = []
+ARROW_W = 34
+
+
+def mouse_item(rect: pygame.Rect | tuple[int, int, int, int], owner: object, index: int, attr: str = "sel",
+               key: int | None = pygame.K_RETURN, arrows: bool = False) -> None:
+    """Register a clickable menu entry for this frame. owner.<attr> = index selects it; key is sent on a click
+    (None: a click only selects); arrows: the right end of the row has < > zones sending LEFT/RIGHT."""
+    _MOUSE_ITEMS.append((pygame.Rect(rect), owner, attr, index, key, arrows))
+
+
+def mouse_items_reset() -> None:
+    _MOUSE_ITEMS.clear()
+
+
+def _mouse_hit(pos: tuple[int, int]):
+    for item in reversed(_MOUSE_ITEMS):
+        if item[0].collidepoint(pos):
+            return item
+    return None
+
+
+def _arrow_zone(item, pos: tuple[int, int]) -> int:
+    rect, arrows = item[0], item[5]
+    if not arrows:
+        return 0
+    if rect.right - ARROW_W <= pos[0] <= rect.right:
+        return 1
+    if rect.right - 2 * ARROW_W - 4 <= pos[0] < rect.right - ARROW_W:
+        return -1
+    return 0
+
+
+def mouse_to_keys(event: pygame.event.Event) -> list[pygame.event.Event]:
+    """Mouse event -> key events for the current menu (selection on hover is applied directly)."""
+    def key(k: int) -> pygame.event.Event:
+        return pygame.event.Event(pygame.KEYDOWN, key=k, mod=0, unicode="", scancode=0, from_mouse=True)
+
+    if event.type == pygame.MOUSEMOTION:
+        item = _mouse_hit(event.pos)
+        if item is not None and getattr(item[1], item[2], None) != item[3]:
+            setattr(item[1], item[2], item[3])
+        return []
+    if event.type == pygame.MOUSEWHEEL:
+        return [key(pygame.K_UP if event.y > 0 else pygame.K_DOWN)] if event.y else []
+    if event.type != pygame.MOUSEBUTTONDOWN:
+        return []
+    if event.button == 3:
+        return [key(pygame.K_ESCAPE)]
+    if event.button != 1:
+        return []
+    item = _mouse_hit(event.pos)
+    if item is None:
+        return []
+    setattr(item[1], item[2], item[3])
+    zone = _arrow_zone(item, event.pos)
+    if zone:
+        return [key(pygame.K_RIGHT if zone > 0 else pygame.K_LEFT)]
+    return [key(item[4])] if item[4] is not None else []
+
+
+def draw_mouse_hints(surface: pygame.Surface) -> None:
+    """Show the < > zones of the value row under the mouse."""
+    pos = pygame.mouse.get_pos()
+    item = _mouse_hit(pos)
+    if item is None or not item[5]:
+        return
+    rect = item[0]
+    zone = _arrow_zone(item, pos)
+    for d, x in ((-1, rect.right - 2 * ARROW_W - 4), (1, rect.right - ARROW_W)):
+        r = pygame.Rect(x, rect.y + 4, ARROW_W, rect.h - 8)
+        pygame.draw.rect(surface, (225, 30, 40) if zone == d else (60, 62, 74), r, border_radius=6)
+        cx, cy = r.center
+        pts = [(cx + 4 * d, cy), (cx - 3 * d, cy - 6), (cx - 3 * d, cy + 6)]
+        pygame.draw.polygon(surface, (245, 245, 245), pts)

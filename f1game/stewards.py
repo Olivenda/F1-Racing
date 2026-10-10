@@ -91,6 +91,7 @@ class Stewards:
                 s.message(f"Track Limits - Verwarnung {n}/{WARNINGS}", YELLOW, 2.0)
         elif n == WARNINGS:
             self.announce(f"Schwarz-weiße Flagge: {car.short} (Track Limits)", "investigation")
+            car.bw_until = s.time + 10.0
             if car is s.player:
                 s.message("SCHWARZ-WEISSE FLAGGE - nächster Verstoß wird bestraft", (240, 240, 240), 3.0)
         elif (n - WARNINGS) % TL_PENALTY_EVERY == 1:

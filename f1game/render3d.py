@@ -12,6 +12,7 @@ import pygame.gfxdraw
 from pygame.math import Vector2
 
 from .settings import SCREEN_HEIGHT, SCREEN_WIDTH, TOP_SPEED, Color
+from .flags import marshal_posts
 from .i18n import tr
 from .utils import clamp, draw_panel, vertical_gradient, wrap_angle
 
@@ -877,8 +878,10 @@ class Renderer3D:
              racing_line: bool, label_font: pygame.font.Font,
              garages: Sequence[tuple[Vector2, float, Color, str]] = (), rain: float = 0.0,
              guide: Sequence[Vector2] = (), fx: "Effects | None" = None, lights: int | None = None,
-             positions: dict | None = None, frame_dt: float = 1 / 60, crews: Sequence[tuple] = ()) -> None:
+             positions: dict | None = None, frame_dt: float = 1 / 60, crews: Sequence[tuple] = (),
+             flags: Sequence[str] = ()) -> None:
         self.guide = guide
+        self._flag_states = flags
         # "high": 1.5x supersampling (2.25x the pixels - 2x cost four times the fill work for little gain)
         self.ss = 1.5 if self.antialias == "high" else 1
         self.aa = self.antialias == "edges"
@@ -1463,6 +1466,10 @@ class Renderer3D:
                         side = -1.0 if (i // 3) % 2 else 1.0
                         p = track.center[j] + track.normals[j] * side * (hw + 16)
                         props.append(("board", p, heading_at(j), k + 1, 12.0))
+        # digital marshal panels (LED flag boards on posts beside the track)
+        for k, (i, side) in enumerate(marshal_posts(track)):
+            p = track.center[i] + track.normals[i] * side * min(wl - 3.0, hw + 26.0)
+            props.append(("panel", p, heading_at(i), k, 14.0))
         # floodlights (night race)
         for i in range(0, n, 16):
             side = 1.0 if (i // 16) % 2 else -1.0
@@ -1535,6 +1542,8 @@ class Renderer3D:
                 z = 7.5 + k * 3.2
                 self.poly(surf, [to_cam(a.x, a.y, z), to_cam(b.x, b.y, z), to_cam(b.x, b.y, z + 1.6),
                                  to_cam(a.x, a.y, z + 1.6)], (24, 24, 28))
+        elif kind == "panel":
+            self._draw_flag_panel(surf, prop, night)
         elif kind == "flood" and night:
             _, pos, heading, side, _ = prop
             base, top = to_cam(pos.x, pos.y, 0), to_cam(pos.x, pos.y, 78)
@@ -1547,6 +1556,66 @@ class Renderer3D:
                     sx, sy = self.project(p)
                     pygame.draw.circle(surf, (255, 250, 230), (sx, sy), max(1, self._focal * 1.6 / p[2]))
                     self._glow(sx, sy, self._focal * 34 / p[2], (130, 124, 104))
+
+    def _draw_flag_panel(self, surf: pygame.Surface, prop: tuple, night: bool) -> None:
+        """A digital marshal panel: black LED board on a post, facing the oncoming cars."""
+        _, pos, heading, k, _ = prop
+        states = getattr(self, "_flag_states", ())
+        state = states[k] if k < len(states) else "off"
+        to_cam = self.to_cam
+        f = Vector2(math.cos(heading), math.sin(heading))
+        r = Vector2(-f.y, f.x)
+        if (pos.x - self.cx) * self.fx + (pos.y - self.cy) * self.fy < 0:
+            return
+        self._line3d(surf, to_cam(pos.x, pos.y, 0), to_cam(pos.x, pos.y, 9), (80, 82, 90), 2)
+        face = pos - f * 0.4
+        a, b = face - r * 6.5, face + r * 6.5
+        self.poly(surf, [to_cam(a.x, a.y, 8.5), to_cam(b.x, b.y, 8.5), to_cam(b.x, b.y, 18.5),
+                         to_cam(a.x, a.y, 18.5)], (14, 14, 16))
+        face = pos - f * 0.6
+        t = pygame.time.get_ticks()
+        blink = (t // 280) % 2 == 0
+
+        def quad(u0: float, u1: float, z0: float, z1: float, col: Color) -> None:
+            p0, p1 = face + r * u0, face + r * u1
+            self.poly(surf, [to_cam(p0.x, p0.y, z0), to_cam(p1.x, p1.y, z0), to_cam(p1.x, p1.y, z1),
+                             to_cam(p0.x, p0.y, z1)], col)
+
+        lit = None
+        if state == "off":
+            quad(-5.6, 5.6, 9.4, 17.6, (30, 32, 36))
+        elif state == "chequered":
+            for row in range(3):
+                for col in range(4):
+                    c = (236, 236, 236) if (row + col) % 2 else (18, 18, 20)
+                    quad(-5.6 + col * 2.8, -2.8 + col * 2.8, 9.4 + row * 2.73, 12.13 + row * 2.73, c)
+            lit = (90, 90, 90)
+        elif state in ("sc", "vsc"):
+            on = blink
+            quad(-5.6, 5.6, 9.4, 17.6, (255, 205, 20) if on else (60, 50, 10))
+            # the letters as LED blocks: "SC" = two blocks, "VSC" = three
+            n_blocks = 2 if state == "sc" else 3
+            w = 11.2 / (n_blocks * 2 + 1)
+            for j in range(n_blocks):
+                u = -5.6 + w * (1 + 2 * j)
+                quad(u, u + w, 11.4, 15.6, (20, 18, 10))
+            lit = (110, 90, 10) if on else None
+        elif state == "yellow2":
+            top = blink
+            quad(-5.6, 5.6, 13.6, 17.6, (255, 210, 20) if top else (60, 50, 10))
+            quad(-5.6, 5.6, 9.4, 13.4, (60, 50, 10) if top else (255, 210, 20))
+            lit = (120, 96, 10)
+        else:
+            col = {"green": (40, 235, 90), "yellow": (255, 210, 20), "blue": (40, 120, 255)}.get(state, (30, 32, 36))
+            on = blink or state == "green"
+            quad(-5.6, 5.6, 9.4, 17.6, col if on else _shade(col, 0.25))
+            if on:
+                lit = _shade(col, 0.45)
+        if lit is not None:
+            p = to_cam(face.x, face.y, 13.5)
+            if p[2] > self.near and p[2] < 2400:
+                sx, sy = self.project(p)
+                self._glow(sx, sy, self._focal * (22 if night else 14) / p[2], lit)
 
     # ------------------------------------------------------------------ pit crews
     def _draw_box_marks(self, surf: pygame.Surface, crews: Sequence[tuple]) -> None:

@@ -14,8 +14,9 @@ from .profiles import recording_stats
 from .sound import VOLUMES
 from .tyres import ALL_COMPOUNDS, COMPOUND_ORDER, COMPOUNDS
 from .user_settings import (ANTIALIAS_LEVELS, ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, GEARBOX_MODES,
-                            GRAPHICS_LEVELS, HUD_STYLES, TYRE_WEAR_MODES, UNITS, speed_in)
-from .settings import (CYAN, DIFFICULTY_LEVELS, F1_RED, GREEN, GREY, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
+                            GRAPHICS_LEVELS, GRAPHICS_PRESETS, HUD_ASSIST, HUD_STYLES, TYRE_WEAR_MODES, UNITS,
+                            speed_in)
+from .settings import (CYAN, DIFFICULTY_CORNERING, DIFFICULTY_LEVELS, F1_RED, GREEN, GREY, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .track import TRACK_DEFS
 from .weather import WEATHER_MODES
@@ -331,7 +332,8 @@ class SetupScreen:
             return f"{self.c['laps']} Runden"
         if row == "KI-Stärke":
             factor = DIFFICULTY_LEVELS[self.diffs[self.c["diff"]]]
-            return f"{self.diffs[self.c['diff']]}  ({factor * 100:.0f}% Motorleistung)"
+            corner = DIFFICULTY_CORNERING[self.diffs[self.c["diff"]]]
+            return f"{self.diffs[self.c['diff']]}  ({factor * 100:.0f}% Motor · {corner * 100:.0f}% Kurventempo)"
         if row in ("Gegner", "Fahrerfeld"):
             return f"{self.c['opponents']} KI-Fahrer"
         if row == "Dein Team":
@@ -489,17 +491,23 @@ class SetupScreen:
 
 
 class SettingsScreen:
+    """Settings in category tabs. Every row is a choice from a list (shown as buttons when they fit), the
+    player name is typed, the controller row opens its own screen."""
 
-    ROWS = ["Sprache", "Spielername", "Lenkrad & Controller", "Fahrhilfen", "Ansicht", "Schaden", "Reifenverschleiß", "Wetter", "Getriebe", "Safety Car",
-            "TV-Regie (Zuschauer)", "Sound", "Einheiten", "Partikel & Effekte", "Grafikdetails", "Kantenglättung",
-            "HUD-Stil", "Bildrate", "FPS anzeigen",
-            "Vollbild", "ZURÜCK"]
+    TABS: list[tuple[str, list[str]]] = [
+        ("ALLGEMEIN", ["Sprache", "Spielername", "Einheiten", "Sound", "Lenkrad & Controller"]),
+        ("FAHREN", ["Fahrhilfen", "Getriebe", "Schaden", "Reifenverschleiß"]),
+        ("RENNEN", ["Wetter", "Safety Car", "Ansicht", "TV-Regie (Zuschauer)"]),
+        ("GRAFIK", ["Grafik-Voreinstellung", "Grafikdetails", "Kantenglättung", "Partikel & Effekte", "Bildrate",
+                    "Vollbild", "FPS anzeigen"]),
+        ("HUD & KAMERA", ["HUD-Stil", "HUD-Assistenz", "Startkamera"]),
+    ]
     HELP = {
         "Spielername": "Tippen zum Ändern, Rücktaste löscht. Erscheint in Zeitentabellen und auf dem Podium.",
         "Lenkrad & Controller": "ENTER öffnet die Einrichtung: Wheelbase, Pedale und Gamepads kalibrieren, "
                                 "Lenkbereich, Totzone, Vibration und Tastenbelegung.",
         "Fahrhilfen": "Mittel: Stabilitätskontrolle + farbige Bremslinie. Voll: zusätzlich automatische "
-                      "Bremshilfe vor Kurven.",
+                      "Bremshilfe vor Kurven. Aus: durchdrehende Räder und blockierende Reifen möglich.",
         "Ansicht": "Startansicht im Rennen. Im Rennen jederzeit mit V umschalten.",
         "Schaden": "An: Treffer beschädigen Frontflügel, Heck und Aufhängung (weniger Grip/Tempo, Auto zieht). "
                    "Reparatur beim Boxenstopp. Mit Ausfällen: zerstörte Aufhängung = DNF.",
@@ -507,8 +515,8 @@ class SettingsScreen:
         "Getriebe": "Automatik: das Auto schaltet selbst. Sequenziell: du schaltest - Tastatur E/Q (änderbar), "
                     "Gamepad RB/LB, Lenkrad Schaltwippen. Jeder Gang hat einen Drehzahlbegrenzer, im zu hohen Gang "
                     "fehlt die Beschleunigung. Zu frühes Runterschalten wird verweigert (Motorschutz).",
-        "Wetter": "Trocken: nie Regen. Wechselhaft: Schauer können kommen und gehen - Strecke wird nass und "
-                  "trocknet wieder ab. Regen: nasses Rennen. Bei Nässe Intermediates (grün) oder Wets (blau) holen.",
+        "Wetter": "Trocken: nie Regen. Wechselhaft: höchstens ein Wetterwechsel pro Rennen. Regen: nasses Rennen. "
+                  "Bei Nässe Intermediates (grün) oder Wets (blau) holen.",
         "TV-Regie (Zuschauer)": "Die Kamera springt automatisch zu engen Zweikämpfen (im Rennen mit A umschalten).",
         "Sprache": "Sprache des Spiels / game language. Standard: English.",
         "Safety Car": "Bei Ausfällen und schweren Unfällen: Safety Car (Feld fährt geschlossen hinter dem SC, "
@@ -521,117 +529,163 @@ class SettingsScreen:
         "Partikel & Effekte": "Reifenrauch, Funken bei Einschlägen, Staub neben der Strecke und Bremsspuren auf "
                               "dem Asphalt.",
         "Bildrate": "Höhere Bildrate = flüssiger, braucht mehr Rechenleistung.",
+        "Grafik-Voreinstellung": "Stellt Grafikdetails, Kantenglättung und Effekte auf einmal ein. Leistung: "
+                                 "maximale Bildrate. Qualität: alles an.",
         "Grafikdetails": "Niedrig: nur Strecke und Autos. Mittel: + Tribünen, Banden, Bremsschilder, Startampel, "
-                         "Grasstreifen, Partikel in 3D. Hoch: + Rückspiegel im Cockpit, Linsenreflexe, Vignette, "
-                         "Regentropfen auf der Linse.",
+                         "digitale Flaggen-Tafeln, Partikel in 3D. Hoch: + Rückspiegel im Cockpit, Linsenreflexe, "
+                         "Vignette, Regentropfen auf der Linse.",
+        "Kantenglättung": "Kanten glätten kostet kaum Leistung. Hoch rendert in 1,5-facher Auflösung - schöner, "
+                          "aber deutlich langsamer.",
         "HUD-Stil": "Modern: Schaltlichter, Auto-Status mit Reifenverschleiß, Reifentemperaturen, Schäden und "
                     "Sprit. Klassisch: die alte Anzeige.",
+        "HUD-Assistenz": "Aus: keine Hilfen. Flaggen: digitale Flaggen-Anzeige (gelb, doppelt gelb, blau, SC, VSC, "
+                         "grün, schwarz-weiß, Zielflagge). Voll: + blinkende Bildschirmränder, Spotter-Pfeile für "
+                         "Autos neben dir und Warnung vor langsamen Autos voraus.",
+        "Startkamera": "Mit dieser Kamera startet die 3D-Ansicht. Im Rennen mit K wechseln (Shift+K zurück).",
         "Vollbild": "Skaliert das Spiel auf den ganzen Bildschirm.",
-        "ZURÜCK": "Einstellungen werden automatisch gespeichert.",
     }
+    ATTRS = {"Sprache": "language", "Einheiten": "units", "Sound": "sound", "Fahrhilfen": "assists",
+             "Getriebe": "gearbox", "Schaden": "damage", "Reifenverschleiß": "tyre_wear", "Wetter": "weather",
+             "Safety Car": "safety_car", "Ansicht": "view3d", "TV-Regie (Zuschauer)": "auto_camera",
+             "Grafikdetails": "graphics", "Kantenglättung": "antialias", "Partikel & Effekte": "effects",
+             "Bildrate": "fps", "Vollbild": "fullscreen", "FPS anzeigen": "show_fps", "HUD-Stil": "hud_style",
+             "HUD-Assistenz": "hud_assist", "Startkamera": "camera_mode"}
+    _last = (0, 0)
 
     def __init__(self, game: "Game") -> None:
         self.game = game
-        self.sel = 0
+        self.tab, self.sel = SettingsScreen._last
         self.bg = _Background()
         self.t = 0.0
+        self._hits: list[tuple[pygame.Rect, tuple]] = []
 
     @property
     def st(self):
         return self.game.settings
 
-    def _value(self, row: str) -> str:
-        st = self.st
-        return {
-            "Spielername": st.player_name + ("_" if self.rows_sel == "Spielername" and int(self.t * 2) % 2 else ""),
-            "Fahrhilfen": ASSIST_NAMES[st.assists],
-            "Lenkrad & Controller": self.game.controls.device_name() if self.game.controls.connected
-            else "nur Tastatur",
-            "Ansicht": "3D-Verfolgerkamera" if st.view3d else "2D-Draufsicht",
-            "Schaden": DAMAGE_MODES[st.damage],
-            "Reifenverschleiß": TYRE_WEAR_MODES[st.tyre_wear][0],
-            "TV-Regie (Zuschauer)": "An" if st.auto_camera else "Aus",
-            "Sound": VOLUMES[st.sound][0],
-            "Safety Car": "An" if st.safety_car else "Aus",
-            "Wetter": WEATHER_MODES[st.weather],
-            "Getriebe": GEARBOX_MODES[st.gearbox],
-            "Sprache": LANGUAGES.get(st.language, "English"),
-            "FPS anzeigen": "An" if st.show_fps else "Aus",
-            "Einheiten": UNITS[st.units][0],
-            "Partikel & Effekte": EFFECT_LEVELS[st.effects],
-            "Kantenglättung": ANTIALIAS_LEVELS[st.antialias],
-            "Grafikdetails": GRAPHICS_LEVELS[st.graphics],
-            "HUD-Stil": HUD_STYLES[st.hud_style],
-            "Bildrate": f"{st.fps} FPS",
-            "Vollbild": "An" if st.fullscreen else "Aus",
-        }.get(row, "")
+    @property
+    def rows(self) -> list[str]:
+        return self.TABS[self.tab][1]
 
     @property
     def rows_sel(self) -> str:
-        return self.ROWS[self.sel]
+        return self.rows[self.sel]
 
-    def _change(self, delta: int) -> None:
-        st, row = self.st, self.rows_sel
+    # ------------------------------------------------------------------ options
+    def _options(self, row: str) -> tuple[list[tuple[object, str]], object] | None:
+        """The choices of a row and the current value, or None for rows that are not a list."""
+        st = self.st
+        on_off: list[tuple[object, str]] = [(False, "Aus"), (True, "An")]
+        if row == "Sprache":
+            return list(LANGUAGES.items()), st.language
+        if row == "Einheiten":
+            return [(k, v[0]) for k, v in UNITS.items()], st.units
+        if row == "Sound":
+            return [(k, v[0]) for k, v in VOLUMES.items()], st.sound
         if row == "Fahrhilfen":
-            st.assists = (st.assists + delta) % 3
-        elif row == "Ansicht":
-            st.view3d = not st.view3d
-        elif row == "Schaden":
-            keys = list(DAMAGE_MODES)
-            st.damage = keys[(keys.index(st.damage) + delta) % len(keys)]
-        elif row == "Reifenverschleiß":
-            keys = list(TYRE_WEAR_MODES)
-            st.tyre_wear = keys[(keys.index(st.tyre_wear) + delta) % len(keys)]
-        elif row == "TV-Regie (Zuschauer)":
-            st.auto_camera = not st.auto_camera
-        elif row == "Safety Car":
-            st.safety_car = not st.safety_car
-        elif row == "Getriebe":
-            st.gearbox = "manual" if st.gearbox == "auto" else "auto"
-        elif row == "Wetter":
-            keys = list(WEATHER_MODES)
-            st.weather = keys[(keys.index(st.weather) + delta) % len(keys)]
-        elif row == "Sprache":
-            st.language = "de" if st.language == "en" else "en"
+            return [(0, "Aus"), (1, "Mittel"), (2, "Voll")], st.assists
+        if row == "Getriebe":
+            return [("auto", "Automatik"), ("manual", "Sequenziell")], st.gearbox
+        if row == "Schaden":
+            return list(DAMAGE_MODES.items()), st.damage
+        if row == "Reifenverschleiß":
+            return [(k, v[0]) for k, v in TYRE_WEAR_MODES.items()], st.tyre_wear
+        if row == "Wetter":
+            return list(WEATHER_MODES.items()), st.weather
+        if row == "Safety Car":
+            return on_off, st.safety_car
+        if row == "Ansicht":
+            return [(False, "2D"), (True, "3D")], st.view3d
+        if row == "TV-Regie (Zuschauer)":
+            return on_off, st.auto_camera
+        if row == "Grafik-Voreinstellung":
+            now = (st.graphics, st.antialias, st.effects)
+            return ([(k, v[0]) for k, v in GRAPHICS_PRESETS.items()],
+                    next((k for k, v in GRAPHICS_PRESETS.items() if v[1] == now), None))
+        if row == "Grafikdetails":
+            return list(GRAPHICS_LEVELS.items()), st.graphics
+        if row == "Kantenglättung":
+            return [("off", "Aus"), ("edges", "Kanten"), ("high", "Hoch 1,5x")], st.antialias
+        if row == "Partikel & Effekte":
+            return list(EFFECT_LEVELS.items()), st.effects
+        if row == "Bildrate":
+            return [(v, str(v)) for v in FPS_OPTIONS], st.fps
+        if row == "Vollbild":
+            return on_off, st.fullscreen
+        if row == "FPS anzeigen":
+            return on_off, st.show_fps
+        if row == "HUD-Stil":
+            return list(HUD_STYLES.items()), st.hud_style
+        if row == "HUD-Assistenz":
+            return list(HUD_ASSIST.items()), st.hud_assist
+        if row == "Startkamera":
+            from .render3d import CAMERA_MODES
+            return [(k, m.name) for k, m in enumerate(CAMERA_MODES)], st.camera_mode % len(CAMERA_MODES)
+        return None
+
+    def _set(self, row: str, value: object) -> None:
+        st = self.st
+        if row == "Grafik-Voreinstellung":
+            st.graphics, st.antialias, st.effects = GRAPHICS_PRESETS[value][1]
+        elif row in self.ATTRS:
+            setattr(st, self.ATTRS[row], value)
+        else:
+            return
+        if row == "Sprache":
             set_language(st.language)
             clear_render_caches()
             self.game.hud.clear_caches()
         elif row == "Sound":
-            keys = list(VOLUMES)
-            st.sound = keys[(keys.index(st.sound) + delta) % len(keys)]
             self.game.sound.set_volume(st.sound)
-        elif row == "FPS anzeigen":
-            st.show_fps = not st.show_fps
-        elif row == "Einheiten":
-            st.units = "mph" if st.units == "kmh" else "kmh"
-        elif row == "Partikel & Effekte":
-            keys = list(EFFECT_LEVELS)
-            st.effects = keys[(keys.index(st.effects) + delta) % len(keys)]
-        elif row == "Grafikdetails":
-            keys = list(GRAPHICS_LEVELS)
-            st.graphics = keys[(keys.index(st.graphics) + delta) % len(keys)]
-        elif row == "HUD-Stil":
-            st.hud_style = "classic" if st.hud_style == "modern" else "modern"
-        elif row == "Kantenglättung":
-            keys = list(ANTIALIAS_LEVELS)
-            st.antialias = keys[(keys.index(st.antialias) + delta) % len(keys)]
-        elif row == "Bildrate":
-            st.fps = FPS_OPTIONS[(FPS_OPTIONS.index(st.fps) + delta) % len(FPS_OPTIONS)]
         elif row == "Vollbild":
-            st.fullscreen = not st.fullscreen
             self.game.apply_display()
-        else:
-            return
         st.save()
 
+    def _change(self, delta: int) -> None:
+        opts = self._options(self.rows_sel)
+        if opts is None:
+            return
+        choices, current = opts
+        values = [v for v, _ in choices]
+        k = values.index(current) if current in values else (-1 if delta > 0 else 0)
+        self._set(self.rows_sel, values[(k + delta) % len(values)])
+
+    # ------------------------------------------------------------------ input
+    def _switch_tab(self, delta: int) -> None:
+        self.tab = (self.tab + delta) % len(self.TABS)
+        self.sel = 0
+
+    def _activate(self) -> None:
+        if self.rows_sel == "Lenkrad & Controller":
+            SettingsScreen._last = (self.tab, self.sel)
+            from .controls_screen import ControlsScreen
+            self.game.state = ControlsScreen(self.game)
+        else:
+            self._change(1)
+
     def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 4:
+                self.sel = max(0, self.sel - 1)
+            elif event.button == 5:
+                self.sel = min(len(self.rows) - 1, self.sel + 1)
+            elif event.button in (1, 3):
+                for rect, action in reversed(self._hits):
+                    if rect.collidepoint(event.pos):
+                        self._click(action, -1 if event.button == 3 else 1)
+                        break
+            return
         if event.type != pygame.KEYDOWN:
             return
         row = self.rows_sel
-        if event.key in (pygame.K_UP,):
-            self.sel = (self.sel - 1) % len(self.ROWS)
-        elif event.key in (pygame.K_DOWN,):
-            self.sel = (self.sel + 1) % len(self.ROWS)
+        if event.key == pygame.K_TAB:
+            self._switch_tab(-1 if event.mod & pygame.KMOD_SHIFT else 1)
+        elif event.key in (pygame.K_PAGEUP, pygame.K_PAGEDOWN):
+            self._switch_tab(-1 if event.key == pygame.K_PAGEUP else 1)
+        elif event.key == pygame.K_UP:
+            self.sel = (self.sel - 1) % len(self.rows)
+        elif event.key == pygame.K_DOWN:
+            self.sel = (self.sel + 1) % len(self.rows)
         elif row == "Spielername" and event.key == pygame.K_BACKSPACE:
             self.st.player_name = self.st.player_name[:-1]
             self.game.apply_player_name()
@@ -644,60 +698,223 @@ class SettingsScreen:
         elif event.key in (pygame.K_RIGHT, pygame.K_d):
             self._change(1)
         elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
-            if row == "ZURÜCK":
-                self._leave()
-            elif row == "Lenkrad & Controller":
-                from .controls_screen import ControlsScreen
-                self.game.state = ControlsScreen(self.game)
-            else:
-                self._change(1)
+            self._activate()
         elif event.key == pygame.K_ESCAPE:
             self._leave()
+
+    def _click(self, action: tuple, button: int) -> None:
+        kind = action[0]
+        if kind == "tab":
+            self.tab, self.sel = action[1], 0
+        elif kind == "back":
+            self._leave()
+        elif kind == "row":
+            was = self.sel == action[1]
+            self.sel = action[1]
+            if was and self.rows_sel == "Lenkrad & Controller":
+                self._activate()
+        elif kind == "value":
+            self.sel = action[1]
+            self._set(self.rows_sel, action[2])
+        elif kind == "step":
+            self.sel = action[1]
+            self._change(action[2] * button)
+        elif kind == "setup":
+            self.sel = action[1]
+            self._activate()
 
     def _leave(self) -> None:
         if not self.st.player_name.strip():
             self.st.player_name = "Du (Spieler)"
             self.game.apply_player_name()
         self.st.save()
+        SettingsScreen._last = (self.tab, self.sel)
         self.game.go_to_menu()
 
     def update(self, dt: float) -> None:
         self.t += dt
         self.bg.update(dt)
 
+    # ------------------------------------------------------------------ drawing
     def draw(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
         self.bg.draw(screen)
-        pygame.draw.rect(screen, (200, 200, 210), (60, 40, 8, 60))
-        draw_text(screen, "EINSTELLUNGEN", f.big, WHITE, (84, 36))
-        draw_text(screen, "Gespeichert in data/settings.json", f.small, GREY, (86, 86))
-        px, py, pw = 60, 124, 640
-        draw_panel(screen, (px, py, pw, 560), PANEL, 215)
-        rh = min(41, (560 - 20) // len(self.ROWS))
-        for i, row in enumerate(self.ROWS):
-            ry = py + 10 + i * rh
-            selected = i == self.sel
-            if row == "ZURÜCK":
-                col = (120, 120, 130) if selected else (50, 50, 58)
-                pygame.draw.rect(screen, col, (px + 20, ry + 4, pw - 40, rh - 4), border_radius=8)
-                draw_text(screen, "ZURÜCK", f.medium, WHITE, (px + pw // 2, ry + 2 + rh // 2), anchor="center")
-                continue
-            if selected:
-                pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, rh - 2), border_radius=6)
-                pygame.draw.rect(screen, (200, 200, 210), (px + 12, ry, 5, rh - 2), border_radius=2)
-            mid = ry + (rh - 2) // 2
-            draw_text(screen, row.upper(), f.tiny, GREY, (px + 28, mid), anchor="midleft", shadow=False)
-            draw_text(screen, self._value(row), f.small_bold, CYAN if row == "Spielername" else WHITE,
-                      (px + 250, mid), anchor="midleft", shadow=False)
-            if selected and row != "Spielername":
-                draw_text(screen, "<  >", f.medium, YELLOW, (px + pw - 24, mid), anchor="midright")
-        hb = pygame.Rect(730, 140, 510, 200)
-        draw_panel(screen, hb, PANEL, 215)
-        draw_text(screen, self.rows_sel.upper(), f.medium, WHITE, (hb.x + 18, hb.y + 16))
-        for k, line in enumerate(_wrap(self.HELP.get(self.rows_sel, ""), f.small, hb.w - 36)):
-            draw_text(screen, line, f.small, (205, 205, 210), (hb.x + 18, hb.y + 56 + k * 24), shadow=False)
-        draw_text(screen, "Pfeile hoch/runter wählen · links/rechts ändern · ESC zurück", f.small, GREY,
-                  (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30), anchor="center")
+        self._hits = []
+        mouse = pygame.mouse.get_pos()
+        pygame.draw.rect(screen, F1_RED, (60, 32, 8, 54))
+        draw_text(screen, "EINSTELLUNGEN", f.big, WHITE, (84, 28))
+        draw_text(screen, "Gespeichert in data/settings.json", f.small, GREY, (86, 76))
+        back = pygame.Rect(SCREEN_WIDTH - 220, 40, 160, 40)
+        pygame.draw.rect(screen, (90, 92, 104) if back.collidepoint(mouse) else (44, 46, 56), back, border_radius=8)
+        draw_text(screen, "ZURÜCK (ESC)", f.small_bold, WHITE, back.center, anchor="center", shadow=False)
+        self._hits.append((back, ("back",)))
+        # category tabs
+        x, y = 60, 112
+        for k, (name, _rows) in enumerate(self.TABS):
+            rect = pygame.Rect(x, y, f.small_bold.size(tr(name))[0] + 40, 38)
+            active = k == self.tab
+            col = PANEL_LIGHT if active else (48, 50, 60) if rect.collidepoint(mouse) else (26, 28, 36)
+            pygame.draw.rect(screen, col, rect, border_top_left_radius=8, border_top_right_radius=8)
+            if active:
+                pygame.draw.rect(screen, F1_RED, (rect.x, rect.bottom - 4, rect.w, 4))
+            draw_text(screen, name, f.small_bold, WHITE if active else GREY, rect.center, anchor="center",
+                      shadow=False)
+            self._hits.append((rect, ("tab", k)))
+            x += rect.w + 6
+        # rows
+        px, py, pw, ph = 60, 150, 720, 510
+        draw_panel(screen, (px, py, pw, ph), PANEL, 220)
+        for i, row in enumerate(self.rows):
+            self._draw_row(screen, row, i, pygame.Rect(px + 14, py + 14 + i * 70, pw - 28, 62), mouse)
+        # help + preview
+        hb = pygame.Rect(800, 150, 420, 510)
+        draw_panel(screen, hb, PANEL, 220)
+        row = self.rows_sel
+        pygame.draw.rect(screen, F1_RED, (hb.x, hb.y + 18, 4, 26))
+        draw_text(screen, row.upper(), f.medium, WHITE, (hb.x + 18, hb.y + 18))
+        ty = hb.y + 60
+        for line in _wrap(tr(self.HELP.get(row, "")), f.small, hb.w - 36):
+            draw_text(screen, line, f.small, (205, 205, 210), (hb.x + 18, ty), shadow=False)
+            ty += 23
+        top = max(ty + 20, hb.y + 280)
+        self._draw_preview(screen, row, pygame.Rect(hb.x + 18, top, hb.w - 36, hb.bottom - 18 - top))
+        draw_text(screen, "TAB Kategorie · Pfeile wählen/ändern · Maus klicken (Rechtsklick zurück) · ESC zurück",
+                  f.small, GREY, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30), anchor="center")
+
+    def _draw_row(self, screen: pygame.Surface, row: str, i: int, rect: pygame.Rect,
+                  mouse: tuple[int, int]) -> None:
+        f = self.game.fonts
+        selected = i == self.sel
+        pygame.draw.rect(screen, PANEL_LIGHT if selected else (36, 38, 46) if rect.collidepoint(mouse)
+                         else (28, 30, 38), rect, border_radius=8)
+        if selected:
+            pygame.draw.rect(screen, F1_RED, (rect.x, rect.y, 5, rect.h), border_radius=2)
+        self._hits.append((rect, ("row", i)))
+        draw_text(screen, row.upper(), f.tiny, (230, 230, 236) if selected else GREY, (rect.x + 20, rect.y + 11),
+                  shadow=False)
+        opts = self._options(row)
+        area_w = 400
+        sub_w = rect.w - 40 - (area_w if opts is not None else 160)
+        draw_text(screen, _fit(tr(self._summary(row)), f.small_bold, sub_w), f.small_bold,
+                  CYAN if row == "Spielername" else WHITE, (rect.x + 20, rect.y + 32), shadow=False)
+        if opts is None:
+            if row == "Lenkrad & Controller":
+                b = pygame.Rect(rect.right - 150, rect.y + 14, 136, rect.h - 28)
+                pygame.draw.rect(screen, (70, 72, 84) if b.collidepoint(mouse) else (50, 52, 62), b, border_radius=6)
+                draw_text(screen, "EINRICHTEN", f.tiny, WHITE, b.center, anchor="center", shadow=False)
+                self._hits.append((b, ("setup", i)))
+            return
+        choices, current = opts
+        widths = [f.tiny.size(tr(label))[0] + 24 for _, label in choices]
+        right = rect.right - 14
+        if sum(widths) + 4 * (len(widths) - 1) <= area_w:
+            # segmented buttons: every choice visible, the active one red
+            x = right - (sum(widths) + 4 * (len(widths) - 1))
+            for (value, label), w in zip(choices, widths):
+                b = pygame.Rect(x, rect.y + 15, w, rect.h - 30)
+                on = value == current
+                col = (215, 28, 38) if on else (70, 72, 84) if b.collidepoint(mouse) else (46, 48, 58)
+                pygame.draw.rect(screen, col, b, border_radius=6)
+                draw_text(screen, label, f.tiny, WHITE if on else (200, 200, 208), b.center, anchor="center",
+                          shadow=False)
+                self._hits.append((b, ("value", i, value)))
+                x += w + 4
+            return
+        # too many choices for buttons: arrows, the current one and position dots
+        values = [v for v, _ in choices]
+        label = next((lb for v, lb in choices if v == current), "-")
+        for d, bx in ((-1, right - 240), (1, right - 30)):
+            b = pygame.Rect(bx, rect.y + 15, 30, rect.h - 30)
+            pygame.draw.rect(screen, (70, 72, 84) if b.collidepoint(mouse) else (46, 48, 58), b, border_radius=6)
+            draw_text(screen, "<" if d < 0 else ">", f.small_bold, YELLOW if selected else WHITE, b.center,
+                      anchor="center", shadow=False)
+            self._hits.append((b, ("step", i, d)))
+        mid = right - 120
+        draw_text(screen, _fit(tr(label), f.small_bold, 170), f.small_bold, WHITE, (mid, rect.centery - 5),
+                  anchor="center", shadow=False)
+        k = values.index(current) if current in values else -1
+        for j in range(len(values)):
+            pygame.draw.circle(screen, (225, 30, 40) if j == k else (80, 82, 92),
+                               (mid - (len(values) - 1) * 5 + j * 10, rect.bottom - 13), 3)
+
+    def _summary(self, row: str) -> str:
+        """The line under the row name: what the current choice means."""
+        st = self.st
+        if row == "Spielername":
+            return st.player_name + ("_" if self.rows_sel == "Spielername" and int(self.t * 2) % 2 else "")
+        if row == "Lenkrad & Controller":
+            return self.game.controls.device_name() if self.game.controls.connected else "nur Tastatur"
+        if row == "Fahrhilfen":
+            return ASSIST_NAMES[st.assists]
+        if row == "Getriebe":
+            return GEARBOX_MODES[st.gearbox]
+        if row == "Kantenglättung":
+            return ANTIALIAS_LEVELS[st.antialias]
+        if row == "Ansicht":
+            return "3D-Verfolgerkamera" if st.view3d else "2D-Draufsicht"
+        if row == "Bildrate":
+            return f"{st.fps} FPS"
+        if row == "HUD-Assistenz":
+            return {"off": "Keine Hilfen", "flags": "Digitale Flaggen",
+                    "full": "Flaggen + Spotter + Warnungen"}[st.hud_assist]
+        opts = self._options(row)
+        if opts is None:
+            return ""
+        if row == "Grafik-Voreinstellung" and opts[1] is None:
+            return "Benutzerdefiniert"
+        return next((lb for v, lb in opts[0] if v == opts[1]), "")
+
+    def _draw_preview(self, screen: pygame.Surface, row: str, box: pygame.Rect) -> None:
+        """Visual extras in the help panel for some rows."""
+        from .flags import FLAG_COLORS, FLAG_NAMES, led_board
+        f = self.game.fonts
+        st = self.st
+        if box.h < 60:
+            return
+        if row == "HUD-Assistenz":
+            if st.hud_assist == "off":
+                draw_text(screen, "Nur die Tafeln an der Strecke zeigen Flaggen.", f.tiny, GREY, box.topleft,
+                          shadow=False)
+                return
+            flags = ("yellow", "yellow2", "blue", "sc", "vsc", "green", "bw", "chequered")
+            cur = flags[int(self.t / 1.6) % len(flags)]
+            board = led_board(cur, int(self.t * 3.6) % 2, 28, 16, 4)
+            screen.blit(board, box.topleft)
+            tx = box.x + board.get_width() + 16
+            draw_text(screen, FLAG_NAMES[cur], f.small_bold, FLAG_COLORS[cur], (tx, box.y + 4), shadow=False)
+            items = ["Flaggen-Anzeige"]
+            if st.hud_assist == "full":
+                items += ["Bildschirmränder blinken", "Spotter-Pfeile", "Warnung: Auto voraus"]
+            for k, item in enumerate(items):
+                draw_text(screen, "· " + tr(item), f.tiny, (200, 200, 208), (tx, box.y + 30 + k * 17), shadow=False)
+        elif row in ("Grafikdetails", "Grafik-Voreinstellung", "Kantenglättung", "Partikel & Effekte"):
+            level = {"low": 0, "medium": 1, "high": 2}[st.graphics]
+            feats = [("Strecke, Autos, Himmel", 0), ("Tribünen, Banden, Startampel", 1),
+                     ("Digitale Flaggen-Tafeln", 1), ("Boxencrews, Partikel in 3D", 1),
+                     ("Rückspiegel, Linsenreflexe, Vignette", 2)]
+            for k, (name, need) in enumerate(feats):
+                on = level >= need
+                yy = box.y + k * 22
+                pygame.draw.circle(screen, GREEN if on else (70, 72, 80), (box.x + 7, yy + 9), 6)
+                draw_text(screen, name, f.tiny, WHITE if on else (110, 110, 118), (box.x + 22, yy + 2), shadow=False)
+            cost = level * 2 + {"off": 0, "edges": 1, "high": 5}[st.antialias] + (1 if st.effects == "high" else 0)
+            yy = box.y + len(feats) * 22 + 14
+            if yy + 16 <= box.bottom:
+                draw_text(screen, "LEISTUNGSBEDARF", f.tiny, GREY, (box.x, yy), shadow=False)
+                bw = box.w - 140
+                pygame.draw.rect(screen, (40, 42, 50), (box.x + 134, yy + 2, bw, 12), border_radius=6)
+                k = min(1.0, (cost + 1) / 10)
+                col = GREEN if k < 0.45 else YELLOW if k < 0.75 else (255, 90, 70)
+                pygame.draw.rect(screen, col, (box.x + 134, yy + 2, int(bw * k), 12), border_radius=6)
+        elif row == "Startkamera":
+            from .render3d import CAMERA_MODES
+            for k, m in enumerate(CAMERA_MODES):
+                yy = box.y + k * 22
+                if yy + 18 > box.bottom:
+                    break
+                on = k == st.camera_mode % len(CAMERA_MODES)
+                draw_text(screen, f"{k + 1}  {tr(m.name)}", f.small_bold if on else f.tiny,
+                          (255, 70, 80) if on else (190, 190, 198), (box.x, yy), shadow=False)
 
 
 class ResultsScreen:

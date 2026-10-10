@@ -19,6 +19,11 @@ ANTIALIAS_LEVELS = {"off": "Aus", "edges": "Kanten glätten", "high": "Hoch (1,5
 GEARBOX_MODES = {"auto": "Automatik", "manual": "Sequenziell (selbst schalten)"}
 GRAPHICS_LEVELS = {"low": "Niedrig", "medium": "Mittel", "high": "Hoch"}
 HUD_STYLES = {"modern": "Modern", "classic": "Klassisch"}
+HUD_ASSIST = {"off": "Aus", "flags": "Flaggen", "full": "Voll"}
+# graphics presets: (graphics detail, anti-aliasing, effects)
+GRAPHICS_PRESETS = {"perf": ("Leistung", ("low", "off", "low")),
+                    "balanced": ("Ausgewogen", ("medium", "edges", "high")),
+                    "quality": ("Qualität", ("high", "high", "high"))}
 
 
 def speed_in(kmh: float, units: str) -> tuple[float, str]:
@@ -49,6 +54,7 @@ class UserSettings:
     net_port: int = 56543
     graphics: str = "high"
     hud_style: str = "modern"
+    hud_assist: str = "full"
     camera_mode: int = 0
 
     @property
@@ -81,6 +87,8 @@ class UserSettings:
             settings.graphics = "high"
         if settings.hud_style not in HUD_STYLES:
             settings.hud_style = "modern"
+        if settings.hud_assist not in HUD_ASSIST:
+            settings.hud_assist = "full"
         if not isinstance(settings.camera_mode, int) or settings.camera_mode < 0:
             settings.camera_mode = 0
         if settings.gearbox not in GEARBOX_MODES:

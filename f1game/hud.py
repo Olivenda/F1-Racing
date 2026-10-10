@@ -12,6 +12,7 @@ import pygame
 from .settings import (CYAN, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PURPLE, PX_PER_S_TO_KMH,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .car import PLANK_LIMIT_MM
+from .flags import FLAG_COLORS, FLAG_NAMES, car_flag, hazard_ahead, led_board
 from .tyres import COMPOUNDS
 from .i18n import tr
 from .user_settings import speed_in
@@ -71,6 +72,7 @@ class HUD:
     def draw_session(self, screen: pygame.Surface, s: "Session") -> None:
         self.units = s.game.settings.units
         self.style = getattr(s.game.settings, "hud_style", "modern")
+        assist = getattr(s.game.settings, "hud_assist", "full")
         standings = s.standings()
         cockpit = s.view3d and s.r3d.cockpit
         self._info_panel(screen, s, standings)
@@ -81,7 +83,7 @@ class HUD:
                 self._dashboard(screen, s.focus)
             else:
                 self._speedo(screen, s.focus)
-        if s.view3d and s.r3d.cam.kind in ("onboard", "chase"):
+        if assist == "full" and s.view3d and s.r3d.cam.kind in ("onboard", "chase"):
             self._spotter(screen, s)
         self._engineer(screen, s)
         self._pit_overlay(screen, s.focus)
@@ -93,7 +95,8 @@ class HUD:
         self._sectors(screen, s)
         self._weather(screen, s)
         self._neutralization(screen, s)
-        self._blue_flag(screen, s)
+        if assist != "off":
+            self._flag_display(screen, s, assist == "full")
         self._messages(screen, s)
         self._feed(screen, s)
         self._race_control(screen, s)
@@ -498,20 +501,61 @@ class HUD:
                 pts = [(x + off, cy - 22), (x + off + side * 14, cy), (x + off, cy + 22)]
                 pygame.draw.lines(screen, col if j < 1 + int(k * 2.5) else (90, 70, 40), False, pts, 6)
 
-    def _blue_flag(self, screen: pygame.Surface, s: "Session") -> None:
+    def _flag_detail(self, s: "Session", car: "Car", flag: str) -> str:
+        if flag == "blue":
+            chaser = getattr(car, "blue_for", None)
+            return f"{chaser.short} überrundet dich" if chaser is not None else ""
+        if flag in ("yellow", "yellow2"):
+            sector = min(2, int((car.s % s.track.length) / s.track.length * 3)) + 1
+            return f"Sektor {sector} · nicht überholen" if flag == "yellow" else f"Sektor {sector} · Gefahr, langsam!"
+        return {"sc": "Abstand halten · nicht überholen", "vsc": "Delta einhalten · nicht überholen",
+                "green": "Strecke frei", "chequered": "Rennen beendet",
+                "bw": "Track Limits - letzte Warnung"}.get(flag, "")
+
+    def _flag_display(self, screen: pygame.Surface, s: "Session", full: bool) -> None:
+        """Digital flag panel at the left edge (like the LED marshal boards), with full HUD assistance also
+        flashing screen edges and a warning for slow cars ahead."""
         car = s.focus
-        chaser = getattr(car, "blue_for", None)
-        if chaser is None or s.kind != "race":
+        flag = car_flag(s, car)
+        t = pygame.time.get_ticks()
+        phase = (t // 280) % 2
+        f = self.f
+        if flag is not None:
+            board = led_board(flag, phase, 28, 16, 4)
+            x, y = 238, 156
+            w = max(board.get_width(), 150) + 16
+            draw_panel(screen, (x, y, w, board.get_height() + 58), (12, 13, 18), 225)
+            col = FLAG_COLORS[flag]
+            pygame.draw.rect(screen, col, (x, y, w, 3), border_radius=2)
+            screen.blit(board, (x + (w - board.get_width()) // 2, y + 10))
+            ty = y + board.get_height() + 16
+            draw_text(screen, FLAG_NAMES[flag], f.small_bold, col if flag not in ("chequered", "bw") else WHITE,
+                      (x + w // 2, ty), anchor="midtop", shadow=False)
+            detail = self._flag_detail(s, car, flag)
+            if detail:
+                draw_text(screen, detail, f.tiny, (200, 200, 208), (x + w // 2, ty + 21), anchor="midtop", shadow=False)
+            if full and flag in ("yellow", "yellow2", "blue", "sc", "vsc") and phase == 0:
+                for ex in (0, SCREEN_WIDTH - 8):
+                    pygame.draw.rect(screen, col, (ex, 200, 8, 320))
+        if not full or not getattr(s, "race_started", True) or car.speed_fwd < 90.0:
             return
-        wave = int(pygame.time.get_ticks() / 250) % 2
-        if wave:
-            for x in (0, SCREEN_WIDTH - 10):
-                pygame.draw.rect(screen, (40, 120, 255), (x, 180, 10, 360))
-        rect = pygame.Rect(SCREEN_WIDTH // 2 - 150, 84, 300, 40)
-        draw_panel(screen, rect, (20, 70, 200) if wave else (30, 95, 235), 235)
-        pygame.draw.rect(screen, (40, 120, 255), (rect.x + 10, rect.y + 8, 30, 24))
-        draw_text(screen, f"BLAUE FLAGGE · {chaser.short}", self.f.small_bold, WHITE, (rect.x + 52, rect.centery),
-                  anchor="midleft", shadow=False)
+        rc = getattr(s, "rc", None)
+        if rc is not None and rc.active:
+            return
+        hazard = hazard_ahead(s, car)
+        if hazard is None:
+            return
+        dist, lat = hazard
+        side = lat - car.lateral
+        where = "LINKS" if side < -12 else "RECHTS" if side > 12 else "MITTE"
+        rect = pygame.Rect(SCREEN_WIDTH // 2 - 170, 84, 340, 36)
+        draw_panel(screen, rect, (120, 70, 0) if phase else (170, 100, 0), 235)
+        pygame.draw.polygon(screen, (255, 210, 40), [(rect.x + 14, rect.bottom - 8), (rect.x + 30, rect.y + 6),
+                                                     (rect.x + 46, rect.bottom - 8)])
+        draw_text(screen, "!", f.small_bold, (30, 20, 0), (rect.x + 30, rect.bottom - 9), anchor="midbottom",
+                  shadow=False)
+        draw_text(screen, f"LANGSAMES AUTO VORAUS · {dist * PX_PER_S_TO_KMH / 3.6:.0f} m · {where}", f.small_bold, WHITE,
+                  (rect.x + 58, rect.centery), anchor="midleft", shadow=False)
 
     def _pit_overlay(self, screen: pygame.Surface, car: "Car") -> None:
         f = self.f

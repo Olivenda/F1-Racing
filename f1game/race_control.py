@@ -80,6 +80,9 @@ class RaceControl:
         self.sc_end_lap = 0
         self.cooldown_until = 0.0
         self.yellow: dict[int, float] = {}
+        self.yellow_at: dict[int, float] = {}     # where in the sector the incident is (double yellow before it)
+        self.cleared: dict[int, float] = {}       # sector -> until when its panels show green after a yellow
+        self.green_until = 0.0
         self.periods: list[str] = []
         self._period_start = 0
         self._restart_lap = 0
@@ -113,6 +116,7 @@ class RaceControl:
         s = self.s
         sector = self.sector_of(car)
         self.yellow[sector] = s.time + YELLOW_TIME
+        self.yellow_at[sector] = car.s % s.track.length
         if not self._can_start():
             return
         if severity == "dnf":
@@ -170,11 +174,16 @@ class RaceControl:
         self.phase = ""
         self.sc = None
         self.cooldown_until = s.time + COOLDOWN
+        self.green_until = s.time + 6.0
+        self.yellow.clear()
 
     def step(self, h: float) -> None:
         s = self.s
         now = s.time
-        self.yellow = {k: v for k, v in self.yellow.items() if v > now}
+        for k, v in list(self.yellow.items()):
+            if v <= now:
+                del self.yellow[k]
+                self.cleared[k] = now + 6.0
         self._punctures(h)
         self._order_timer -= h
         if self._order_timer <= 0 and (self.active or self.give_back):
@@ -327,7 +336,9 @@ class RaceControl:
         s = self.s
         car.puncture = True
         s.add_feed(f"REIFENSCHADEN: {car.short} ({why})")
-        self.yellow[self.sector_of(car)] = s.time + YELLOW_TIME * 0.5
+        sector = self.sector_of(car)
+        self.yellow[sector] = s.time + YELLOW_TIME * 0.5
+        self.yellow_at[sector] = car.s % s.track.length
         if car is s.player:
             s.message("REIFENSCHADEN! Sofort an die Box (B)", (255, 80, 80), 4.0)
             if car.pit_request is None:

@@ -54,6 +54,8 @@ SPIN_TRANSFER: float = 0.55
 GEAR_THRESHOLDS: tuple[float, ...] = (85.0, 153.0, 220.0, 288.0, 355.0, 423.0, 456.0)
 
 DIFFICULTY_LEVELS: dict[str, float] = {"Leicht": 0.86, "Mittel": 0.94, "Schwer": 1.0}
+# the trained nets corner at the limit whatever their engine power: easier levels also cap their corner speed
+DIFFICULTY_CORNERING: dict[str, float] = {"Leicht": 0.91, "Mittel": 0.97, "Schwer": 1.0}
 AI_CONTROL_INTERVAL: float = 1.0 / 30.0
 
 Color = tuple[int, int, int]

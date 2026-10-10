@@ -45,8 +45,10 @@ class Game:
         pygame.mixer.pre_init(22050, -16, 2, 1024)       # 512 underran on slow frames (crackling)
         pygame.init()
         pygame.display.set_caption("Gulivers Gieles F1 Game")
-        icon_surface = pygame.image.load('image.png')
-        pygame.display.set_icon(icon_surface)
+        try:    # next to the game folder, wherever the game is started from
+            pygame.display.set_icon(pygame.image.load(str(DATA_DIR.parent / "image.png")))
+        except (pygame.error, FileNotFoundError):
+            pass
         self.settings = UserSettings.load()
         set_language(self.settings.language)
         self.sound = SoundSystem(self.settings.sound)
