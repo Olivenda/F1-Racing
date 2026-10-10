@@ -48,6 +48,8 @@ class TrainingScreen:
         self.started_at = 0.0
         self._overview: dict[str, tuple[pygame.Surface, float, Vector2]] = {}
         self.rec_files, self.rec_samples = recording_stats()
+        if ctrain.build(lambda _msg: None):      # an old trainer build cannot list the GPUs
+            ctrain.list_gpus(refresh=True)
         self._load_saved()
 
     @property
@@ -112,8 +114,8 @@ class TrainingScreen:
     def _gpu_choices(self) -> list[tuple[str, str]]:
         """(setting value, label): the strongest GPU, every single one and - with several - all together."""
         gpus = ctrain.list_gpus()
-        if not gpus:
-            return [("best", "automatisch")]
+        if not gpus:        # names unknown: still offer the choices, the trainer knows the GPUs by number
+            return [("best", "Stärkste GPU"), ("0", "GPU 1"), ("1", "GPU 2"), ("all", "Alle GPUs zusammen")]
         strongest = max(gpus, key=lambda g: g[1])
         out = [("best", f"Stärkste: {strongest[2]}")]
         out += [(str(n), f"{n + 1}: {name}") for n, _cu, name in gpus]

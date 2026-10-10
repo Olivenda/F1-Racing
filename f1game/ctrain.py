@@ -103,10 +103,11 @@ def build(log=print) -> bool:
 _gpus: list[tuple[int, int, str]] | None = None
 
 
-def list_gpus() -> list[tuple[int, int, str]]:
-    """The OpenCL GPUs the C trainer can use: (number, compute units, name). Asked once per game start."""
+def list_gpus(refresh: bool = False) -> list[tuple[int, int, str]]:
+    """The OpenCL GPUs the C trainer can use: (number, compute units, name). Asked once and remembered - an
+    empty answer (trainer missing or an old build) is asked again on the next refresh."""
     global _gpus
-    if _gpus is None:
+    if _gpus is None or (refresh and not _gpus):
         _gpus = []
         if EXE.exists():
             try:

@@ -1359,3 +1359,4 @@ TEMPLATES += [
     ("Stärkste: {}", "Strongest: {}"), ("Alle {#} GPUs zusammen", "All {} GPUs together"),
     ("{#}  (Gen {#})", "{}  (gen {})"), ("{#} / Ø {#}", "{} / avg {}"),
 ]
+EXACT.update({"Stärkste GPU": "Strongest GPU", "Alle GPUs zusammen": "All GPUs together"})
