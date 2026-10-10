@@ -1487,3 +1487,73 @@ EXACT.update({
         "Borderless fullscreen over the whole screen (the monitor keeps its resolution). Switch any time with "
         "Alt+Enter or F11. In window mode you can also drag the game window bigger.",
 })
+
+# single player setup redesign
+EXACT.update({
+    "Splitscreen an einem PC": "Split screen on one PC", "Online-Mitspieler verbunden": "Online players connected",
+    "LÄNGE": "LENGTH", "BREITE": "WIDTH", "AUSLAUF": "RUN-OFF", "eng": "narrow", "breit": "wide", "Mauern": "walls",
+    "Rasen": "grass", "DEIN AUTO": "YOUR CAR", "STARTERFELD (TAB)": "GRID (TAB)", "TEAM (TAB)": "TEAM (TAB)",
+    "GARAGE ÖFFNEN": "OPEN GARAGE", "ZUFALLSRENNEN (R)": "RANDOM RACE (R)", "RENNEN ANSEHEN": "WATCH RACE",
+    "RENNEN STARTEN": "START RACE", "Wochenende": "Weekend", "Training": "Practice", "Quali+Rennen": "Quali+race",
+    "Rennen": "Race", "2 Spieler": "2 players", "Nur KI-Fahrer - TV-Regie inklusive": "AI drivers only - TV director included",
+    "IM RENNEN": "IN THE RACE", "TV-Regie an/aus (springt zu Zweikämpfen)": "TV director on/off (jumps to battles)",
+    "Kamera wechseln (Shift+K zurück)": "Change camera (Shift+K back)", "Fahrer wählen": "Pick a driver",
+    "Zeitraffer": "Time warp", "Karte": "Map", "HUD aus/an": "HUD off/on", "Pause": "Pause",
+    "Pfeile wählen/ändern · Klick auf Strecke/Knöpfe · ENTER starten · ESC zurück":
+        "Arrows select/change · click tracks/buttons · ENTER starts · ESC back",
+    "Pfeile wählen/ändern · Klick auf Strecke/Knöpfe · ENTER starten · TAB Team/Feld · R Zufallsrennen · ESC zurück":
+        "Arrows select/change · click tracks/buttons · ENTER starts · TAB team/grid · R random race · ESC back",
+})
+TEMPLATES += [
+    ("Renndauer ca. {#} min", "Race length approx. {} min"), ("Starterfeld {#} Autos", "Grid of {} cars"),
+    ("STARTERFELD · {#} AUTOS", "GRID · {} CARS"), ("+ {#} weitere", "+ {} more"),
+    ("Grip {#}% · {}", "Grip {}% · {}"), ("{#}% Motor · {#}% Kurventempo", "{}% engine · {}% corner speed"),
+    ("Eigenes: Flügel {} · Höhe {}", "Own: wing {} · ride height {}"),
+    ("Empfohlen: Flügel {} · Höhe {}", "Recommended: wing {} · ride height {}"),
+    ("Fahrhilfen {} · {} · Schaden {} · Reifen {} · Wetter {}", "Assists {} · {} · damage {} · tyres {} · weather {}"),
+]
+
+# career hub redesign
+EXACT.update({"DUELLE": "DUELS", "Noch kein Rivale": "No rival yet", "Kein Teamkollege": "No team-mate",
+              "Techn. Direktor": "Tech. director", "ENTWICKLUNG": "DEVELOPMENT", "AUTO": "CAR"})
+TEMPLATES += [("Zuverlässigkeit {#} %", "Reliability {}%"), ("FAHRER · STOPP {#} s", "DRIVERS · STOP {} s"),
+              ("Lauf {#}/{#}", "Round {}/{}"), ("Rekord {}", "Record {}"), ("Akademie: {}", "Academy: {}"),
+              ("In Arbeit: {} · noch {#} Rd. · nächstes Jahr", "In progress: {} · {} races left · next year")]
+EXACT.update({"Wirklich löschen? Nach 1 Sekunde nochmal bestätigen - das kann man nicht rückgängig machen.":
+              "Really delete? Confirm again after 1 second - this cannot be undone."})
+
+# compound rule, analysis redesign
+EXACT.update({"BESTZEIT": "BEST LAP", "Ø RENNPACE": "AVG RACE PACE", "KONSTANZ": "CONSISTENCY",
+              "VERSCHLEISS / RD.": "WEAR / LAP", "SPRIT / RD.": "FUEL / LAP",
+              "RUNDENZEITEN & REIFENVERSCHLEISS": "LAP TIMES & TYRE WEAR",
+              "höher = schneller · Punktfarbe = Reifen · lila = Bestzeit · Ring = Boxenrunde · hohl = ungültig · "
+              "Balken = Verschleiß": "higher = faster · dot colour = tyre · purple = best lap · ring = pit lap · "
+                                      "hollow = invalid · bars = wear",
+              "2. Mischung OK": "2nd compound OK", "2. Mischung FEHLT": "2nd compound MISSING"})
+TEMPLATES += [
+    ("Ab {#} Runden Pflicht: zwei verschiedene Mischungen (sonst DSQ)",
+     "From {} laps: two different compounds mandatory (or DSQ)"),
+    ("Ab {#} Runden: zwei Reifenmischungen Pflicht (sonst Disqualifikation)",
+     "From {} laps: two tyre compounds mandatory (or disqualification)"),
+    ("nur eine Reifenmischung (ab {#} Runden sind zwei Pflicht)", "only one tyre compound (two mandatory from {} laps)"),
+    ("DISQUALIFIZIERT: {} - {}", "DISQUALIFIED: {} - {}"), ("DISQUALIFIKATION: {}", "DISQUALIFICATION: {}"),
+    ("Pflichtstopp! Noch {#} Rd. - wir brauchen eine zweite Reifenmischung, sonst DSQ. (B)",
+     "Mandatory stop! {} laps left - we need a second compound or it's a DSQ. (B)"),
+]
+EXACT.update({
+    "POSITIONEN": "POSITIONS", "RUNDENZEITEN": "LAP TIMES", "REIFENSTRATEGIE": "TYRE STRATEGY", "ERGEBNIS": "RESULT",
+    "SIEGER": "WINNER", "DEIN ERGEBNIS": "YOUR RESULT", "SCHNELLSTE RUNDE": "FASTEST LAP", "SPEEDTRAP": "SPEED TRAP",
+    "BOXENSTOPPS": "PIT STOPS", "SAFETY CAR / VSC": "SAFETY CAR / VSC", "gesamt": "total", "keine": "none",
+    "FAKTEN": "FACTS", "LEGENDE": "LEGEND", "Keine Rundenzeiten.": "No lap times.", "Ausfall": "Retired",
+    "im Ziel": "Finished", "Disqualifiziert": "Disqualified", "FAHRER": "DRIVER", "START": "GRID", "STOPPS": "STOPS",
+    "BESTE RUNDE": "BEST LAP", "STATUS": "STATUS", "Links/rechts oder Klick: Tabs": "Left/right or click: tabs",
+    "höher = schneller · gelber Ring = Boxenstopp · lila = beste Runde":
+        "higher = faster · yellow ring = pit stop · purple = best lap",
+    "REIFEN JE STINT · Zahl = Runden auf dem Satz": "TYRES PER STINT · number = laps on the set",
+    "Ab 12 Runden Pflicht: zwei verschiedene Mischungen (sonst DSQ)":
+        "From 12 laps: two different compounds mandatory (or DSQ)",
+})
+TEMPLATES += [("Grand Prix von {} · {#} Runden", "{} Grand Prix · {} laps"), ("Start P{#} ({})", "Grid P{} ({})"),
+              ("Start P{#}", "Grid P{}"), ("beste {}", "best {}"), ("{#} Stopp", "{} stop"), ("{#} Stopps", "{} stops"),
+              ("ENTER: {}", "ENTER: {}")]
+EXACT.update({"Pflicht: 2. Mischung": "Mandatory: 2nd compound"})

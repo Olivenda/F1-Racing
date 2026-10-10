@@ -55,6 +55,10 @@ def _visible(col: tuple[int, int, int]) -> tuple[int, int, int]:
     return col if sum(col) > 150 else (90, 100, 200)
 
 
+def _shade_rgb(col: tuple[int, int, int], k: float) -> tuple[int, int, int]:
+    return int(col[0] * k), int(col[1] * k), int(col[2] * k)
+
+
 def draw_livery(screen: pygame.Surface, fonts, rect: pygame.Rect, body: tuple[int, int, int],
                 helmet: tuple[int, int, int], number: int, short: str, t: float = 0.0) -> None:
     """Big preview of the car and helmet - used by the career setup and the design studio."""
@@ -498,6 +502,7 @@ class CareerHub(_Screen):
         super().__init__(game)
         self.sel = 0
         self.confirm_quit = False
+        self._quit_armed = 0.0
         c = self.career
         if c.new_achievements:
             titles = [ACHIEVEMENTS[k][1] for k in c.new_achievements if k in ACHIEVEMENTS]
@@ -594,43 +599,51 @@ class CareerHub(_Screen):
             game.career = None
             game.open_career_slots()
         elif act == "quit":
-            if self.confirm_quit:
+            # deleting needs a deliberate second confirmation: a double click (two ENTERs within a second)
+            # must never wipe a save
+            if self.confirm_quit and self.t - self._quit_armed >= 1.0:
                 Career.delete(c.slot)
                 game.career = None
                 game.open_career_slots()
-            else:
+            elif not self.confirm_quit:
                 self.confirm_quit = True
+                self._quit_armed = self.t
+                self.say("Wirklich löschen? Nach 1 Sekunde nochmal bestätigen - das kann man nicht rückgängig machen.")
 
+    # ------------------------------------------------------------------ drawing: a dashboard in three rows
+    #   header with season progress | profile · next race (with the big action) · championship
+    #   duels / drivers & staff · car & form · news | action buttons
     def draw(self, screen: pygame.Surface) -> None:
         c = self.career
-        champ = c.championship
-        rnd = f"Runde {min(champ.round + 1, len(champ.rounds))}/{len(champ.rounds)}"
-        if c.kind == "driver":
-            sub = f"{c.player_name} · {c.team or 'ohne Vertrag'} · {c.status if c.team else ''} · {rnd}"
-        else:
-            sub = f"{c.team} · Teamchef {c.player_name}" + (" (fährt selbst)" if c.player_drives else "") + f" · {rnd}"
-        self.header(screen, f"KARRIERE · SAISON {c.season}", sub)
         f = self.game.fonts
+        self.bg.draw(screen)
+        team_col = _visible(tuple(c.teams[c.team]["color"])) if c.team else GOLD
+        pygame.draw.rect(screen, team_col, (60, 22, 8, 52))
+        draw_text(screen, f"KARRIERE · SAISON {c.season}", f.large, WHITE, (82, 18))
+        if c.kind == "driver":
+            sub = f"{c.player_name} · {tr(c.team or 'ohne Vertrag')}" + (f" · {tr(c.status)}" if c.team else "")
+        else:
+            sub = f"{c.team} · Teamchef {c.player_name}" + (" (fährt selbst)" if c.player_drives else "")
+        draw_text(screen, _fit(sub, f.small, 520), f.small, GREY, (84, 54))
+        self._season_strip(screen, pygame.Rect(620, 22, 420, 52))
         pool = available(c.kind)
         got = sum(1 for k in pool if k in c.achievements)
-        badge = pygame.Rect(SCREEN_WIDTH - 60 - 170, 34, 170, 46)
+        badge = pygame.Rect(1052, 22, 168, 52)
         draw_panel(screen, badge, PANEL, 215)
-        draw_text(screen, "ERFOLGE", f.tiny, GREY, (badge.x + 12, badge.y + 6), shadow=False)
-        draw_text(screen, f"{got}/{len(pool)}", f.medium, GOLD if got else WHITE, (badge.x + 12, badge.y + 20),
+        draw_text(screen, "ERFOLGE", f.tiny, GREY, (badge.x + 12, badge.y + 7), shadow=False)
+        draw_text(screen, f"{got}/{len(pool)}", f.medium, GOLD if got else WHITE, (badge.x + 12, badge.y + 22),
                   shadow=False)
-        self.bar(screen, badge.x + 80, badge.y + 30, 76, got / max(1, len(pool)), GOLD, 6)
-        if c.player_drives:
-            nb = pygame.Rect(badge.x - 130, 34, 120, 46)
-            draw_panel(screen, nb, PANEL, 215)
-            pygame.draw.circle(screen, tuple(c.helmet), (nb.x + 24, nb.centery), 14)
-            draw_text(screen, f"#{c.player_number}" if c.player_number else c.short_code, f.medium, WHITE,
-                      (nb.x + 46, nb.centery), anchor="midleft", shadow=False)
+        self.bar(screen, badge.x + 76, badge.y + 32, 80, got / max(1, len(pool)), GOLD, 6)
         if c.kind == "driver":
-            self._driver_card(screen)
+            self._profile_driver(screen, pygame.Rect(60, 88, 380, 316))
+            self._duels(screen, pygame.Rect(60, 414, 380, 186))
         else:
-            self._team_card(screen)
-        self._standings(screen)
-        self._calendar_news(screen)
+            self._profile_team(screen, pygame.Rect(60, 88, 380, 316))
+            self._people(screen, pygame.Rect(60, 414, 380, 186))
+        self._next_race(screen, pygame.Rect(452, 88, 420, 316))
+        self._car_form(screen, pygame.Rect(452, 414, 420, 186))
+        self._standings(screen, pygame.Rect(884, 88, 336, 316))
+        self._news(screen, pygame.Rect(884, 414, 336, 186))
         self._buttons(screen)
 
     def _two_bars(self, screen: pygame.Surface, x: int, y: int, w: int,
@@ -643,257 +656,323 @@ class CareerHub(_Screen):
             draw_text(screen, f"{val:.0f}", f.small_bold, WHITE, (bx + bw, y - 3), anchor="topright", shadow=False)
             self.bar(screen, bx, y + 17, bw, val / 100, col)
 
-    def _driver_card(self, screen: pygame.Surface) -> None:
+    def _card(self, screen: pygame.Surface, box: pygame.Rect, title: str,
+              stripe: tuple[int, int, int] | None = None) -> None:
+        draw_panel(screen, box, PANEL, 220)
+        if stripe:
+            pygame.draw.rect(screen, stripe, (box.x, box.y, box.w, 4), border_radius=2)
+        if title:
+            draw_text(screen, title, self.game.fonts.tiny, GREY, (box.x + 16, box.y + 12), shadow=False)
+
+    def _season_strip(self, screen: pygame.Surface, box: pygame.Rect) -> None:
+        """One chip per round: done (winner + your result), next (pulsing), to come."""
         f, c = self.game.fonts, self.career
-        box = pygame.Rect(60, 106, 400, 510)
+        champ = c.championship
         draw_panel(screen, box, PANEL, 215)
-        col = tuple(c.teams[c.team]["color"]) if c.team else (150, 150, 150)
-        pygame.draw.rect(screen, col, (box.x, box.y, box.w, 6), border_radius=3)
+        n = len(champ.rounds)
+        w = (box.w - 16 - 6 * (n - 1)) / max(1, n)
+        mine = {e.get("r"): e for e in c.race_log if e.get("s") == c.season}
+        for k, key in enumerate(champ.rounds):
+            r = pygame.Rect(int(box.x + 8 + k * (w + 6)), box.y + 8, int(w), box.h - 16)
+            done = k < len(champ.results)
+            nxt = k == champ.round and not champ.finished
+            if nxt:
+                pulse = 0.6 + 0.4 * math.sin(self.t * 4)
+                col = tuple(int(v * pulse) for v in GOLD)
+            else:
+                col = (40, 70, 50) if done else (36, 38, 46)
+            pygame.draw.rect(screen, col, r, border_radius=5)
+            name = self.game.tracks[key].name
+            draw_text(screen, _fit(name, f.tiny, r.w - 6), f.tiny, (20, 16, 0) if nxt else WHITE,
+                      (r.centerx, r.y + 3), anchor="midtop", shadow=False)
+            res = mine.get(k + 1)
+            if done and res:
+                txt = "DNF" if res.get("dnf") else f"P{res.get('pos')}"
+                tc = RED if res.get("dnf") else MEDAL[res["pos"] - 1] if res.get("pos", 9) <= 3 else (200, 230, 210)
+                draw_text(screen, txt, f.tiny, tc, (r.centerx, r.bottom - 2), anchor="midbottom", shadow=False)
+            elif done:
+                draw_text(screen, "✓", f.tiny, GREEN, (r.centerx, r.bottom - 2), anchor="midbottom", shadow=False)
+
+    # -------------------------------------------------------------- driver career cards
+    def _profile_driver(self, screen: pygame.Surface, box: pygame.Rect) -> None:
+        f, c = self.game.fonts, self.career
+        col = _visible(tuple(c.teams[c.team]["color"])) if c.team else (150, 150, 150)
+        self._card(screen, box, "", col)
         x, y = box.x + 18, box.y + 16
-        draw_text(screen, (c.team or "OHNE TEAM").upper(), f.medium, WHITE, (x, y))
+        # helmet seen from the side: shell, visor, chin bar
+        hc = tuple(c.helmet)
+        pygame.draw.circle(screen, hc, (x + 22, y + 24), 22)
+        pygame.draw.rect(screen, hc, (x + 4, y + 26, 38, 18), border_bottom_left_radius=10)
+        pygame.draw.rect(screen, (24, 26, 34), (x + 22, y + 14, 22, 12), border_radius=5)
+        pygame.draw.line(screen, _shade_rgb(hc, 0.6), (x + 4, y + 36), (x + 40, y + 36), 2)
+        draw_text(screen, _fit(c.player_name.upper(), f.medium, box.w - 120), f.medium, WHITE, (x + 56, y + 2))
+        tag = f"#{c.player_number}" if c.player_number else c.short_code
+        draw_text(screen, f"{tag} · {c.team or 'ohne Team'}", f.small, GREY, (x + 56, y + 30), shadow=False)
         if c.team:
             draw_text(screen, f"Auto P{team_rank(c.teams, c.team)}/{len(c.teams)}", f.tiny, GREY,
-                      (box.right - 18, y + 6), anchor="topright", shadow=False)
+                      (box.right - 16, y + 6), anchor="topright", shadow=False)
         ct = c.contract
+        y += 64
         draw_text(screen, f"Vertrag: {ct.get('salary', 0):.1f} Mio/Saison · noch {ct.get('years', 0)} Saison(s)",
-                  f.small, WHITE, (x, y + 30), shadow=False)
+                  f.small, WHITE, (x, y), shadow=False)
         pos = c.player_driver_pos()
         goal = ct.get("goal", 10)
         ok = pos is not None and pos <= goal
-        draw_text(screen, f"Saisonziel: WM P{goal}", f.small_bold, YELLOW, (x, y + 52), shadow=False)
+        draw_text(screen, f"Saisonziel: WM P{goal}", f.small_bold, YELLOW, (x, y + 26), shadow=False)
         draw_text(screen, f"aktuell P{pos}" if pos else "noch kein Rennen", f.small_bold,
-                  GREEN if ok else RED if pos else GREY, (box.right - 18, y + 52), anchor="topright", shadow=False)
+                  GREEN if ok else RED if pos else GREY, (box.right - 16, y + 26), anchor="topright", shadow=False)
         trust_col = GREEN if c.trust >= 75 else GOLD if c.trust >= 45 else (255, 140, 30) if c.trust >= 25 else RED
-        self._two_bars(screen, x, y + 80, box.w - 36, [("RUF", c.reputation, GOLD), ("VERTRAUEN", c.trust, trust_col)])
-        draw_text(screen, f"Status: {c.status}", f.tiny, trust_col, (x, y + 108), shadow=False)
-        draw_text(screen, f"Konto {c.bank:.1f} Mio", f.tiny, GREEN, (box.right - 18, y + 108), anchor="topright",
+        self._two_bars(screen, x, y + 58, box.w - 36, [("RUF", c.reputation, GOLD), ("VERTRAUEN", c.trust, trust_col)])
+        chip = pygame.Rect(x, y + 92, f.tiny.size(tr(c.status))[0] + 20, 22)
+        pygame.draw.rect(screen, _shade_rgb(trust_col, 0.35), chip, border_radius=11)
+        draw_text(screen, c.status, f.tiny, trust_col, chip.center, anchor="center", shadow=False)
+        draw_text(screen, f"Konto {c.bank:.1f} Mio", f.small_bold, GREEN, (box.right - 16, y + 94), anchor="topright",
                   shadow=False)
-        wg = c.weekend_goal
-        gy = y + 130
-        pygame.draw.rect(screen, (60, 50, 12), (box.x + 10, gy, box.w - 20, 40), border_radius=6)
-        draw_text(screen, "WOCHENENDZIEL DES TEAMS", f.tiny, GOLD, (x, gy + 4), shadow=False)
-        draw_text(screen, wg.get("text", "-") if not c.season_over else "Saison beendet", f.small_bold, WHITE,
-                  (x, gy + 19), shadow=False)
-        log = c.season_log
-        draw_text(screen, f"{log.get('goals_met', 0)}/{log.get('goals', 0)} erfüllt", f.tiny, GREY,
-                  (box.right - 18, gy + 21), anchor="topright", shadow=False)
-        st = c.stats
-        line = f"Karriere: {st['races']} Rennen · {st['wins']} Siege · {st['podiums']} Podien · {st['titles']} Titel"
-        draw_text(screen, _fit(line, f.tiny, box.w - 36), f.tiny, (200, 200, 205), (x, gy + 50), shadow=False)
-        ry = gy + 72
-        pygame.draw.rect(screen, (70, 20, 24), (box.x + 10, ry, box.w - 20, 62), border_radius=8)
-        if c.rival and c.rival in c.drivers:
-            pts = {e["name"]: e["points"] for e in c.championship.driver_table()}
-            draw_text(screen, "RIVALE", f.tiny, RED, (x, ry + 6), shadow=False)
-            draw_text(screen, _fit(c.rival, f.small_bold, 230), f.small_bold, WHITE, (x, ry + 22), shadow=False)
-            draw_text(screen, c.drivers[c.rival]["team"], f.tiny, GREY, (x, ry + 42), shadow=False)
-            draw_text(screen, f"Duelle {log.get('rival_ahead', 0)}:{log.get('rival_behind', 0)}", f.tiny, WHITE,
-                      (box.right - 18, ry + 8), anchor="topright", shadow=False)
-            draw_text(screen, f"Punkte {pts.get(c.player_name, 0)}:{pts.get(c.rival, 0)}", f.small_bold, YELLOW,
-                      (box.right - 18, ry + 30), anchor="topright", shadow=False)
-        my = ry + 70
-        mates = c.lineup(c.team) if c.team else []
-        if mates:
-            draw_text(screen, f"TEAMKOLLEGE: {_fit(mates[0], f.tiny, 170)}", f.tiny, GREY, (x, my), shadow=False)
-            qa, qb = log.get("mate_q_ahead", 0), log.get("mate_q_behind", 0)
-            ra, rb = log.get("mate_ahead", 0), log.get("mate_behind", 0)
-            draw_text(screen, f"Quali {qa}:{qb} · Rennen {ra}:{rb}", f.tiny,
-                      GREEN if qa + ra > qb + rb else RED if qa + ra < qb + rb else WHITE,
-                      (box.right - 18, my), anchor="topright", shadow=False)
-        if c.team:
-            ay = my + 22
-            rel = c.teams[c.team].get("reliability", 0.975)
-            draw_text(screen, f"DEIN AUTO · Zuverlässigkeit {rel * 100:.1f} %", f.tiny, GREY, (x, ay), shadow=False)
-            for k, (label, key, inv) in enumerate(CarCompareScreen.STATS):
-                vals = [(2.0 - t[key]) if inv else t[key] for t in c.teams.values()]
-                me = (2.0 - c.teams[c.team][key]) if inv else c.teams[c.team][key]
-                p = 1 + sum(1 for v in vals if v > me + 1e-9)
-                yy = ay + 16 + k * 15
-                bc = GREEN if p <= 3 else YELLOW if p <= len(vals) // 2 + 1 else RED
-                draw_text(screen, label, f.tiny, WHITE, (x, yy), shadow=False)
-                self.bar(screen, x + 80, yy + 4, 210, max(0.05, 1.0 - (p - 1) / max(1, len(vals) - 1)), bc, 7)
-                draw_text(screen, f"P{p}", f.tiny, bc, (box.right - 18, yy), anchor="topright", shadow=False)
         from .career_plus import MAX_SKILL, SKILLS
         lvl = sum(c.skills.get(k, 0) for k in SKILLS)
         draw_text(screen, f"SKILLS {lvl}/{len(SKILLS) * MAX_SKILL} · {c.xp} XP verfügbar", f.tiny, CYAN,
-                  (x, box.bottom - 106), shadow=False)
+                  (x, y + 122), shadow=False)
+        st = c.stats
+        line = f"Karriere: {st['races']} Rennen · {st['wins']} Siege · {st['podiums']} Podien · {st['titles']} Titel"
+        draw_text(screen, _fit(line, f.tiny, box.w - 36), f.tiny, (200, 200, 205), (x, y + 140), shadow=False)
         if c.interest:
             draw_text(screen, _fit("INTERESSE: " + ", ".join(c.interest), f.tiny, box.w - 36), f.tiny, GOLD,
-                      (x, box.bottom - 88), shadow=False)
-        draw_form(screen, f, x, box.bottom - 58, c.form())
+                      (x, y + 158), shadow=False)
+        wg = c.weekend_goal
+        gy = box.bottom - 50
+        pygame.draw.rect(screen, (60, 50, 12), (box.x + 10, gy, box.w - 20, 40), border_radius=6)
+        draw_text(screen, "WOCHENENDZIEL DES TEAMS", f.tiny, GOLD, (x, gy + 4), shadow=False)
+        draw_text(screen, _fit(wg.get("text", "-") if not c.season_over else "Saison beendet", f.small_bold, 260),
+                  f.small_bold, WHITE, (x, gy + 19), shadow=False)
+        log = c.season_log
+        draw_text(screen, f"{log.get('goals_met', 0)}/{log.get('goals', 0)} erfüllt", f.tiny, GREY,
+                  (box.right - 16, gy + 21), anchor="topright", shadow=False)
 
-    def _team_card(self, screen: pygame.Surface) -> None:
+    def _duels(self, screen: pygame.Surface, box: pygame.Rect) -> None:
         f, c = self.game.fonts, self.career
-        box = pygame.Rect(60, 106, 400, 510)
-        draw_panel(screen, box, PANEL, 215)
-        col = tuple(c.teams[c.team]["color"])
-        pygame.draw.rect(screen, col, (box.x, box.y, box.w, 6), border_radius=3)
-        x, y = box.x + 18, box.y + 16
-        draw_text(screen, c.team.upper(), f.medium, WHITE, (x, y))
-        draw_text(screen, f"Budget: {c.budget:.1f} Mio", f.medium, GREEN if c.budget >= 0 else RED, (x, y + 28))
-        draw_text(screen, f"Deckel noch {c.cap_left():.1f} Mio", f.tiny, GREY, (box.right - 18, y + 20),
-                  anchor="topright", shadow=False)
+        self._card(screen, box, "DUELLE")
+        x = box.x + 16
+        log = c.season_log
+        rb = pygame.Rect(box.x + 10, box.y + 32, box.w - 20, 70)
+        pygame.draw.rect(screen, (70, 20, 24), rb, border_radius=8)
+        if c.rival and c.rival in c.drivers:
+            pts = {e["name"]: e["points"] for e in c.championship.driver_table()}
+            draw_text(screen, "RIVALE", f.tiny, RED, (x + 4, rb.y + 6), shadow=False)
+            draw_text(screen, _fit(c.rival, f.small_bold, 210), f.small_bold, WHITE, (x + 4, rb.y + 22), shadow=False)
+            draw_text(screen, c.drivers[c.rival]["team"], f.tiny, GREY, (x + 4, rb.y + 46), shadow=False)
+            draw_text(screen, f"Duelle {log.get('rival_ahead', 0)}:{log.get('rival_behind', 0)}", f.tiny, WHITE,
+                      (rb.right - 12, rb.y + 8), anchor="topright", shadow=False)
+            draw_text(screen, f"Punkte {pts.get(c.player_name, 0)}:{pts.get(c.rival, 0)}", f.small_bold, YELLOW,
+                      (rb.right - 12, rb.y + 32), anchor="topright", shadow=False)
+        else:
+            draw_text(screen, "Noch kein Rivale", f.small, GREY, (x + 4, rb.y + 24), shadow=False)
+        mates = c.lineup(c.team) if c.team else []
+        my = rb.bottom + 10
+        if mates:
+            draw_text(screen, f"TEAMKOLLEGE: {_fit(mates[0], f.tiny, 170)}", f.tiny, GREY, (x, my), shadow=False)
+            qa, qb = log.get("mate_q_ahead", 0), log.get("mate_q_behind", 0)
+            ra, rbh = log.get("mate_ahead", 0), log.get("mate_behind", 0)
+            for k, (label, a, b) in enumerate((("QUALI", qa, qb), ("RENNEN", ra, rbh))):
+                yy = my + 20 + k * 24
+                draw_text(screen, label, f.tiny, WHITE, (x, yy + 2), shadow=False)
+                total = max(1, a + b)
+                bx, bw = x + 80, box.w - 150
+                pygame.draw.rect(screen, (150, 50, 50), (bx, yy + 4, bw, 10), border_radius=5)
+                pygame.draw.rect(screen, (50, 170, 90), (bx, yy + 4, int(bw * a / total) if a + b else bw // 2, 10),
+                                 border_radius=5)
+                draw_text(screen, f"{a}:{b}", f.small_bold, GREEN if a > b else RED if a < b else WHITE,
+                          (box.right - 16, yy - 1), anchor="topright", shadow=False)
+        else:
+            draw_text(screen, "Kein Teamkollege", f.tiny, GREY, (x, my), shadow=False)
+
+    # -------------------------------------------------------------- team career cards
+    def _profile_team(self, screen: pygame.Surface, box: pygame.Rect) -> None:
         from .career_plus import board_label
+        f, c = self.game.fonts, self.career
+        col = tuple(c.teams[c.team]["color"])
+        self._card(screen, box, "", _visible(col))
+        x, y = box.x + 18, box.y + 16
+        sprite = getattr(self, "_sprite", None)
+        if sprite is None:
+            sprite = self._sprite = pygame.transform.rotozoom(build_car_sprite(col, (0, 230, 255)), 0, 1.6)
+        screen.blit(sprite, sprite.get_rect(midright=(box.right - 14, y + 20)))
+        draw_text(screen, _fit(c.team.upper(), f.medium, box.w - 150), f.medium, WHITE, (x, y))
+        draw_text(screen, f"Budget: {c.budget:.1f} Mio", f.medium, GREEN if c.budget >= 0 else RED, (x, y + 30))
+        draw_text(screen, f"Deckel noch {c.cap_left():.1f} Mio", f.tiny, GREY, (x, y + 60), shadow=False)
         board_col = GREEN if c.board >= 60 else YELLOW if c.board >= 30 else RED
-        self._two_bars(screen, x, y + 62, box.w - 36, [("RUF", c.team_rep, GOLD),
-                                                       ("SPONSOR", c.sponsor_mood, CYAN),
+        self._two_bars(screen, x, y + 88, box.w - 36, [("RUF", c.team_rep, GOLD), ("SPONSOR", c.sponsor_mood, CYAN),
                                                        ("VORSTAND", c.board, board_col)])
-        draw_text(screen, f"Vorstand {board_label(c.board)}", f.tiny, board_col, (box.right - 18, y + 36),
-                  anchor="topright", shadow=False)
+        draw_text(screen, f"Vorstand {board_label(c.board)}", f.tiny, board_col, (x, y + 122), shadow=False)
         sp = c.sponsor
         draw_text(screen, _fit(f"Sponsor: {sp['name']} · {sp['text']}" if sp else "Kein Titelsponsor gewählt!",
-                               f.tiny, box.w - 36), f.tiny, CYAN if sp else RED, (x, y + 90), shadow=False)
+                               f.tiny, box.w - 36), f.tiny, CYAN if sp else RED, (x, y + 142), shadow=False)
         pos, goal = c.team_pos(), c.team_goal()
-        draw_text(screen, f"Ziel: Konstrukteure P{goal}", f.small_bold, YELLOW, (x, y + 110), shadow=False)
+        draw_text(screen, f"Ziel: Konstrukteure P{goal}", f.small_bold, YELLOW, (x, y + 168), shadow=False)
         draw_text(screen, f"aktuell P{pos}" if pos else "-", f.small_bold,
-                  GREEN if pos and pos <= goal else RED if pos else GREY, (box.right - 18, y + 110), anchor="topright",
+                  GREEN if pos and pos <= goal else RED if pos else GREY, (box.right - 16, y + 168), anchor="topright",
                   shadow=False)
-        team = c.team_obj(c.team)
-        draw_text(screen, f"AUTO · Ranking P{team_rank(c.teams, c.team)}/{len(c.teams)}", f.tiny, GREY, (x, y + 138),
-                  shadow=False)
-        rel = c.teams[c.team].get("reliability", 0.965)
-        rows = (("Motor", team.engine), ("Aero", team.aero), ("Topspeed", team.top_speed), ("Bremsen", team.brakes),
-                ("Reifen", 2.0 - team.tyre_wear))
-        for k, (label, val) in enumerate(rows):
-            yy = y + 156 + k * 18
-            draw_text(screen, label, f.tiny, WHITE, (x, yy), shadow=False)
-            self.bar(screen, x + 90, yy + 4, 210, (val - 0.94) / 0.12, _visible(col), 7)
-            draw_text(screen, f"{(val - 1) * 100:+.1f}%", f.tiny, GREY, (box.right - 18, yy), anchor="topright",
-                      shadow=False)
-        yy = y + 156 + 5 * 18
-        draw_text(screen, "Zuverl.", f.tiny, WHITE, (x, yy), shadow=False)
-        self.bar(screen, x + 90, yy + 4, 210, (rel - 0.95) / 0.045, GREEN if rel > 0.98 else YELLOW, 7)
-        draw_text(screen, f"{rel * 100:.1f}%", f.tiny, GREY, (box.right - 18, yy), anchor="topright", shadow=False)
-        py = yy + 26
+        py = y + 198
+        draw_text(screen, "ENTWICKLUNG", f.tiny, GREY, (x, py), shadow=False)
         if c.projects:
-            for k, p in enumerate(c.projects):
+            for k, p in enumerate(c.projects[:2]):
                 name = AREAS[p["area"]][0].split(" (")[0] if p["area"] in AREAS else "Zuverlässigkeit"
-                draw_text(screen, f"In Arbeit: {name} · noch {p['races_left']} Rd.", f.tiny, (120, 200, 255),
-                          (x, py + k * 16), shadow=False)
+                draw_text(screen, f"In Arbeit: {name} · noch {p['races_left']} Rd." +
+                          (" · nächstes Jahr" if p.get("next") else ""), f.tiny, (120, 200, 255),
+                          (x, py + 18 + k * 17), shadow=False)
         else:
-            draw_text(screen, "Keine Entwicklungsprojekte laufen", f.tiny, GREY, (x, py), shadow=False)
-        dy = py + 40
-        stars = " ".join(f"{label} {c.staff_stars(role)}*" for role, label in (("td", "TD"), ("mech", "Mech"),
-                                                                                  ("eng", "Ing")))
-        draw_text(screen, _fit(f"FAHRER · Stopp {c.pit_stop_times()[c.team]:.2f} s · {stars} · Akademie "
-                               f"{len(c.juniors())}", f.tiny, box.w - 36), f.tiny, GREY, (x, dy), shadow=False)
-        rows2 = ([(c.player_name + " (du)", "-", "-")] if c.player_drives else []) + \
-            [(n, str(c.drivers[n]["rating"]), f"{c.drivers[n].get('years', 0)} J.") for n in c.own_drivers()]
-        for k, (name, rating, years) in enumerate(rows2):
-            ry = dy + 18 + k * 22
-            draw_text(screen, _fit(name, f.small_bold, 230), f.small_bold, CYAN, (x, ry), shadow=False)
-            draw_text(screen, rating, f.mono, YELLOW, (x + 260, ry), shadow=False)
-            draw_text(screen, years, f.tiny, GREY, (box.right - 18, ry + 2), anchor="topright", shadow=False)
-        for k in range(c.seats()):
-            draw_text(screen, "- freies Cockpit -", f.small_bold, RED, (x, dy + 18 + (len(rows2) + k) * 22),
-                      shadow=False)
-        draw_form(screen, f, x, box.bottom - 86, c.form(), "FORM (BESTES TEAMAUTO)")
+            draw_text(screen, "Keine Entwicklungsprojekte laufen", f.tiny, GREY, (x, py + 18), shadow=False)
         if c.rival:
             log = c.season_log
             draw_text(screen, f"Rivalenteam: {c.rival} · Duelle {log.get('rival_ahead', 0)}:"
                               f"{log.get('rival_behind', 0)}", f.tiny, RED, (x, box.bottom - 24), shadow=False)
 
-    def _standings(self, screen: pygame.Surface) -> None:
+    def _people(self, screen: pygame.Surface, box: pygame.Rect) -> None:
         f, c = self.game.fonts, self.career
-        box = pygame.Rect(476, 106, 380, 510)
-        draw_panel(screen, box, PANEL, 215)
-        draw_text(screen, "FAHRER-WM", f.tiny, GREY, (box.x + 14, box.y + 10), shadow=False)
+        self._card(screen, box, f"FAHRER · STOPP {c.pit_stop_times()[c.team]:.2f} s")
+        x = box.x + 16
+        rows2 = ([(c.player_name + " (du)", "-", "-")] if c.player_drives else []) + \
+            [(n, str(c.drivers[n]["rating"]), f"{c.drivers[n].get('years', 0)} J.") for n in c.own_drivers()]
+        y = box.y + 32
+        for name, rating, years in rows2:
+            draw_text(screen, _fit(name, f.small_bold, 230), f.small_bold, CYAN, (x, y), shadow=False)
+            draw_text(screen, rating, f.mono, YELLOW, (x + 260, y), shadow=False)
+            draw_text(screen, years, f.tiny, GREY, (box.right - 16, y + 2), anchor="topright", shadow=False)
+            y += 22
+        for _ in range(c.seats()):
+            draw_text(screen, "- freies Cockpit -", f.small_bold, RED, (x, y), shadow=False)
+            y += 22
+        juniors = c.juniors()
+        if juniors:
+            draw_text(screen, _fit("Akademie: " + ", ".join(f"{n} ({c.drivers[n]['rating']})" for n in juniors),
+                                   f.tiny, box.w - 32), f.tiny, GREEN, (x, y + 2), shadow=False)
+            y += 20
+        draw_text(screen, "MITARBEITER", f.tiny, GREY, (x, box.bottom - 46), shadow=False)
+        for k, role in enumerate(("td", "mech", "eng")):
+            bx = x + k * 116
+            stars = c.staff_stars(role)
+            label = {"td": "Techn. Direktor", "mech": "Chefmechaniker", "eng": "Renningenieur"}[role]
+            draw_text(screen, _fit(tr(label), f.tiny, 112), f.tiny, WHITE, (bx, box.bottom - 28), shadow=False)
+            for s in range(5):
+                pygame.draw.circle(screen, GOLD if s < stars else (60, 62, 72), (bx + 6 + s * 12, box.bottom - 8), 4)
+
+    # -------------------------------------------------------------- shared cards
+    def _next_race(self, screen: pygame.Surface, box: pygame.Rect) -> None:
+        f, c = self.game.fonts, self.career
+        champ = c.championship
+        self._card(screen, box, "NÄCHSTES RENNEN" if not champ.finished else "SAISON BEENDET", GOLD)
+        if champ.finished:
+            draw_text(screen, "Weiter zum Saisonabschluss", f.large, GOLD, (box.x + 18, box.y + 50))
+            table = champ.driver_table()
+            if table:
+                draw_text(screen, f"Weltmeister: {table[0]['name']}", f.medium, WHITE, (box.x + 18, box.y + 100))
+            return
+        track = self.game.tracks[champ.next_track]
+        area = pygame.Rect(box.x + 196, box.y + 78, box.w - 210, box.h - 150)
+        try:
+            track.draw_outline(screen, area, (232, 232, 238), 4)
+            scale, off = track.minimap_transform(area)
+            i = int(self.t * 45) % track.n
+            p = track.center[i] * scale + off
+            pygame.draw.circle(screen, GOLD, p, 6)
+        except (ValueError, ZeroDivisionError):
+            pass
+        draw_text(screen, _fit(track.name.upper(), f.large, box.w - 36), f.large, WHITE, (box.x + 18, box.y + 32))
+        draw_text(screen, track.definition.country, f.small, GREY, (box.x + 20, box.y + 68))
+        fmt = next((label for key, label in FORMATS if key == c.format), c.format)
+        draw_text(screen, f"Lauf {champ.round + 1}/{len(champ.rounds)}", f.small_bold, YELLOW, (box.x + 20, box.y + 98),
+                  shadow=False)
+        draw_text(screen, f"{c.laps} Runden", f.small, WHITE, (box.x + 20, box.y + 120), shadow=False)
+        for k, line in enumerate(_wrap(fmt, f.tiny, 170)[:2]):
+            draw_text(screen, line, f.tiny, GREY, (box.x + 20, box.y + 144 + k * 16), shadow=False)
+        rec = self.game.records.tracks.get(track.definition.key)
+        if rec:
+            from .utils import format_time
+            draw_text(screen, f"Rekord {format_time(rec['time'])}", f.tiny, (175, 80, 255), (box.x + 20, box.y + 184),
+                      shadow=False)
+        ready, why = c.ready_to_race()
+        if not ready:
+            for k, line in enumerate(_wrap(why, f.small_bold, box.w - 36)[:2]):
+                draw_text(screen, line, f.small_bold, RED, (box.x + 18, box.bottom - 76 + k * 20), shadow=False)
+
+    def _standings(self, screen: pygame.Surface, box: pygame.Rect) -> None:
+        f, c = self.game.fonts, self.career
+        self._card(screen, box, "FAHRER-WM")
         table = c.championship.driver_table()
         if not table:
             names = [n for t in c.teams for n in c.lineup(t)]
             table = [{"name": n, "team": c.drivers[n]["team"], "points": 0, "player": False} for n in names]
             if c.player_drives and c.team:
                 table.insert(0, {"name": c.player_name, "team": c.team, "points": 0, "player": True})
-        rh = 25 if len(table) <= 18 else 19 if len(table) <= 22 else 18
-        font = f.small_bold if rh == 25 else f.tiny
-        for i, e in enumerate(table[:24]):
-            y = box.y + 32 + i * rh
-            mine = e["player"] or e["team"] == c.team
-            if mine:
+        show = list(range(min(10, len(table))))
+        mine = [k for k, e in enumerate(table) if e["player"] or (c.kind == "team" and e["team"] == c.team)]
+        rival = [k for k, e in enumerate(table) if e["name"] == c.rival or e["team"] == c.rival]
+        for k in mine + rival[:1]:
+            if k not in show:
+                show.append(k)
+        rh = 22
+        show = sorted(show)[:(box.h - 64) // rh]
+        for row, i in enumerate(show):
+            e = table[i]
+            y = box.y + 32 + row * rh
+            if row and i != show[row - 1] + 1:
+                pygame.draw.line(screen, (70, 72, 82), (box.x + 14, y - 3), (box.right - 14, y - 3))
+            hl = i in mine
+            if hl:
                 pygame.draw.rect(screen, (0, 70, 100), (box.x + 6, y - 2, box.w - 12, rh - 2), border_radius=4)
-            elif e["name"] == c.rival or e["team"] == c.rival:
+            elif i in rival:
                 pygame.draw.rect(screen, (80, 24, 28), (box.x + 6, y - 2, box.w - 12, rh - 2), border_radius=4)
-            draw_text(screen, f"{i + 1}", font, MEDAL[i] if i < 3 and table[0]["points"] else WHITE,
-                      (box.x + 14, y), shadow=False)
+            draw_text(screen, f"{i + 1}", f.tiny, MEDAL[i] if i < 3 and table[0]["points"] else WHITE,
+                      (box.x + 14, y + 2), shadow=False)
             colr = tuple(c.teams.get(e["team"], {}).get("color", (150, 150, 150)))
-            pygame.draw.rect(screen, colr, (box.x + 40, y + 2, 4, rh - 7))
-            draw_text(screen, _fit(e["name"], font, 190), font, CYAN if e["player"] else WHITE,
-                      (box.x + 52, y), shadow=False)
-            draw_text(screen, _fit(e["team"], f.tiny, 90), f.tiny, GREY, (box.x + 250, y + (3 if rh == 25 else 0)),
-                      shadow=False)
-            draw_text(screen, str(e["points"]), f.tiny if rh < 25 else f.mono, YELLOW, (box.right - 16, y + 1),
-                      anchor="topright", shadow=False)
+            pygame.draw.rect(screen, colr, (box.x + 38, y + 2, 4, rh - 8))
+            draw_text(screen, _fit(e["name"], f.small_bold, 200), f.small_bold, CYAN if e["player"] else WHITE,
+                      (box.x + 50, y), shadow=False)
+            draw_text(screen, str(e["points"]), f.mono, YELLOW, (box.right - 14, y + 1), anchor="topright", shadow=False)
         teams = c.championship.team_table()
         if teams:
             pos = next((k + 1 for k, e in enumerate(teams) if e["team"] == c.team), None)
-            draw_text(screen, f"Konstrukteure: {teams[0]['team']} führt" + (f" · {c.team} P{pos}" if pos else ""),
-                      f.tiny, GREY, (box.x + 14, box.bottom - 24), shadow=False)
+            draw_text(screen, _fit(f"Konstrukteure: {teams[0]['team']} führt" + (f" · {c.team} P{pos}" if pos else ""),
+                                   f.tiny, box.w - 28), f.tiny, GREY, (box.x + 14, box.bottom - 22), shadow=False)
 
-    def _calendar_news(self, screen: pygame.Surface) -> None:
+    def _car_form(self, screen: pygame.Surface, box: pygame.Rect) -> None:
         f, c = self.game.fonts, self.career
-        champ = c.championship
-        box = pygame.Rect(872, 106, 368, 200)
-        draw_panel(screen, box, PANEL, 215)
-        draw_text(screen, "KALENDER", f.tiny, GREY, (box.x + 14, box.y + 10), shadow=False)
-        for k, key in enumerate(champ.rounds):
-            y = box.y + 30 + k * 27
-            name = self.game.tracks[key].name
-            current = k == champ.round
-            if current:
-                pygame.draw.rect(screen, (70, 56, 10), (box.x + 6, y - 2, box.w - 12, 24), border_radius=4)
-            draw_text(screen, f"{k + 1}  {name}", f.small_bold, YELLOW if current else WHITE, (box.x + 14, y),
-                      shadow=False)
-            winner = champ.winner_of(k)
-            if winner:
-                draw_text(screen, _fit(winner, f.tiny, 140), f.tiny, GOLD, (box.right - 14, y + 3), anchor="topright",
-                          shadow=False)
-        self._next_race(screen, pygame.Rect(872, 314, 368, 112))
-        nb = pygame.Rect(872, 434, 368, 182)
-        draw_panel(screen, nb, PANEL, 215)
-        draw_text(screen, "NACHRICHTEN", f.tiny, GREY, (nb.x + 14, nb.y + 10), shadow=False)
-        y = nb.y + 32
+        self._card(screen, box, "DEIN AUTO" if c.kind == "driver" else "AUTO")
+        x = box.x + 16
+        if c.team:
+            rel = c.teams[c.team].get("reliability", 0.975)
+            draw_text(screen, f"Zuverlässigkeit {rel * 100:.1f} %", f.tiny, GREY, (box.right - 16, box.y + 12),
+                      anchor="topright", shadow=False)
+            for k, (label, key, inv) in enumerate(CarCompareScreen.STATS):
+                vals = [(2.0 - t[key]) if inv else t[key] for t in c.teams.values()]
+                me = (2.0 - c.teams[c.team][key]) if inv else c.teams[c.team][key]
+                p = 1 + sum(1 for v in vals if v > me + 1e-9)
+                yy = box.y + 32 + k * 18
+                bc = GREEN if p <= 3 else YELLOW if p <= len(vals) // 2 + 1 else RED
+                draw_text(screen, label, f.tiny, WHITE, (x, yy), shadow=False)
+                self.bar(screen, x + 80, yy + 4, box.w - 160, max(0.05, 1.0 - (p - 1) / max(1, len(vals) - 1)), bc, 7)
+                draw_text(screen, f"P{p}", f.tiny, bc, (box.right - 16, yy), anchor="topright", shadow=False)
+        draw_form(screen, f, x, box.bottom - 50, c.form(),
+                  "FORM (LETZTE 5 RENNEN)" if c.kind == "driver" else "FORM (BESTES TEAMAUTO)")
+
+    def _news(self, screen: pygame.Surface, box: pygame.Rect) -> None:
+        f, c = self.game.fonts, self.career
+        self._card(screen, box, "NACHRICHTEN")
+        y = box.y + 32
         for msg in c.news:
-            for line in _wrap(msg, f.tiny, nb.w - 28):
-                if y > nb.bottom - 18:
-                    break
-                draw_text(screen, line, f.tiny, (210, 210, 215), (nb.x + 14, y), shadow=False)
-                y += 17
+            for line in _wrap(msg, f.tiny, box.w - 28):
+                if y > box.bottom - 18:
+                    return
+                draw_text(screen, line, f.tiny, (210, 210, 215), (box.x + 14, y), shadow=False)
+                y += 16
             y += 5
 
-    def _next_race(self, screen: pygame.Surface, box: pygame.Rect) -> None:
-        f, c = self.game.fonts, self.career
-        champ = c.championship
-        draw_panel(screen, box, PANEL, 215)
-        if champ.finished:
-            draw_text(screen, "SAISON BEENDET", f.tiny, GREY, (box.x + 14, box.y + 10), shadow=False)
-            draw_text(screen, "Weiter zum Saisonabschluss", f.small_bold, GOLD, (box.x + 14, box.y + 40), shadow=False)
-            return
-        track = self.game.tracks[champ.next_track]
-        draw_text(screen, "NÄCHSTES RENNEN", f.tiny, GREY, (box.x + 14, box.y + 10), shadow=False)
-        thumb = pygame.Rect(box.right - 128, box.y + 8, 118, box.h - 16)
-        pygame.draw.rect(screen, (26, 28, 36), thumb, border_radius=6)
-        try:
-            track.draw_outline(screen, thumb.inflate(-8, -8), GOLD, 2)
-        except (ValueError, ZeroDivisionError):
-            pass
-        draw_text(screen, _fit(track.name, f.medium, box.w - 160), f.medium, WHITE, (box.x + 14, box.y + 28))
-        fmt = next((label for key, label in FORMATS if key == c.format), c.format)
-        draw_text(screen, f"Lauf {champ.round + 1}/{len(champ.rounds)} · {c.laps} Runden", f.tiny, YELLOW,
-                  (box.x + 14, box.y + 60), shadow=False)
-        draw_text(screen, _fit(fmt, f.tiny, box.w - 160), f.tiny, GREY, (box.x + 14, box.y + 76), shadow=False)
-        rec = self.game.records.tracks.get(track.definition.key)
-        if rec:
-            from .utils import format_time
-            draw_text(screen, _fit(f"Rekord {format_time(rec['time'])} {rec.get('driver', '')}", f.tiny, box.w - 160),
-                      f.tiny, (120, 200, 255), (box.x + 14, box.y + 92), shadow=False)
-
     def _buttons(self, screen: pygame.Surface) -> None:
-        f, c = self.game.fonts, self.career
+        f = self.game.fonts
         acts = self.actions()
         self.sel = min(self.sel, len(acts) - 1)
         rows = [[(k, a) for k, a in enumerate(acts) if a[0] not in self.SECOND_ROW],
                 [(k, a) for k, a in enumerate(acts) if a[0] in self.SECOND_ROW]]
-        for r, (items, y, h) in enumerate(zip(rows, (624, 672), (42, 30))):
+        for r, (items, y, h) in enumerate(zip(rows, (612, 664), (44, 32))):
             total_w = SCREEN_WIDTH - 120
             widths = [2.2 if a[0] in ("race", "watch", "review", "sponsor") else 1.0 for _, a in items]
             unit = (total_w - 8 * (len(items) - 1)) / max(1.0, sum(widths))
@@ -906,9 +985,7 @@ class CareerHub(_Screen):
                 self.button(screen, pygame.Rect(x, y, bw, h), _fit(label, font, bw - 12), k == self.sel, base, font)
                 mouse_item((x, y, bw, h), self, k)
                 x += bw + 8
-        ready, why = c.ready_to_race()
-        if not ready and not c.season_over:
-            draw_text(screen, why, f.tiny, RED, (SCREEN_WIDTH // 2, 708), anchor="center", shadow=False)
+
 
 
 class DevelopmentScreen(_Screen):

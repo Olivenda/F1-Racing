@@ -65,13 +65,21 @@ def crew_choice(car, session: "Session") -> tuple[str, str]:
         return plan[1], "Strategie"
     remaining = getattr(session, "total_laps", 0) - car.laps_done - 1
     rate = wear_rate(car)
+    # long races: while the second dry compound is missing, only an unused one is legal (else DSQ)
+    must = getattr(session, "compound_rule", False) and not session.compound_rule_met(car)
+    used = getattr(car, "compounds_used", set())
+    options = [c for c in COMPOUND_ORDER if c not in used] if must else COMPOUND_ORDER
+    options = options or COMPOUND_ORDER
+    why = "Pflicht: 2. Mischung" if must else "Renningenieur"
     if session.kind != "race" or remaining <= 0 or rate is None or car.tyres is None:
-        return (current if current in COMPOUND_ORDER else "medium"), "Renningenieur"
-    for comp in COMPOUND_ORDER:                     # soft first: the fastest one that lasts
+        if must:
+            return options[0], why
+        return (current if current in COMPOUND_ORDER else "medium"), why
+    for comp in options:                            # soft first: the fastest one that lasts
         life = 0.75 / (rate * car.tyres.compound.life / COMPOUNDS[comp].life)
         if life >= remaining:
-            return comp, "Renningenieur"
-    return COMPOUND_ORDER[-1], "Renningenieur"
+            return comp, why
+    return options[-1], why
 
 
 class PitMenu:

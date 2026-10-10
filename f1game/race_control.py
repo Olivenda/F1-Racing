@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 import pygame
 from pygame.math import Vector2
 
-from .car import build_car_sprite
-from .settings import TOP_SPEED, YELLOW
+from .pitlane import SPEED_LIMIT
+from .settings import CAR_LENGTH, CAR_WIDTH, TOP_SPEED, YELLOW
 
 if TYPE_CHECKING:
     from .car import Car
@@ -44,7 +44,11 @@ class SafetyCar:
         self.name = "Safety Car"
         self.is_player = False
         self.is_ghost = False
-        self._sprite = build_car_sprite(self.color, (255, 150, 0))
+        self.lights_on = True               # light bar: off once it is "in this lap"
+        self.pit_u: float | None = None     # driving down the pit lane (after the period)
+        self.done = False                   # parked in the pit lane: gone
+        self.steer_angle = 0.0
+        self._sprite = _road_car_sprite(self.color)
         self._place()
 
     def _place(self) -> None:
@@ -53,9 +57,35 @@ class SafetyCar:
         self.pos, self.heading = t.pose_at(self.s, t.line_offset[i] if t.line_offset else 0.0)
 
     def update(self, h: float, target_speed: float) -> None:
+        if self.pit_u is not None:
+            self._pit_step(h)
+            return
         self.speed += max(-400.0 * h, min(250.0 * h, target_speed - self.speed))
         self.s = (self.s + self.speed * h) % self.track.length
         self._place()
+
+    @property
+    def on_track(self) -> bool:
+        return self.pit_u is None
+
+    def enter_pit(self) -> None:
+        self.pit_u = 0.0
+        self.lights_on = False
+
+    def _pit_step(self, h: float) -> None:
+        """Down the pit lane at the speed limit, then it stops and leaves the picture."""
+        pit = self.track.pit
+        if pit is None:
+            self.done = True
+            return
+        stop = pit.length * 0.45
+        left = stop - self.pit_u
+        target = min(SPEED_LIMIT, max(0.0, left) * 1.2)
+        self.speed += max(-450.0 * h, min(250.0 * h, target - self.speed))
+        self.pit_u += self.speed * h
+        self.pos, self.heading = pit.pose(self.pit_u)
+        if left < 4.0 and self.speed < 5.0:
+            self.done = True
 
     def draw(self, surface: pygame.Surface, cam: Vector2, t: float) -> None:
         sp = self.pos - cam
@@ -63,10 +93,29 @@ class SafetyCar:
             return
         img = pygame.transform.rotozoom(self._sprite, -math.degrees(self.heading), 1.0)
         surface.blit(img, img.get_rect(center=(round(sp.x), round(sp.y))))
-        if int(t * 6) % 2 == 0:
+        if self.lights_on and int(t * 6) % 2 == 0:
             r = Vector2(-math.sin(self.heading), math.cos(self.heading))
             for side in (-1, 1):
                 pygame.draw.circle(surface, (255, 160, 0), sp + r * side * 4, 3)
+
+
+def _road_car_sprite(body: tuple[int, int, int]) -> pygame.Surface:
+    """Top-down GT safety car (nose to +x), same footprint as an F1 car sprite."""
+    S = 8
+    L, W = CAR_LENGTH, CAR_WIDTH
+    big = pygame.Surface((int(L * S), int(W * S)), pygame.SRCALPHA)
+    w, h = big.get_size()
+    pygame.draw.rect(big, (14, 14, 16), (int(w * 0.18), 0, int(w * 0.16), h), border_radius=S * 2)       # tyres
+    pygame.draw.rect(big, (14, 14, 16), (int(w * 0.68), 0, int(w * 0.16), h), border_radius=S * 2)
+    pygame.draw.rect(big, body, (int(w * 0.04), int(h * 0.08), int(w * 0.92), int(h * 0.84)), border_radius=S * 4)
+    pygame.draw.rect(big, (34, 42, 56), (int(w * 0.30), int(h * 0.16), int(w * 0.36), int(h * 0.68)),
+                     border_radius=S * 3)                                                                     # glass
+    pygame.draw.rect(big, body, (int(w * 0.36), int(h * 0.22), int(w * 0.22), int(h * 0.56)), border_radius=S * 2)
+    pygame.draw.rect(big, (255, 150, 0), (int(w * 0.42), int(h * 0.20), int(w * 0.06), int(h * 0.60)))    # light bar
+    pygame.draw.rect(big, (255, 140, 0), (int(w * 0.08), int(h * 0.46), int(w * 0.84), int(h * 0.08)))    # stripe
+    for y in (0.16, 0.70):
+        pygame.draw.rect(big, (240, 240, 226), (int(w * 0.90), int(h * y), int(w * 0.05), int(h * 0.14)))
+    return pygame.transform.smoothscale(big, (max(1, int(L)), max(1, int(W))))
 
 
 class RaceControl:
@@ -172,7 +221,8 @@ class RaceControl:
         s.message("GRÜN! RESTART!" if self.mode == "SC" else "VSC ENDE - GRÜN!", (60, 220, 90), 2.5)
         self.mode = None
         self.phase = ""
-        self.sc = None
+        if self.sc is not None and self.sc.on_track:
+            self.sc = None          # (a safety car still driving down the pit lane finishes parking)
         self.cooldown_until = s.time + COOLDOWN
         self.green_until = s.time + 6.0
         self.yellow.clear()
@@ -193,13 +243,17 @@ class RaceControl:
             self._end()
         elif self.mode == "SC":
             self._sc_step(h)
+        elif self.sc is not None:
+            self.sc.update(h, 0.0)
+            if self.sc.done:
+                self.sc = None
 
     def _sc_step(self, h: float) -> None:
         s, sc = self.s, self.sc
         leader = self._leader()
         self._lead = leader
         top = TOP_SPEED
-        if self.phase in ("out", "in") and sc is None:
+        if self.phase in ("out", "in") and (sc is None or not sc.on_track):
             self.phase = "restart"
             self._restart_lap = leader.laps_done if leader else 0
         if self.phase == "out" and sc is not None:
@@ -209,14 +263,22 @@ class RaceControl:
                 s.message("SAFETY CAR IN THIS LAP", YELLOW, 3.0)
                 s.add_feed("Safety Car kommt in dieser Runde rein")
         elif self.phase == "in" and sc is not None:
+            sc.lights_on = False
             sc.update(h, top * SC_SPEED)
             pit = s.track.pit
             entry = pit.entry_abs() if pit is not None else 0.0
             if (sc.s - entry) % s.track.length < 30.0:
                 self.phase = "restart"
-                self.sc = None
                 self._restart_lap = leader.laps_done if leader else 0
+                if pit is not None:
+                    sc.enter_pit()          # drives down the pit lane instead of vanishing
+                else:
+                    self.sc = None
         elif self.phase == "restart":
+            if sc is not None:
+                sc.update(h, 0.0)
+                if sc.done:
+                    self.sc = None
             if leader is None or leader.laps_done > self._restart_lap:
                 self._end()
 
@@ -245,7 +307,7 @@ class RaceControl:
         yielding = {a for a, b in self.give_back if b is car}
         objects = [(o.s, o.speed_fwd, o.distance > car.distance) for o in s.cars if o is not car and not o.in_pit
                    and not o.dnf and not o.session_done and o not in yielding]
-        if self.sc is not None:
+        if self.sc is not None and self.sc.on_track:
             objects.append((self.sc.s, self.sc.speed, True))
         for os_, ov, in_front in objects:
             gap = (os_ - car.s + L / 2) % L - L / 2
@@ -253,7 +315,7 @@ class RaceControl:
             lower = -60.0 if in_front else 5.0
             if lower < gap < 900.0 and (best_gap is None or gap < best_gap):
                 best_gap, best_speed = gap, ov
-        if self.sc is not None and self.phase in ("out", "in"):
+        if self.sc is not None and self.sc.on_track and self.phase in ("out", "in"):
             sc_gap = (self.sc.s - car.s + L / 2) % L - L / 2
             if -500.0 < sc_gap < 10.0 and car is self._lead:
                 # the leader has got alongside/past the safety car: drop back behind it

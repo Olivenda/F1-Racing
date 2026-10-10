@@ -265,11 +265,16 @@ def draw_mouse_hints(surface: pygame.Surface) -> None:
     item = _mouse_hit(pos)
     if item is None or not item[5]:
         return
-    rect = item[0]
-    zone = _arrow_zone(item, pos)
+    draw_value_arrows(surface, item[0], _arrow_zone(item, pos))
+
+
+def draw_value_arrows(surface: pygame.Surface, rect: pygame.Rect, hot: int = 0,
+                      accent: tuple[int, int, int] = (225, 30, 40), idle: tuple[int, int, int] = (60, 62, 74)) -> None:
+    """The < > buttons at the right end of a value row - exactly where a mouse_item(arrows=True) is clickable.
+    hot: -1/1 highlights that side."""
     for d, x in ((-1, rect.right - 2 * ARROW_W - 4), (1, rect.right - ARROW_W)):
         r = pygame.Rect(x, rect.y + 4, ARROW_W, rect.h - 8)
-        pygame.draw.rect(surface, (225, 30, 40) if zone == d else (60, 62, 74), r, border_radius=6)
+        pygame.draw.rect(surface, accent if hot == d else idle, r, border_radius=6)
         cx, cy = r.center
         pts = [(cx + 4 * d, cy), (cx - 3 * d, cy - 6), (cx - 3 * d, cy + 6)]
         pygame.draw.polygon(surface, (245, 245, 245), pts)

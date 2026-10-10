@@ -241,6 +241,8 @@ class Session:
                 if isinstance(car, AI_Car):
                     car.sees_others = False
             car.tyres = TyreSet(self.compound_for(car), self._wear_factor(car))
+            car.compounds_used = {car.tyres.compound.key}
+            car.stint_log = [(car.tyres.compound.key, 0)]     # (compound, lap the stint began)
             car.damage.multiplier = 0.0 if self.config.damage == "off" else 1.0
             laps = max(1, self.config.race_laps)
             car.fill_fuel(self.start_fuel_laps(car), RACE_FUEL_KG / laps)
@@ -927,6 +929,8 @@ class Session:
                     car.pit_compound = car.tyres.compound.key   # a punctured tyre gets replaced regardless
                 if car.pit_compound in COMPOUNDS:
                     car.tyres = TyreSet(car.pit_compound, self._wear_factor(car))
+                    car.compounds_used = getattr(car, "compounds_used", set()) | {car.pit_compound}
+                    car.stint_log = getattr(car, "stint_log", []) + [(car.pit_compound, car.laps_done)]
                 if plan.get("repair", True):
                     car.damage.repair()
                 car.puncture = False
@@ -1517,6 +1521,9 @@ class RaceSession(Session):
             self.lights_on = 0
             self.go_timer = 1.5
             self.race_start_time = self.time
+            if self.compound_rule:
+                self.stewards.announce(f"Ab {self.COMPOUND_RULE_LAPS} Runden: zwei Reifenmischungen Pflicht "
+                                       "(sonst Disqualifikation)", "info", 8.0)
             for car in self.cars:
                 car.frozen = False
                 if car.skills.get("start"):
@@ -1735,6 +1742,14 @@ class RaceSession(Session):
         is used straight away and that stop is cheaper."""
         tyres = car.tyres
         remaining = self.total_laps - car.laps_done
+        must = self.compound_rule and not self.compound_rule_met(car)
+        # lapped cars finish when the leader does: count the laps that are really left
+        lead_left = self.total_laps - max((c.laps_done for c in self.cars), default=0)
+        if must and tyres is not None and tyres.compound.kind == "slick" and self.track.wetness <= 0.15 \
+                and 1 <= min(remaining, lead_left) <= 3:
+            # last chance for the mandatory second compound
+            used = getattr(car, "compounds_used", set())
+            return next((k for k in ("soft", "medium", "hard") if k not in used), "soft")
         if tyres is None or tyres.laps < 2 or remaining < 2 or tyres.wear_factor <= 0:
             return None
         if tyres.compound.kind != "slick" or self.track.wetness > 0.15:
@@ -1755,13 +1770,32 @@ class RaceSession(Session):
                     if c < value:
                         value, pick = c, key
             best[n], opener[n] = value, pick
+        if must:
+            # the next set has to be a compound not used yet (the sets after it are free)
+            used = getattr(car, "compounds_used", set())
+            allowed = {k: v for k, v in fresh.items() if k not in used} or fresh
+            best_r = [0.0] * (remaining + 1)
+            opener_r = [""] * (remaining + 1)
+            for n in range(1, remaining + 1):
+                value, pick = float("inf"), ""
+                for key, cum in allowed.items():
+                    for k in range(1, n + 1):
+                        c = cum[k] + (0.0 if k == n else full + best[n - k])
+                        if c < value:
+                            value, pick = c, key
+                best_r[n], opener_r[n] = value, pick
+            best, opener = best_r, opener_r
         old = self._cumulative_cost(car, cur.key, tyres.wear, rate, remaining)
-        if neutralised and old[remaining] < full:
+        if neutralised and old[remaining] < full and not must:
             return None   # would make it to the flag fine - a "cheap" stop would only be a pace gamble
         old_laps = 0 if neutralised else 1
         now = old[old_laps] + first + best[remaining - old_laps]
-        later = min([old[remaining]] + [old[k] + full + best[remaining - k]
-                                        for k in range(old_laps + 1, remaining)])
+        options = [old[k] + full + best[remaining - k] for k in range(old_laps + 1, remaining)]
+        if not must:
+            options.append(old[remaining])        # staying out to the flag is only legal with the rule met
+        if not options:
+            return opener[remaining - old_laps]
+        later = min(options)
         margin = 0.5 + (sum(map(ord, car.name)) % 7) * 0.25
         if now + margin < later:
             return opener[remaining - old_laps]
@@ -1834,15 +1868,38 @@ class RaceSession(Session):
             self._player_pos = p
             self._last_order = order
 
+    COMPOUND_RULE_LAPS = 12       # from this race length two different dry compounds are mandatory (as in F1)
+
+    @property
+    def compound_rule(self) -> bool:
+        return self.kind == "race" and self.total_laps >= self.COMPOUND_RULE_LAPS and \
+            self.config.tyre_wear_factor > 0
+
+    @staticmethod
+    def compound_rule_met(car: Car) -> bool:
+        """Two different dry compounds - or any intermediate/wet set, which lifts the rule (wet race)."""
+        used = getattr(car, "compounds_used", set())
+        if used & {"inter", "wet"}:
+            return True
+        return len(used & set(COMPOUND_ORDER)) >= 2
+
     def scrutineering(self) -> list[Car]:
-        """Post-race technical check: a skid block worn past the limit means disqualification."""
+        """Post-race technical check: a skid block worn past the limit, or (long races) only one dry compound
+        used, means disqualification."""
         out = []
         for car in self.cars:
-            if car.dnf or car.plank_per_lap <= 0 or car.plank_wear <= PLANK_LIMIT_MM:
+            if car.dnf:
                 continue
-            car.dnf = car.dsq = True
-            car.dsq_reason = f"Planke {car.plank_wear:.2f} mm abgenutzt (max. {PLANK_LIMIT_MM:.1f} mm)"
-            out.append(car)
+            if car.plank_per_lap > 0 and car.plank_wear > PLANK_LIMIT_MM:
+                car.dnf = car.dsq = True
+                car.dsq_reason = f"Planke {car.plank_wear:.2f} mm abgenutzt (max. {PLANK_LIMIT_MM:.1f} mm)"
+                out.append(car)
+            elif self.compound_rule and car.finish_time is not None and not self.compound_rule_met(car):
+                car.dnf = car.dsq = True
+                car.dsq_reason = f"nur eine Reifenmischung (ab {self.COMPOUND_RULE_LAPS} Runden sind zwei Pflicht)"
+                out.append(car)
+        for car in out:
+            self.stewards.announce(f"DISQUALIFIZIERT: {car.short} - {car.dsq_reason}", "penalty", 10.0)
         return out
 
     def leader_gap(self, car: Car, leader: Car) -> str:

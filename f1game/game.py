@@ -587,7 +587,7 @@ class Game:
             disqualified = session.scrutineering()
             if disqualified:
                 names = ", ".join(c.short for c in disqualified)
-                self.toast = (f"DISQUALIFIKATION (Planke): {names}", pygame.time.get_ticks() + 6000)
+                self.toast = (f"DISQUALIFIKATION: {names}", pygame.time.get_ticks() + 6000)
             if cfg.career and self.career is not None:
                 result = cfg.championship.award(session)
                 self.career.after_race(session, result)

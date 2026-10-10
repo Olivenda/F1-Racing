@@ -16,7 +16,8 @@ from .tyres import ALL_COMPOUNDS, COMPOUND_ORDER, COMPOUNDS
 from .user_settings import (ANTIALIAS_LEVELS, ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, GEARBOX_MODES,
                             GRAPHICS_LEVELS, GRAPHICS_PRESETS, HUD_ASSIST, HUD_STYLES, TYRE_WEAR_MODES, UNITS,
                             speed_in)
-from .settings import (CYAN, DIFFICULTY_CORNERING, DIFFICULTY_LEVELS, F1_RED, GREEN, GREY, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
+from .settings import (CYAN, DIFFICULTY_CORNERING, DIFFICULTY_LEVELS, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
+                       TOP_SPEED,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .track import TRACK_DEFS
 from .weather import WEATHER_MODES
@@ -267,9 +268,14 @@ class SetupScreen:
             self.c["players"] = 2 if self.c.get("players", 1) == 1 else 1
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type in (pygame.MOUSEMOTION, pygame.MOUSEWHEEL, pygame.MOUSEBUTTONDOWN):
+            self.handle_mouse(event)
+            return
         if event.type != pygame.KEYDOWN:
             return
-        if event.key in (pygame.K_UP, pygame.K_w):
+        if event.key == pygame.K_TAB and not self.spectator:
+            self._show_grid = not self._show_grid
+        elif event.key in (pygame.K_UP, pygame.K_w):
             self.sel = (self.sel - 1) % len(self.rows)
         elif event.key in (pygame.K_DOWN, pygame.K_s):
             self.sel = (self.sel + 1) % len(self.rows)
@@ -350,149 +356,375 @@ class SetupScreen:
             return f"{comp.name}  (Grip {comp.grip * 100:.0f}%)"
         return ""
 
+    # ------------------------------------------------------------------ drawing (redesign: track strip, option
+    # cards with buttons, big track card, team / grid panel, start bar). The screen handles the mouse itself.
+    handles_mouse = True
+    _show_grid = False
+
+    def _hit(self, rect: pygame.Rect | tuple, action: tuple) -> pygame.Rect:
+        rect = pygame.Rect(rect)
+        self._hits.append((rect, action))
+        return rect
+
+    def handle_mouse(self, event: pygame.event.Event) -> None:
+        hits = getattr(self, "_hits", [])
+        if event.type == pygame.MOUSEMOTION:
+            for rect, action in reversed(hits):
+                if rect.collidepoint(event.pos) and action[0] == "row":
+                    self.sel = action[1]
+                    break
+        elif event.type == pygame.MOUSEWHEEL and event.y:
+            self.sel = (self.sel + (-1 if event.y > 0 else 1)) % len(self.rows)
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3):
+            if event.button == 3:
+                self.game.go_to_menu()
+                return
+            for rect, action in reversed(hits):
+                if rect.collidepoint(event.pos):
+                    self._click(action)
+                    break
+
+    def _click(self, action: tuple) -> None:
+        kind = action[0]
+        game = self.game
+        if kind == "track":
+            self.c["track"] = action[1]
+            self.sel = self.rows.index("Strecke")
+        elif kind == "row":
+            self.sel = action[1]
+        elif kind == "set":
+            self.sel = self.rows.index(action[1])
+            self.c[action[2]] = action[3]
+            if action[2] == "players" and self.online:
+                self.c["players"] = 1
+        elif kind == "step":
+            self.sel = self.rows.index(action[1])
+            self._change(action[2])
+        elif kind == "garage":
+            self._open_garage()
+        elif kind == "start":
+            self.sel = self.rows.index("START")
+            game.start_weekend(TRACK_DEFS[self.c["track"]].key, self.modes[self.c["mode"]][0], self.c["laps"],
+                               self.diffs[self.c["diff"]], self.c["opponents"], spectator=self.spectator)
+        elif kind == "back":
+            game.go_to_menu()
+        elif kind == "random":
+            self._random_race()
+        elif kind == "panel":
+            self._show_grid = not self._show_grid
+
     def draw(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
+        self._hits: list[tuple[pygame.Rect, tuple]] = []
+        mouse = pygame.mouse.get_pos()
         self.bg.draw(screen)
-        accent = (40, 110, 200) if self.spectator else F1_RED
-        pygame.draw.rect(screen, accent, (60, 40, 8, 60))
-        draw_text(screen, "ZUSCHAUER-RENNEN" if self.spectator else "EINZELSPIELER", f.big, WHITE, (84, 36))
-        draw_text(screen, "Nur KI-Fahrer · TV-Regie wählt die spannendsten Zweikämpfe" if self.spectator
-                  else "Dein Team, deine Reifen - gegen trainierte neuronale Netze", f.small, GREY, (86, 86))
+        accent = (255, 200, 40) if self.spectator else F1_RED
+        pygame.draw.rect(screen, accent, (60, 24, 8, 54))
+        draw_text(screen, "ZUSCHAUER-RENNEN" if self.spectator else "EINZELSPIELER", f.big, WHITE, (84, 20))
+        draw_text(screen, "Nur KI-Fahrer - TV-Regie inklusive" if self.spectator else
+                  "Dein Team, deine Reifen - gegen trainierte neuronale Netze", f.small, GREY, (86, 68))
+        # header buttons
+        bx = SCREEN_WIDTH - 60
+        for label, action in (("ZURÜCK (ESC)", ("back",)),) + ((("ZUFALLSRENNEN (R)", ("random",)),)
+                                                              if not self.spectator else ()):
+            w = f.small_bold.size(tr(label))[0] + 36
+            r = self._hit((bx - w, 30, w, 40), action)
+            pygame.draw.rect(screen, (90, 92, 104) if r.collidepoint(mouse) else (44, 46, 56), r, border_radius=8)
+            draw_text(screen, label, f.small_bold, WHITE, r.center, anchor="center", shadow=False)
+            bx -= w + 10
+        self._draw_track_strip(screen, mouse)
+        self._draw_options(screen, mouse, accent)
+        self._draw_track_card(screen)
+        if self.spectator or self._show_grid or not self.game.teams:
+            self._draw_grid_panel(screen)
+        else:
+            self._draw_team_panel(screen)
+        self._draw_start_bar(screen, mouse, accent)
 
-        px, py, pw = 60, 128, 500
-        draw_panel(screen, (px, py, pw, 498), PANEL, 215)
-        for i, row in enumerate(self.rows):
-            ry = py + 14 + i * 44
+    def _draw_track_strip(self, screen: pygame.Surface, mouse: tuple[int, int]) -> None:
+        f = self.game.fonts
+        n = len(TRACK_DEFS)
+        gap = 10
+        w = (SCREEN_WIDTH - 120 - gap * (n - 1)) // n
+        on_row = self.rows[self.sel] == "Strecke"
+        for k, td in enumerate(TRACK_DEFS):
+            r = self._hit((60 + k * (w + gap), 96, w, 86), ("track", k))
+            chosen = k == self.c["track"]
+            hover = r.collidepoint(mouse)
+            pygame.draw.rect(screen, PANEL_LIGHT if chosen else (40, 42, 52) if hover else (24, 26, 33), r,
+                             border_radius=8)
+            if chosen:
+                pygame.draw.rect(screen, F1_RED if on_row else (200, 200, 210), r, 2, border_radius=8)
+            track = self.game.tracks[td.key]
+            outline = pygame.Rect(r.right - 78, r.y + 32, 70, 48)
+            try:
+                track.draw_outline(screen, outline, (235, 235, 240) if chosen else (120, 122, 132), 2)
+            except (ValueError, ZeroDivisionError):
+                pass
+            draw_text(screen, _fit(td.name.upper(), f.small_bold, w - 20), f.small_bold,
+                      WHITE if chosen else (190, 190, 198), (r.x + 10, r.y + 8), shadow=False)
+            draw_text(screen, _fit(td.country, f.tiny, w - 92), f.tiny, GREY, (r.x + 10, r.y + 36), shadow=False)
+            mine = self.game.records.player.get(td.key)
+            if mine:
+                draw_text(screen, format_time(mine["time"]), f.tiny, (40, 210, 90), (r.x + 10, r.y + 60),
+                          shadow=False)
+
+    def _option_rows(self) -> list[str]:
+        return [r for r in self.rows if r not in ("Strecke", "START", "ZURÜCK")]
+
+    def _draw_options(self, screen: pygame.Surface, mouse: tuple[int, int], accent: tuple[int, int, int]) -> None:
+        f = self.game.fonts
+        box = pygame.Rect(60, 194, 640, 456)
+        draw_panel(screen, box, PANEL, 220)
+        rows = self._option_rows()
+        rh = min(54, (box.h - 16) // max(1, len(rows)) - 4)
+        for k, row in enumerate(rows):
+            i = self.rows.index(row)
+            r = self._hit((box.x + 10, box.y + 10 + k * (rh + 4), box.w - 20, rh), ("row", i))
             selected = i == self.sel
-            if row in ("START", "ZURÜCK"):
-                ry += 12 if row == "START" else 26
-                pulse = 0.5 + 0.5 * math.sin(self.t * 4) if selected else 0.0
-                base = accent if row == "START" else (90, 90, 100)
-                col = tuple(int(c * (0.75 + 0.25 * pulse)) for c in base) if selected else \
-                    tuple(c // 3 for c in base)
-                h = 48 if row == "START" else 34
-                pygame.draw.rect(screen, col, (px + 20, ry, pw - 40, h), border_radius=8)
-                mouse_item((px + 20, ry, pw - 40, h), self, i)
-                label = ("ZUSCHAUEN" if self.spectator else "RENNEN STARTEN") if row == "START" else "ZURÜCK"
-                draw_text(screen, label, f.large if row == "START" else f.medium, WHITE,
-                          (px + pw // 2, ry + h // 2), anchor="center")
-                continue
+            pygame.draw.rect(screen, PANEL_LIGHT if selected else (36, 38, 46) if r.collidepoint(mouse)
+                             else (28, 30, 38), r, border_radius=8)
             if selected:
-                pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, 38), border_radius=6)
-                pygame.draw.rect(screen, accent, (px + 12, ry, 5, 38), border_radius=2)
-            draw_text(screen, row.upper(), f.tiny, GREY, (px + 28, ry + 12), shadow=False)
-            setup_row = row == "Fahrzeug-Setup"
-            mouse_item((px + 12, ry, pw - 24, 38), self, i, key=pygame.K_RETURN if setup_row else None,
-                       arrows=not setup_row)
-            if row == "Startreifen":
-                comp = COMPOUNDS[ALL_COMPOUNDS[self.c["tyre"]]]
-                pygame.draw.circle(screen, comp.color, (px + 148, ry + 19), 8, 3)
-            draw_text(screen, self._value(row), f.small_bold, WHITE, (px + 165, ry + 10), shadow=False)
-            if selected:
-                draw_text(screen, "<  >", f.medium, YELLOW, (px + pw - 24, ry + 19), anchor="midright")
-        mode_key = self.modes[self.c["mode"]][0]
-        draw_text(screen, MODE_HINTS[mode_key], f.small, (190, 190, 190), (px, py + 508))
-        st = self.game.settings
-        summary = (f"Einstellungen: Fahrhilfen {['Aus', 'Mittel', 'Voll'][st.assists]} · "
-                   f"{'3D' if st.view3d else '2D'} · Schaden {DAMAGE_MODES[st.damage]} · "
-                   f"Reifenverschleiß {TYRE_WEAR_MODES[st.tyre_wear][0]}")
-        draw_text(screen, summary, f.tiny, (120, 200, 255), (px, py + 534), shadow=False)
-        if not self.spectator:
-            draw_text(screen, "R: Zufallsrennen (Strecke, Team, Reifen)", f.tiny, YELLOW, (px, py + 554),
+                pygame.draw.rect(screen, accent, (r.x, r.y, 5, r.h), border_radius=2)
+            draw_text(screen, row.upper(), f.tiny, (230, 230, 236) if selected else GREY, (r.x + 18, r.y + 8),
                       shadow=False)
-        self._draw_track_preview(screen)
-        self._draw_roster(screen)
+            draw_text(screen, _fit(tr(self._hint(row)), f.tiny, 190), f.tiny, (150, 152, 162),
+                      (r.x + 18, r.y + rh - 22), shadow=False)
+            self._draw_control(screen, row, pygame.Rect(r.x + 214, r.y + 8, r.w - 224, rh - 16), mouse, accent)
+        if self.spectator:
+            # spare room: the controls of the TV view
+            y = box.y + 20 + len(rows) * (rh + 4)
+            draw_text(screen, "IM RENNEN", f.tiny, GREY, (box.x + 20, y), shadow=False)
+            tips = [("A", "TV-Regie an/aus (springt zu Zweikämpfen)"), ("K", "Kamera wechseln (Shift+K zurück)"),
+                    ("1-0 / Pfeile", "Fahrer wählen"), ("+ / -", "Zeitraffer"), ("V", "2D / 3D"),
+                    ("M", "Karte"), ("H", "HUD aus/an"), ("P", "Pause")]
+            for k, (key, text) in enumerate(tips):
+                yy = y + 22 + k * 26
+                kr = pygame.Rect(box.x + 20, yy, 110, 22)
+                pygame.draw.rect(screen, (46, 48, 58), kr, border_radius=5)
+                draw_text(screen, key, f.tiny, WHITE, kr.center, anchor="center", shadow=False)
+                draw_text(screen, text, f.small, (205, 205, 212), (kr.right + 14, yy + 1), shadow=False)
 
-    def _draw_track_preview(self, screen: pygame.Surface) -> None:
+    def _hint(self, row: str) -> str:
+        if row == "Modus":
+            return MODE_HINTS[self.modes[self.c["mode"]][0]]
+        if row == "Rennrunden":
+            track = self.game.tracks[TRACK_DEFS[self.c["track"]].key]
+            mins = self.c["laps"] * track.length / (TOP_SPEED * 0.8) / 60
+            return f"Renndauer ca. {max(1, round(mins))} min"
+        if row == "KI-Stärke":
+            name = self.diffs[self.c["diff"]]
+            return f"{DIFFICULTY_LEVELS[name] * 100:.0f}% Motor · {DIFFICULTY_CORNERING[name] * 100:.0f}% Kurventempo"
+        if row in ("Gegner", "Fahrerfeld"):
+            return f"Starterfeld {self.c['opponents'] + (0 if self.spectator else 1)} Autos"
+        if row == "Dein Team":
+            if not self.game.teams:
+                return "Referenzauto"
+            team = self.game.teams[self.c["team"]]
+            rank = sorted(self.game.teams, key=lambda t: -t.rating).index(team) + 1
+            return f"Auto-Ranking P{rank} von {len(self.game.teams)}"
+        if row == "Spieler":
+            return "Splitscreen an einem PC" if not self.online else "Online-Mitspieler verbunden"
+        if row == "Startreifen":
+            comp = COMPOUNDS[ALL_COMPOUNDS[self.c["tyre"]]]
+            return f"Grip {comp.grip * 100:.0f}% · {comp.name}"
+        if row == "Fahrzeug-Setup":
+            track = self.game.tracks[TRACK_DEFS[self.c["track"]].key]
+            st = self.game.setup_for(track)
+            own = track.definition.key in self.game.setups
+            return f"{'Eigenes' if own else 'Empfohlen'}: Flügel {st.front_wing:+d}/{st.rear_wing:+d} · Höhe {st.ride_height:+d}"
+        return ""
+
+    def _pills(self, screen: pygame.Surface, area: pygame.Rect, row: str, key: str,
+               choices: list[tuple[int, str, tuple[int, int, int] | None]], current: int,
+               mouse: tuple[int, int], accent: tuple[int, int, int]) -> None:
+        f = self.game.fonts
+        widths = [f.tiny.size(tr(label))[0] + (34 if dot else 22) for _, label, dot in choices]
+        total = sum(widths) + 5 * (len(widths) - 1)
+        scale = min(1.0, area.w / total) if total else 1.0
+        x = area.right - int(total * scale)
+        for (value, label, dot), w in zip(choices, widths):
+            w = int(w * scale)
+            b = self._hit((x, area.y, w, area.h), ("set", row, key, value))
+            on = value == current
+            pygame.draw.rect(screen, accent if on else (70, 72, 84) if b.collidepoint(mouse) else (46, 48, 58), b,
+                             border_radius=6)
+            tx = b.x + 11
+            if dot:
+                pygame.draw.circle(screen, dot, (b.x + 13, b.centery), 6)
+                pygame.draw.circle(screen, (20, 20, 24), (b.x + 13, b.centery), 6, 2)
+                tx = b.x + 24
+            draw_text(screen, _fit(tr(label), f.tiny, b.right - tx - 4), f.tiny, WHITE if on else (205, 205, 212),
+                      (tx, b.centery), anchor="midleft", shadow=False)
+            x += w + 5
+
+    def _stepper(self, screen: pygame.Surface, area: pygame.Rect, row: str, text: str, mouse: tuple[int, int],
+                 chip: tuple[int, int, int] | None = None) -> None:
+        f = self.game.fonts
+        bw = 36
+        left = area.right - 2 * bw - 220
+        for d, bx in ((-1, left), (1, area.right - bw)):
+            b = self._hit((bx, area.y, bw, area.h), ("step", row, d))
+            pygame.draw.rect(screen, (70, 72, 84) if b.collidepoint(mouse) else (46, 48, 58), b, border_radius=6)
+            cx, cy = b.center
+            pygame.draw.polygon(screen, WHITE, [(cx + 5 * d, cy), (cx - 4 * d, cy - 7), (cx - 4 * d, cy + 7)])
+        mid = pygame.Rect(left + bw + 4, area.y, 212, area.h)
+        pygame.draw.rect(screen, (22, 24, 30), mid, border_radius=6)
+        tx = mid.x + 10
+        if chip:
+            pygame.draw.rect(screen, chip, (mid.x + 8, mid.y + 6, 6, mid.h - 12), border_radius=2)
+            tx += 10
+        draw_text(screen, _fit(tr(text), f.small_bold, mid.right - tx - 6), f.small_bold, WHITE,
+                  (tx, mid.centery), anchor="midleft", shadow=False)
+
+    def _draw_control(self, screen: pygame.Surface, row: str, area: pygame.Rect, mouse: tuple[int, int],
+                      accent: tuple[int, int, int]) -> None:
+        c = self.c
+        if row == "Modus":
+            short = {"weekend": "Wochenende", "practice": "Training", "qualifying": "Quali+Rennen",
+                     "race": "Rennen"}
+            self._pills(screen, area, row, "mode", [(k, short.get(m[0], m[1]), None) for k, m in enumerate(self.modes)],
+                        c["mode"], mouse, accent)
+        elif row == "KI-Stärke":
+            self._pills(screen, area, row, "diff", [(k, d, None) for k, d in enumerate(self.diffs)], c["diff"],
+                        mouse, accent)
+        elif row == "Spieler":
+            self._pills(screen, area, row, "players", [(1, "1 Spieler", None), (2, "2 Spieler", None)],
+                        c.get("players", 1), mouse, accent)
+        elif row == "Startreifen":
+            choices = [(k, COMPOUNDS[key].name[:1], COMPOUNDS[key].color) for k, key in enumerate(ALL_COMPOUNDS)]
+            self._pills(screen, area, row, "tyre", choices, c["tyre"], mouse, accent)
+        elif row == "Rennrunden":
+            self._stepper(screen, area, row, f"{c['laps']} Runde{'n' if c['laps'] != 1 else ''}", mouse)
+        elif row in ("Gegner", "Fahrerfeld"):
+            self._stepper(screen, area, row, f"{c['opponents']} KI-Fahrer", mouse)
+        elif row == "Dein Team":
+            teams = self.game.teams
+            team = teams[c["team"]] if teams else None
+            self._stepper(screen, area, row, team.name if team else "Referenzauto", mouse,
+                          team.color if team else None)
+        elif row == "Fahrzeug-Setup":
+            f = self.game.fonts
+            w = 190
+            b = self._hit((area.right - w, area.y, w, area.h), ("garage",))
+            pygame.draw.rect(screen, (70, 72, 84) if b.collidepoint(mouse) else (46, 48, 58), b, border_radius=6)
+            draw_text(screen, "GARAGE ÖFFNEN", f.small_bold, WHITE, b.center, anchor="center", shadow=False)
+
+    def _draw_track_card(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
         td = TRACK_DEFS[self.c["track"]]
         track = self.game.tracks[td.key]
-        box = pygame.Rect(600, 140, 380, 250)
-        draw_panel(screen, box, PANEL, 215)
-        track.draw_outline(screen, box.inflate(-30, -30), (230, 230, 230), 4)
-        scale, off = track.minimap_transform(box.inflate(-30, -30))
-        i = int(self.t * 40) % track.n
-        p = track.center[i] * scale + off
-        pygame.draw.circle(screen, F1_RED, p, 6)
-        pygame.draw.circle(screen, WHITE, p, 6, 2)
-
-        ib = pygame.Rect(992, 140, 248, 250)
-        draw_panel(screen, ib, PANEL, 215)
-        if self.rows[self.sel] in ("Dein Team", "Startreifen") and self.game.teams:
-            self._draw_team_card(screen, ib)
-            return
-        draw_text(screen, td.name.upper(), f.large, WHITE, (ib.x + 16, ib.y + 14))
-        draw_text(screen, td.country, f.small, GREY, (ib.x + 16, ib.y + 50))
-        draw_text(screen, f"Länge: {track.length * 0.45 / 1000:.2f} km", f.small_bold, YELLOW, (ib.x + 16, ib.y + 80))
-        draw_text(screen, f"Breite: {'eng' if td.half_width < 60 else 'breit'}  ·  "
-                          f"Auslauf: {'Mauern' if td.runoff < 15 else 'Rasen'}", f.tiny, WHITE, (ib.x + 16, ib.y + 106))
-        for k, line in enumerate(_wrap(td.character, f.small, ib.w - 32)):
-            draw_text(screen, line, f.small, (200, 200, 205), (ib.x + 16, ib.y + 134 + k * 22), shadow=False)
+        box = pygame.Rect(716, 194, 504, 244)
+        draw_panel(screen, box, PANEL, 220)
+        pygame.draw.rect(screen, F1_RED, (box.x, box.y, box.w, 4), border_radius=2)
+        area = pygame.Rect(box.x + 250, box.y + 14, box.w - 262, box.h - 28)
+        track.draw_outline(screen, area, (232, 232, 238), 4)
+        scale, off = track.minimap_transform(area)
+        teams = self.game.teams or []
+        for k, team in enumerate(teams[:6]):
+            i = int((self.t * (34 + k * 1.7) + k * track.n / 7)) % track.n
+            p = track.center[i] * scale + off
+            pygame.draw.circle(screen, (12, 12, 14), p, 6)
+            pygame.draw.circle(screen, team.color, p, 4)
+        s0 = track.center[0] * scale + off
+        pygame.draw.circle(screen, WHITE, s0, 5, 2)
+        draw_text(screen, td.name.upper(), f.large, WHITE, (box.x + 18, box.y + 16))
+        draw_text(screen, td.country, f.small, GREY, (box.x + 20, box.y + 52))
+        stats = [("LÄNGE", f"{track.length * 0.45 / 1000:.2f} km"),
+                 ("BREITE", "eng" if td.half_width < 60 else "breit"),
+                 ("AUSLAUF", "Mauern" if td.runoff < 15 else "Rasen")]
+        for k, (label, val) in enumerate(stats):
+            y = box.y + 84 + k * 22
+            draw_text(screen, label, f.tiny, GREY, (box.x + 20, y + 2), shadow=False)
+            draw_text(screen, val, f.small_bold, YELLOW if k == 0 else WHITE, (box.x + 100, y), shadow=False)
+        for k, line in enumerate(_wrap(tr(td.character), f.tiny, 220)[:3]):
+            draw_text(screen, line, f.tiny, (200, 200, 208), (box.x + 20, box.y + 156 + k * 16), shadow=False)
         rec = self.game.records.tracks.get(td.key)
         mine = self.game.records.player.get(td.key)
         if rec:
-            draw_text(screen, _fit(f"Rekord {format_time(rec['time'])} · {rec['driver']}", f.tiny, ib.w - 32), f.tiny,
-                      (175, 80, 255), (ib.x + 16, ib.bottom - 40), shadow=False)
+            draw_text(screen, _fit(f"Rekord {format_time(rec['time'])} · {rec['driver']}", f.tiny, 230), f.tiny,
+                      (175, 80, 255), (box.x + 20, box.bottom - 40), shadow=False)
         if mine:
             draw_text(screen, f"Deine Bestzeit {format_time(mine['time'])}", f.tiny, (40, 210, 90),
-                      (ib.x + 16, ib.bottom - 22), shadow=False)
+                      (box.x + 20, box.bottom - 22), shadow=False)
 
-    def _draw_team_card(self, screen: pygame.Surface, ib: pygame.Rect) -> None:
+    def _panel_tabs(self, screen: pygame.Surface, box: pygame.Rect, title: str) -> None:
         f = self.game.fonts
+        draw_text(screen, title, f.tiny, GREY, (box.x + 16, box.y + 10), shadow=False)
+        if not self.spectator and self.game.teams:
+            label = "STARTERFELD (TAB)" if not self._show_grid else "TEAM (TAB)"
+            w = f.tiny.size(tr(label))[0] + 20
+            r = self._hit((box.right - w - 10, box.y + 6, w, 22), ("panel",))
+            pygame.draw.rect(screen, (46, 48, 58), r, border_radius=5)
+            draw_text(screen, label, f.tiny, WHITE, r.center, anchor="center", shadow=False)
+
+    def _draw_team_panel(self, screen: pygame.Surface) -> None:
+        f = self.game.fonts
+        box = pygame.Rect(716, 450, 504, 200)
+        draw_panel(screen, box, PANEL, 220)
         team = self.game.teams[self.c["team"]]
-        pygame.draw.rect(screen, team.color, (ib.x, ib.y, ib.w, 6), border_radius=3)
-        draw_text(screen, team.name.upper(), f.medium, WHITE, (ib.x + 16, ib.y + 16))
-        rank = sorted(self.game.teams, key=lambda t: -t.rating).index(team) + 1
-        draw_text(screen, f"Auto-Ranking: P{rank} von {len(self.game.teams)}", f.tiny, YELLOW, (ib.x + 16, ib.y + 46))
+        pygame.draw.rect(screen, team.color, (box.x, box.y, 6, box.h), border_radius=3)
+        self._panel_tabs(screen, box, "DEIN AUTO")
+        draw_text(screen, team.name.upper(), f.medium, WHITE, (box.x + 18, box.y + 30))
+        sprite = getattr(self, "_sprites", {}).get(team.name)
+        if sprite is None:
+            sprite = pygame.transform.rotozoom(build_car_sprite(team.color, (0, 230, 255)), 90, 2.2)
+            self._sprites = getattr(self, "_sprites", {})
+            self._sprites[team.name] = sprite
+        screen.blit(sprite, sprite.get_rect(center=(box.right - 70, box.y + 112)))
         stats = [("Motor", team.engine), ("Aero / Grip", team.aero), ("Topspeed", team.top_speed),
                  ("Bremsen", team.brakes), ("Reifenschonung", 2.0 - team.tyre_wear)]
+        col = team.color if sum(team.color) > 150 else (90, 100, 200)
         for k, (label, val) in enumerate(stats):
-            y = ib.y + 72 + k * 32
-            draw_text(screen, label, f.tiny, GREY, (ib.x + 16, y), shadow=False)
-            draw_text(screen, f"{(val - 1) * 100:+.0f}%", f.tiny, WHITE, (ib.right - 16, y), anchor="topright",
+            y = box.y + 66 + k * 25
+            draw_text(screen, label, f.tiny, GREY, (box.x + 18, y), shadow=False)
+            bx, bw = box.x + 140, 210
+            pygame.draw.rect(screen, (45, 45, 52), (bx, y + 4, bw, 8), border_radius=4)
+            pygame.draw.rect(screen, col, (bx, y + 4, bw * max(0.05, min(1.0, (val - 0.94) / 0.12)), 8),
+                             border_radius=4)
+            draw_text(screen, f"{(val - 1) * 100:+.0f}%", f.tiny, WHITE, (bx + bw + 40, y), anchor="topright",
                       shadow=False)
-            bar = (val - 0.94) / 0.12
-            pygame.draw.rect(screen, (45, 45, 52), (ib.x + 16, y + 16, ib.w - 32, 7), border_radius=3)
-            pygame.draw.rect(screen, team.color if team.color != (7, 11, 54) else (90, 100, 200),
-                             (ib.x + 16, y + 16, (ib.w - 32) * max(0.05, min(1.0, bar)), 7), border_radius=3)
 
-    def _draw_roster(self, screen: pygame.Surface) -> None:
+    def _draw_grid_panel(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
-        brains = self.game.brains
-        track_key = TRACK_DEFS[self.c["track"]].key
-        box = pygame.Rect(600, 402, 640, 298)
-        draw_panel(screen, box, PANEL, 215)
+        box = pygame.Rect(716, 450, 504, 200)
+        draw_panel(screen, box, PANEL, 220)
         roster = self.game.field_preview(self.spectator, self.c["opponents"])
-        draw_text(screen, f"STARTERFELD · {len(roster) + (0 if self.spectator else 1)} AUTOS  "
-                          "(data/driver_pool.json)", f.tiny, GREY, (box.x + 14, box.y + 10), shadow=False)
-        per_col = 11
-        cols = 1 if len(roster) <= per_col else 2
-        col_w = (box.w - 20) // cols
-        if cols == 1:
-            for x, h in ((300, "GEHIRN / STAND"), (450, "WERTUNG"), (530, "TEST-RUNDE")):
-                draw_text(screen, h, f.tiny, GREY, (box.x + x, box.y + 10), shadow=False)
-        row_h = min(23, (box.h - 38) // per_col)
-        for i, prof in enumerate(roster):
+        self._panel_tabs(screen, box, f"STARTERFELD · {len(roster) + (0 if self.spectator else 1)} AUTOS")
+        per_col = 8
+        cols = 3
+        col_w = (box.w - 24) // cols
+        shown = roster[:per_col * cols]
+        for i, prof in enumerate(shown):
             col, row = divmod(i, per_col)
-            x, y = box.x + 10 + col * col_w, box.y + 34 + row * row_h
-            cp = brains.checkpoint(prof.brain, prof.checkpoint) or {}
-            lap = (cp.get("benchmark") or {}).get(track_key)
+            x, y = box.x + 12 + col * col_w, box.y + 34 + row * 20
             rating = prof.rating or {"final": 90, "mid": 84, "early": 78}.get(prof.checkpoint, 84)
-            pygame.draw.rect(screen, prof.color, (x + 4, y + 3, 5, row_h - 6))
-            if cols == 1:
-                draw_text(screen, _fit(prof.name, f.small_bold, 150), f.small_bold, WHITE, (x + 18, y), shadow=False)
-                draw_text(screen, _fit(prof.team, f.tiny, 115), f.tiny, (150, 150, 160), (x + 172, y + 3),
-                          shadow=False)
-                draw_text(screen, f"{prof.brain} / {prof.checkpoint}", f.tiny, (255, 200, 120), (x + 290, y + 3),
-                          shadow=False)
-                draw_text(screen, str(rating), f.mono, YELLOW, (x + 450, y + 2), shadow=False)
-                draw_text(screen, f"{lap:.2f}s" if lap else "--", f.mono, (120, 230, 140) if lap else GREY,
-                          (x + 520, y + 2), shadow=False)
-            else:
-                draw_text(screen, _fit(prof.name, f.tiny, 130), f.tiny, WHITE, (x + 16, y + 3), shadow=False)
-                draw_text(screen, f"{prof.brain[:4]}/{prof.checkpoint}", f.tiny, (255, 200, 120), (x + 152, y + 3),
-                          shadow=False)
-                draw_text(screen, str(rating), f.mono, YELLOW, (x + 250, y + 2), shadow=False)
+            pygame.draw.rect(screen, prof.color, (x, y + 3, 4, 13))
+            draw_text(screen, _fit(prof.name, f.tiny, col_w - 44), f.tiny, WHITE, (x + 10, y + 2), shadow=False)
+            draw_text(screen, str(rating), f.tiny, YELLOW, (x + col_w - 8, y + 2), anchor="topright", shadow=False)
+        if len(roster) > len(shown):
+            draw_text(screen, f"+ {len(roster) - len(shown)} weitere", f.tiny, GREY, (box.right - 16, box.bottom - 20),
+                      anchor="topright", shadow=False)
+
+    def _draw_start_bar(self, screen: pygame.Surface, mouse: tuple[int, int], accent: tuple[int, int, int]) -> None:
+        f = self.game.fonts
+        st = self.game.settings
+        sel_row = self.rows[self.sel]
+        r = self._hit((716, 662, 504, 46), ("start",))
+        hot = sel_row == "START" or r.collidepoint(mouse)
+        pulse = 0.5 + 0.5 * math.sin(self.t * 4) if hot else 0.0
+        col = tuple(int(c * (0.78 + 0.22 * pulse)) for c in accent) if hot else tuple(c // 2 for c in accent)
+        pygame.draw.rect(screen, col, r, border_radius=10)
+        label = "RENNEN ANSEHEN" if self.spectator else "RENNEN STARTEN"
+        draw_text(screen, label, f.large, (25, 20, 5) if hot and self.spectator else WHITE, r.center, anchor="center",
+                  shadow=False)
+        summary = (f"Fahrhilfen {['Aus', 'Mittel', 'Voll'][st.assists]} · {'3D' if st.view3d else '2D'} · "
+                   f"Schaden {DAMAGE_MODES[st.damage]} · Reifen {TYRE_WEAR_MODES[st.tyre_wear][0]} · "
+                   f"Wetter {WEATHER_MODES[st.weather]}")
+        draw_text(screen, _fit(tr(summary), f.tiny, 640), f.tiny, (120, 200, 255), (60, 664), shadow=False)
+        keys = "Pfeile wählen/ändern · Klick auf Strecke/Knöpfe · ENTER starten" + \
+            ("" if self.spectator else " · TAB Team/Feld · R Zufallsrennen") + " · ESC zurück"
+        draw_text(screen, _fit(tr(keys), f.tiny, 640), f.tiny, GREY, (60, 686), shadow=False)
 
 
 class SettingsScreen:
@@ -1380,6 +1612,10 @@ class ChampionshipScreen:
 
 
 class AnalysisScreen:
+    """Race analysis: key figures, then tabs for the position chart, lap times, tyre strategies and the result."""
+
+    TABS = ["POSITIONEN", "RUNDENZEITEN", "REIFENSTRATEGIE", "ERGEBNIS"]
+    handles_mouse = True
 
     def __init__(self, game: "Game", session: "RaceSession", on_continue: Callable[[], None],
                  continue_label: str) -> None:
@@ -1388,9 +1624,13 @@ class AnalysisScreen:
         self.continue_label = continue_label
         self.bg = _Background()
         self.t = 0.0
+        self.tab = 0
+        self._hits: list[tuple[pygame.Rect, tuple]] = []
         order = session.standings()
+        self.order = order
         self.track_name = session.track.name
         self.laps = session.total_laps
+        self.rule = getattr(session, "compound_rule", False)
         self.rows = []
         for k, car in enumerate(order):
             hist = list(session.pos_history.get(car, [car.grid_slot]))
@@ -1403,51 +1643,129 @@ class AnalysisScreen:
         if session.rc.active:
             self.periods.append(f"{session.rc.mode} bis Rennende")
         fastest = min((c for c in order if c.best_lap), key=lambda c: c.best_lap, default=None)
+        self.fastest = fastest
         gains = [(c.grid_slot - (k + 1), c) for k, c in enumerate(order) if not c.dnf and c.grid_slot]
         best_gain = max(gains, key=lambda g: g[0], default=None)
         losses = min(gains, key=lambda g: g[0], default=None)
         self.facts = []
-        if fastest:
-            self.facts.append(("Schnellste Runde", f"{fastest.short} {format_time(fastest.best_lap)}"))
         if best_gain and best_gain[0] > 0:
             self.facts.append(("Meiste Plätze gewonnen", f"{best_gain[1].short} +{best_gain[0]}"))
         if losses and losses[0] < 0:
             self.facts.append(("Meiste Plätze verloren", f"{losses[1].short} {losses[0]}"))
+        dnfs = [c.short for c in order if c.dnf and not c.dsq]
+        self.facts.append(("Ausfälle", ", ".join(dnfs) if dnfs else "keine"))
+        dsq = [c.short for c in order if c.dsq]
+        if dsq:
+            self.facts.append(("Disqualifiziert", ", ".join(dsq)))
         trap = max(order, key=lambda c: c.vmax, default=None)
+        self.trap = None
         if trap is not None and trap.vmax > 0:
             v, unit = speed_in(trap.vmax * PX_PER_S_TO_KMH, game.settings.units)
-            self.facts.append(("Speedtrap", f"{trap.short} {v:.0f} {unit}"))
-        stops = sum(c.pit_stops for c in order)
-        self.facts.append(("Boxenstopps gesamt", str(stops)))
-        dnfs = [c.short for c in order if c.dnf]
-        self.facts.append(("Ausfälle", ", ".join(dnfs) if dnfs else "keine"))
-        self.facts.append(("Safety Car / VSC", " · ".join(self.periods) if self.periods else "keine"))
+            self.trap = (trap.short, f"{v:.0f} {unit}")
+        self.stops = sum(c.pit_stops for c in order)
         self.highlight = {c for c in order[:3]} | {c for c in order if c.is_player}
         focus_team = session.config.focus_team
         if focus_team:
             self.highlight |= {c for c in order if c.profile.team == focus_team}
+        self.player = next((c for c in order if c.is_player), None)
 
+    # ------------------------------------------------------------------ input
     def handle_event(self, event: pygame.event.Event) -> None:
-        if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE,
-                                                          pygame.K_ESCAPE):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for rect, action in reversed(self._hits):
+                if rect.collidepoint(event.pos):
+                    if action[0] == "tab":
+                        self.tab = action[1]
+                    elif action[0] == "continue":
+                        self.on_continue()
+                    return
+            return
+        if event.type == pygame.MOUSEWHEEL and event.y:
+            self.tab = (self.tab - event.y) % len(self.TABS)
+            return
+        if event.type != pygame.KEYDOWN:
+            return
+        if event.key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_TAB, pygame.K_a, pygame.K_d):
+            back = event.key in (pygame.K_LEFT, pygame.K_a) or (event.key == pygame.K_TAB and
+                                                               event.mod & pygame.KMOD_SHIFT)
+            self.tab = (self.tab + (-1 if back else 1)) % len(self.TABS)
+        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE, pygame.K_ESCAPE):
             self.on_continue()
 
     def update(self, dt: float) -> None:
         self.t += dt
         self.bg.update(dt)
 
+    # ------------------------------------------------------------------ drawing
     def draw(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
+        self._hits = []
+        mouse = pygame.mouse.get_pos()
         self.bg.draw(screen)
-        pygame.draw.rect(screen, (60, 160, 255), (60, 30, 8, 56))
-        draw_text(screen, "RENNANALYSE", f.big, WHITE, (84, 24))
-        draw_text(screen, f"Grand Prix von {self.track_name} · Positionsverlauf über {self.laps} Runden", f.small,
-                  GREY, (86, 72))
-        box = pygame.Rect(60, 106, 840, 560)
+        pygame.draw.rect(screen, (60, 160, 255), (60, 22, 8, 54))
+        draw_text(screen, "RENNANALYSE", f.big, WHITE, (84, 18))
+        draw_text(screen, f"Grand Prix von {self.track_name} · {self.laps} Runden", f.small, GREY, (86, 66))
+        self._tiles(screen)
+        x = 60
+        for k, name in enumerate(self.TABS):
+            w = f.small_bold.size(tr(name))[0] + 40
+            r = pygame.Rect(x, 172, w, 34)
+            self._hits.append((r, ("tab", k)))
+            active = k == self.tab
+            pygame.draw.rect(screen, PANEL_LIGHT if active else (48, 50, 60) if r.collidepoint(mouse) else
+                             (26, 28, 36), r, border_top_left_radius=8, border_top_right_radius=8)
+            if active:
+                pygame.draw.rect(screen, (60, 160, 255), (r.x, r.bottom - 4, r.w, 4))
+            draw_text(screen, name, f.small_bold, WHITE if active else GREY, r.center, anchor="center", shadow=False)
+            x += w + 6
+        box = pygame.Rect(60, 206, 1160, 452)
         draw_panel(screen, box, PANEL, 220)
+        (self._positions, self._laptimes, self._strategies, self._result)[self.tab](screen, box)
+        cont = pygame.Rect(SCREEN_WIDTH // 2 - 200, 668, 400, 40)
+        self._hits.append((cont, ("continue",)))
+        hot = cont.collidepoint(mouse)
+        pulse = 0.6 + 0.4 * math.sin(self.t * 4)
+        pygame.draw.rect(screen, (60, 160, 255) if hot else (34, 60, 96), cont, border_radius=8)
+        draw_text(screen, f"ENTER: {tr(self.continue_label)}", f.medium,
+                  WHITE if hot else tuple(int(c * pulse) for c in WHITE), cont.center, anchor="center", shadow=False)
+        draw_text(screen, "Links/rechts oder Klick: Tabs", f.tiny, GREY, (SCREEN_WIDTH - 60, 682), anchor="topright",
+                  shadow=False)
+
+    def _tiles(self, screen: pygame.Surface) -> None:
+        f = self.game.fonts
+        win = self.order[0] if self.order else None
+        tiles = [("SIEGER", win.short if win else "-", (255, 215, 0),
+                  format_time(win.finish_time) if win and win.finish_time and win.finish_time < 1e5 else "")]
+        if self.player is not None:
+            p = self.order.index(self.player) + 1
+            txt = "DSQ" if self.player.dsq else "DNF" if self.player.dnf else f"P{p}"
+            delta = (self.player.grid_slot - p) if self.player.grid_slot and not self.player.dnf else 0
+            tiles.append(("DEIN ERGEBNIS", txt, CYAN, f"Start P{self.player.grid_slot}" + (f" ({delta:+d})" if delta
+                                                                                          else "")))
+        if self.fastest is not None:
+            tiles.append(("SCHNELLSTE RUNDE", self.fastest.short, (175, 80, 255), format_time(self.fastest.best_lap)))
+        if self.trap is not None:
+            tiles.append(("SPEEDTRAP", self.trap[0], WHITE, self.trap[1]))
+        tiles.append(("BOXENSTOPPS", str(self.stops), ORANGE, "gesamt"))
+        tiles.append(("SAFETY CAR / VSC", str(len(self.periods)) if self.periods else "keine", YELLOW,
+                      _fit(" · ".join(self.periods), f.tiny, 150) if self.periods else ""))
+        n = len(tiles)
+        w = (1160 - 10 * (n - 1)) // n
+        for k, (label, big, col, sub) in enumerate(tiles):
+            r = pygame.Rect(60 + k * (w + 10), 94, w, 68)
+            draw_panel(screen, r, PANEL, 215)
+            pygame.draw.rect(screen, col, (r.x, r.y, 4, r.h), border_radius=2)
+            draw_text(screen, label, f.tiny, GREY, (r.x + 14, r.y + 8), shadow=False)
+            draw_text(screen, _fit(tr(big), f.medium, r.w - 24), f.medium, col, (r.x + 14, r.y + 24), shadow=False)
+            if sub:
+                draw_text(screen, _fit(tr(sub), f.tiny, r.w - 24), f.tiny, (200, 200, 208), (r.x + 14, r.y + 50),
+                          shadow=False)
+
+    def _positions(self, screen: pygame.Surface, box: pygame.Rect) -> None:
+        f = self.game.fonts
         n = max(1, len(self.rows))
         laps = max(1, self.laps)
-        gx, gy, gw, gh = box.x + 50, box.y + 24, box.w - 120, box.h - 60
+        gx, gy, gw, gh = box.x + 54, box.y + 24, box.w - 360, box.h - 60
 
         def pt(lap: int, pos: int) -> tuple[float, float]:
             return gx + gw * lap / laps, gy + gh * (pos - 1) / max(1, n - 1)
@@ -1477,18 +1795,150 @@ class AnalysisScreen:
                     pygame.draw.circle(screen, (255, 200, 40), (x, y), 4)
             if progress >= 1.0:
                 ex, ey = pts[-1]
-                label = f"{car.short}" + (" DNF" if car.dnf else "")
+                label = f"{car.short}" + (" DSQ" if car.dsq else " DNF" if car.dnf else "")
                 draw_text(screen, label, f.tiny, WHITE if strong else GREY, (ex + 6, ey - 7), shadow=False)
         draw_text(screen, "gelber Punkt = Boxenstopp", f.tiny, (255, 200, 40), (gx, box.bottom - 18), shadow=False)
-        fb = pygame.Rect(920, 106, 320, 560)
-        draw_panel(screen, fb, PANEL, 220)
-        draw_text(screen, "FAKTEN", f.tiny, GREY, (fb.x + 16, fb.y + 12), shadow=False)
-        y = fb.y + 38
+        # side list: facts
+        fx = box.right - 270
+        pygame.draw.line(screen, (44, 46, 56), (fx - 16, box.y + 16), (fx - 16, box.bottom - 16))
+        draw_text(screen, "FAKTEN", f.tiny, GREY, (fx, box.y + 16), shadow=False)
+        y = box.y + 40
         for label, val in self.facts:
-            draw_text(screen, label, f.tiny, GREY, (fb.x + 16, y), shadow=False)
-            for k, line in enumerate(_wrap(val, f.small_bold, fb.w - 32)[:3]):
-                draw_text(screen, line, f.small_bold, WHITE, (fb.x + 16, y + 16 + k * 20), shadow=False)
-            y += 26 + 20 * min(3, len(_wrap(val, f.small_bold, fb.w - 32)))
-        pulse = 0.6 + 0.4 * math.sin(self.t * 4)
-        draw_text(screen, f"ENTER: {self.continue_label}", f.medium, tuple(int(c * pulse) for c in WHITE),
-                  (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30), anchor="center")
+            draw_text(screen, label, f.tiny, GREY, (fx, y), shadow=False)
+            lines = _wrap(tr(val), f.small_bold, 250)[:3]
+            for k, line in enumerate(lines):
+                draw_text(screen, line, f.small_bold, WHITE, (fx, y + 16 + k * 20), shadow=False)
+            y += 26 + 20 * len(lines)
+
+    def _laptimes(self, screen: pygame.Surface, box: pygame.Rect) -> None:
+        f = self.game.fonts
+        cars = [c for c, _h, _p in self.rows if c in self.highlight and c.lap_times][:6]
+        if not cars:
+            draw_text(screen, "Keine Rundenzeiten.", f.small, GREY, (box.x + 20, box.y + 20), shadow=False)
+            return
+        plot = pygame.Rect(box.x + 70, box.y + 24, box.w - 300, box.h - 64)
+        # leave out the standing start and pit laps from the scale (they would squash everything else)
+        sample = [t for c in cars for k, t in enumerate(c.lap_times) if k > 0 and (k + 1) not in c.pit_laps]
+        if not sample:
+            sample = [t for c in cars for t in c.lap_times]
+        lo, hi = min(sample), max(sample)
+        if hi - lo < 0.5:
+            hi = lo + 0.5
+        pad = (hi - lo) * 0.1
+        lo, hi = lo - pad, hi + pad
+        laps = max(len(c.lap_times) for c in cars)
+        for k in range(4):
+            t = lo + (hi - lo) * k / 3
+            y = plot.y + plot.h * (t - lo) / (hi - lo)
+            pygame.draw.line(screen, (38, 40, 48), (plot.x, y), (plot.right, y))
+            draw_text(screen, format_time(t)[2:], f.tiny, GREY, (plot.x - 8, y - 7), anchor="topright", shadow=False)
+        step = plot.w / max(1, laps - 1)
+        for lap in range(laps):
+            if laps <= 20 or lap % 2 == 0:
+                draw_text(screen, str(lap + 1), f.tiny, GREY, (plot.x + lap * step, plot.bottom + 6), anchor="midtop",
+                          shadow=False)
+        for car in cars:
+            col = _vis(car.color)
+            pts = [(plot.x + k * step, plot.y + plot.h * (min(hi, max(lo, t)) - lo) / (hi - lo))
+                   for k, t in enumerate(car.lap_times)]
+            if len(pts) >= 2:
+                pygame.draw.lines(screen, col, False, pts, 3 if car.is_player else 2)
+            for k, (x, y) in enumerate(pts):
+                if (k + 1) in car.pit_laps:
+                    pygame.draw.circle(screen, (255, 200, 40), (x, y), 5, 2)
+                elif car.best_lap and abs(car.lap_times[k] - car.best_lap) < 1e-6:
+                    pygame.draw.circle(screen, (175, 80, 255), (x, y), 5)
+        lx = box.right - 210
+        draw_text(screen, "LEGENDE", f.tiny, GREY, (lx, box.y + 20), shadow=False)
+        for k, car in enumerate(cars):
+            y = box.y + 44 + k * 44
+            pygame.draw.rect(screen, _vis(car.color), (lx, y + 6, 22, 6), border_radius=3)
+            draw_text(screen, car.short, f.small_bold, CYAN if car.is_player else WHITE, (lx + 32, y), shadow=False)
+            best = format_time(car.best_lap) if car.best_lap else "-"
+            draw_text(screen, f"beste {best}", f.tiny, GREY, (lx + 32, y + 20), shadow=False)
+        draw_text(screen, "höher = schneller · gelber Ring = Boxenstopp · lila = beste Runde", f.tiny, GREY,
+                  (plot.x, box.bottom - 18), shadow=False)
+
+    def _strategies(self, screen: pygame.Surface, box: pygame.Rect) -> None:
+        f = self.game.fonts
+        rows = self.rows
+        n = len(rows)
+        rh = min(30, (box.h - 56) // max(1, n))
+        bx, bw = box.x + 230, box.w - 330
+        laps = max(1, self.laps)
+        draw_text(screen, "REIFEN JE STINT · Zahl = Runden auf dem Satz", f.tiny, GREY, (box.x + 16, box.y + 12),
+                  shadow=False)
+        if self.rule:
+            draw_text(screen, "Ab 12 Runden Pflicht: zwei verschiedene Mischungen (sonst DSQ)", f.tiny, ORANGE,
+                      (box.right - 16, box.y + 12), anchor="topright", shadow=False)
+        for lap in range(0, laps + 1, max(1, laps // 10)):
+            x = bx + bw * lap / laps
+            pygame.draw.line(screen, (36, 38, 46), (x, box.y + 34), (x, box.y + 34 + n * rh))
+        for k, (car, _hist, pos) in enumerate(rows):
+            y = box.y + 36 + k * rh
+            if car.is_player:
+                pygame.draw.rect(screen, (0, 60, 90), (box.x + 8, y - 2, box.w - 16, rh - 2), border_radius=4)
+            draw_text(screen, str(pos), f.tiny, WHITE, (box.x + 18, y + (rh - 18) // 2), shadow=False)
+            pygame.draw.rect(screen, _vis(car.color), (box.x + 44, y + 3, 4, rh - 8))
+            draw_text(screen, _fit(car.name, f.tiny, 160), f.tiny, CYAN if car.is_player else WHITE,
+                      (box.x + 56, y + (rh - 18) // 2), shadow=False)
+            stints = list(getattr(car, "stint_log", []))
+            end = len(car.lap_times) if car.dnf else laps
+            for s_k, (comp, start) in enumerate(stints):
+                stop = stints[s_k + 1][1] if s_k + 1 < len(stints) else end
+                if stop <= start:
+                    continue
+                c = COMPOUNDS.get(comp)
+                col = c.color if c else (120, 120, 130)
+                x0 = bx + bw * start / laps
+                x1 = bx + bw * min(stop, laps) / laps
+                r = pygame.Rect(int(x0) + 1, y + 2, max(4, int(x1 - x0) - 2), rh - 6)
+                pygame.draw.rect(screen, col, r, border_radius=4)
+                label = f"{c.letter if c else '?'} {stop - start}"
+                if r.w > f.tiny.size(label)[0] + 8:
+                    draw_text(screen, label, f.tiny, (16, 16, 20), (r.x + 6, r.centery), anchor="midleft",
+                              shadow=False)
+            status = "DSQ" if car.dsq else "DNF" if car.dnf else f"{car.pit_stops} Stopp" + \
+                ("s" if car.pit_stops != 1 else "")
+            draw_text(screen, tr(status), f.tiny, RED_TXT if car.dnf else GREY, (box.right - 16, y + (rh - 18) // 2),
+                      anchor="topright", shadow=False)
+
+    def _result(self, screen: pygame.Surface, box: pygame.Rect) -> None:
+        f = self.game.fonts
+        cols = [("POS", 16), ("FAHRER", 64), ("TEAM", 290), ("START", 480), ("+/-", 548), ("STOPPS", 610),
+                ("BESTE RUNDE", 690), ("STATUS", 840)]
+        for name, x in cols:
+            draw_text(screen, name, f.tiny, GREY, (box.x + x, box.y + 12), shadow=False)
+        n = len(self.rows)
+        rh = min(26, (box.h - 44) // max(1, n))
+        for k, (car, _hist, pos) in enumerate(self.rows):
+            y = box.y + 34 + k * rh
+            if car.is_player:
+                pygame.draw.rect(screen, (0, 60, 90), (box.x + 8, y - 2, box.w - 16, rh - 2), border_radius=4)
+            elif k % 2:
+                pygame.draw.rect(screen, (26, 28, 36), (box.x + 8, y - 2, box.w - 16, rh - 2), border_radius=4)
+            delta = (car.grid_slot - pos) if car.grid_slot and not car.dnf else 0
+            best = format_time(car.best_lap) if car.best_lap else "-"
+            fastest = self.fastest is car
+            status = car.dsq_reason if car.dsq else "Ausfall" if car.dnf else "im Ziel"
+            cells = [(str(pos), MEDAL_COL[pos - 1] if pos <= 3 and not car.dnf else WHITE),
+                     (_fit(car.name, f.small_bold, 210), CYAN if car.is_player else WHITE),
+                     (_fit(car.profile.team, f.tiny, 180), GREY),
+                     (f"P{car.grid_slot}" if car.grid_slot else "-", WHITE),
+                     (f"{delta:+d}" if delta else "=", GREEN if delta > 0 else RED_TXT if delta < 0 else GREY),
+                     (str(car.pit_stops), WHITE),
+                     (best, (175, 80, 255) if fastest else WHITE),
+                     (_fit(tr(status), f.tiny, box.w - 856), RED_TXT if car.dnf else GREY)]
+            for (text, col), (_name, x) in zip(cells, cols):
+                font = f.small_bold if x == 64 else f.tiny
+                draw_text(screen, text, font, col, (box.x + x, y + (rh - 20) // 2 + 2), shadow=False)
+            pygame.draw.rect(screen, _vis(car.color), (box.x + 54, y + 3, 4, rh - 8))
+
+
+def _vis(col: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Very dark team colours are invisible on the panels: lift them."""
+    return col if sum(col) > 160 else (110, 120, 200)
+
+
+RED_TXT = (255, 90, 80)
+MEDAL_COL = [(255, 215, 0), (200, 200, 210), (205, 127, 50)]

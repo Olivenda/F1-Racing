@@ -648,6 +648,10 @@ class HUD:
                     else "VSC - Tempo halten, Delta beachten."), YELLOW
         if car.penalty_unserved > 0 and s.kind == "race":
             return f"{car.penalty_unserved:.0f}s Strafe offen - beim Stopp abgesessen.", ORANGE
+        if getattr(s, "compound_rule", False) and not s.compound_rule_met(car) and remaining is not None \
+                and remaining <= max(3, s.total_laps // 3) and getattr(s, "race_started", False):
+            return (f"Pflichtstopp! Noch {remaining} Rd. - wir brauchen eine zweite Reifenmischung, sonst DSQ. (B)",
+                    (255, 90, 90))
         if d.cooling > 0.4:
             return "Kühler beschädigt - Motor wird heiß, Leistung reduziert. Box!", (255, 90, 90)
         if d.front_wing > 0.4 or d.suspension > 0.35:
@@ -812,6 +816,8 @@ class HUD:
         info = []
         if car.pit_stops:
             info.append(f"Stopps {car.pit_stops}")
+            if getattr(s, "compound_rule", False):
+                info.append("2. Mischung OK" if s.compound_rule_met(car) else "2. Mischung FEHLT")
         nxt = car.next_planned_stop() if s.kind == "race" else None
         if nxt is not None:
             info.append(f"Plan Rd. {nxt[0]} {COMPOUNDS[nxt[1]].letter}")

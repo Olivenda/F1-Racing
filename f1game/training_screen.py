@@ -15,7 +15,7 @@ from .settings import CYAN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDT
 from .track import Track
 from .training import REWARD_STYLES, Trainer
 from .i18n import tr
-from .utils import draw_panel, draw_text, mouse_item
+from .utils import draw_panel, draw_text, draw_value_arrows, mouse_item
 
 if TYPE_CHECKING:
     from .game import Game
@@ -262,7 +262,7 @@ class TrainingScreen:
             if sel:
                 pygame.draw.rect(screen, PANEL_LIGHT, (px + 12, ry, pw - 24, 50), border_radius=6)
                 pygame.draw.rect(screen, (40, 110, 200), (px + 12, ry, 5, 50), border_radius=2)
-                draw_text(screen, "<  >", f.large, YELLOW, (px + pw - 40, ry + 25), anchor="midright")
+                draw_value_arrows(screen, pygame.Rect(px + 12, ry, pw - 24, 50), idle=(40, 70, 120))
             draw_text(screen, row.upper(), f.tiny, GREY, (px + 30, ry + 8), shadow=False)
             draw_text(screen, values[row], f.medium, WHITE, (px + 30, ry + 24), shadow=False)
         if self.ROWS[self.sel] in ("GPU", "Trainer") and self.engine == "c":

@@ -21,7 +21,7 @@ from .car_setup import CarSetup
 from .i18n import tr
 from .pitlane import SPEED_LIMIT
 from .race_control import PUNCTURE_WEAR
-from .settings import (CYAN, GREEN, GREY, PANEL, PANEL_LIGHT, PURPLE, PX_PER_S_TO_KMH, SCREEN_HEIGHT, SCREEN_WIDTH,
+from .settings import (CYAN, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PURPLE, PX_PER_S_TO_KMH, SCREEN_HEIGHT, SCREEN_WIDTH,
                        WHITE, YELLOW)
 from .tyres import COMPOUND_ORDER, COMPOUNDS
 from .user_settings import speed_in
@@ -47,7 +47,8 @@ def _pct(part: float, total: float) -> float:
 
 class PracticeAnalysisScreen:
 
-    VISIBLE_ROWS = 13
+    VISIBLE_ROWS = 10
+    RULE_LAPS = 12          # from this race length two different dry compounds are mandatory
 
     def __init__(self, game: "Game", car: "Player_Car", race_laps: int, on_continue: Callable[[], None],
                  continue_label: str, session: "Session | None" = None) -> None:
@@ -280,6 +281,8 @@ class PracticeAnalysisScreen:
                         total += part
                         start += length
                     else:
+                        if n >= self.RULE_LAPS and len(set(combo)) < 2:
+                            continue        # one compound only would be a disqualification
                         plans[tuple(zip(combo, split))] = total
         ranked = sorted(plans.items(), key=lambda kv: kv[1])[:8]
         return [(total, list(plan)) for plan, total in ranked]
@@ -321,14 +324,18 @@ class PracticeAnalysisScreen:
         draw_text(screen, f"{self.car.track.name} · {len(self.log)} Runden · Hochrechnung auf {self.race_laps} "
                           f"Rennrunden", f.small, GREY, (86, 66))
         x = 40
+        mouse = pygame.mouse.get_pos()
         for k, name in enumerate(TABS):
-            w = f.small_bold.size(name)[0] + 30
+            w = f.small_bold.size(tr(name))[0] + 36
             active = k == self.tab
-            pygame.draw.rect(screen, CYAN if active else (40, 42, 52), (x, 94, w, 30), border_radius=6)
-            mouse_item((x, 94, w, 30), self, k, attr="tab", key=None, hover=False)
-            draw_text(screen, name, f.small_bold, (10, 12, 16) if active else WHITE, (x + w // 2, 109),
-                      anchor="center", shadow=False)
-            x += w + 8
+            r = pygame.Rect(x, 92, w, 34)
+            pygame.draw.rect(screen, PANEL_LIGHT if active else (48, 50, 60) if r.collidepoint(mouse) else
+                             (26, 28, 36), r, border_top_left_radius=8, border_top_right_radius=8)
+            if active:
+                pygame.draw.rect(screen, CYAN, (r.x, r.bottom - 4, r.w, 4))
+            mouse_item(r, self, k, attr="tab", key=None, hover=False)
+            draw_text(screen, name, f.small_bold, WHITE if active else GREY, r.center, anchor="center", shadow=False)
+            x += w + 6
         (self._tab_overview, self._tab_sectors, self._tab_style, self._tab_setup, self._tab_strategy)[self.tab](screen)
         hint = draw_text(screen, f"Links/rechts Tabs · ENTER {self.continue_label} · G Garage · Pfeile blättern · "
                                  "ESC Menü", f.small, GREY, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 18), anchor="center")
@@ -347,13 +354,43 @@ class PracticeAnalysisScreen:
 
     # ------------------------------------------------------------------ tab: overview
     def _tab_overview(self, screen: pygame.Surface) -> None:
+        self._draw_tiles(screen)
         self._draw_table(screen)
         self._draw_chart(screen)
         self._lines(screen, pygame.Rect(40, 466, 1200, 214), "RENNINGENIEUR · AUSWERTUNG", self.findings)
 
+    def _draw_tiles(self, screen: pygame.Surface) -> None:
+        """Key figures of the session at a glance."""
+        f = self.game.fonts
+        clean = self._clean()
+        valid = [e["time"] for e in self.log if e["valid"]]
+        best = min(valid) if valid else None
+        pace = _avg([e["time"] for e in clean if e["valid"]])
+        spread = (max(valid) - min(valid)) if len(valid) >= 2 else None
+        vmax = max((e["vmax"] for e in self.log), default=0.0)
+        v, unit = speed_in(vmax, self.game.settings.units)
+        rates = self._wear_rates()
+        wear = _avg(list(rates.values()))
+        fuel = _avg([e["fuel_used"] for e in clean if e["fuel_used"]])
+        tiles = [("BESTZEIT", format_time(best) if best else "-", PURPLE),
+                 ("Ø RENNPACE", format_time(pace) if pace else "-", WHITE),
+                 ("KONSTANZ", f"±{spread / 2:.2f}s" if spread is not None else "-",
+                  GREEN if spread is not None and spread < 1.0 else YELLOW),
+                 ("TOPSPEED", f"{v:.0f} {unit}" if vmax else "-", WHITE),
+                 ("VERSCHLEISS / RD.", f"{wear * 100:.1f}%" if wear else "-", YELLOW),
+                 ("SPRIT / RD.", f"{fuel:.2f} kg" if fuel else "-", CYAN)]
+        n = len(tiles)
+        w = (1200 - 10 * (n - 1)) // n
+        for k, (label, val, col) in enumerate(tiles):
+            r = pygame.Rect(40 + k * (w + 10), 134, w, 54)
+            draw_panel(screen, r, PANEL, 215)
+            pygame.draw.rect(screen, col, (r.x, r.y, 4, r.h), border_radius=2)
+            draw_text(screen, label, f.tiny, GREY, (r.x + 14, r.y + 8), shadow=False)
+            draw_text(screen, val, f.medium, col, (r.x + 14, r.y + 24), shadow=False)
+
     def _draw_table(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
-        box = pygame.Rect(40, 134, 640, 322)
+        box = pygame.Rect(40, 198, 640, 258)
         draw_panel(screen, box, PANEL, 215)
         cols = [("RD.", 14), ("ZEIT", 50), ("REIFEN", 150), ("VERSCHL.", 262), ("SPRIT", 352), ("PLANKE", 446),
                 ("VMAX", 580)]
@@ -386,34 +423,57 @@ class PracticeAnalysisScreen:
 
     def _draw_chart(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
-        box = pygame.Rect(700, 134, 540, 322)
+        box = pygame.Rect(700, 198, 540, 258)
         draw_panel(screen, box, PANEL, 215)
-        draw_text(screen, "RUNDENZEIT & REIFENVERSCHLEISS", f.tiny, GREY, (box.x + 14, box.y + 12), shadow=False)
+        draw_text(screen, "RUNDENZEITEN & REIFENVERSCHLEISS", f.tiny, GREY, (box.x + 14, box.y + 10), shadow=False)
         log = self.log[-24:]
         if len(log) < 2:
             draw_text(screen, "Mindestens 2 Runden für den Verlauf.", f.small, GREY, (box.x + 14, box.y + 46),
                       shadow=False)
             return
-        plot = pygame.Rect(box.x + 50, box.y + 40, box.w - 70, box.h - 80)
+        plot = pygame.Rect(box.x + 62, box.y + 34, box.w - 80, box.h - 74)
         times = [e["time"] for e in log]
         lo, hi = min(times), max(times)
         if hi - lo < 0.5:
             hi = lo + 0.5
-        step = plot.w / len(log)
+        pad = (hi - lo) * 0.08
+        lo, hi = lo - pad, hi + pad
+        step = plot.w / max(1, len(log) - 1)
+        # grid with three time labels
+        for k in range(3):
+            t = lo + (hi - lo) * k / 2
+            y = plot.y + plot.h * (t - lo) / (hi - lo)
+            pygame.draw.line(screen, (38, 40, 48), (plot.x, y), (plot.right, y))
+            draw_text(screen, format_time(t)[2:], f.tiny, GREY, (plot.x - 6, y - 7), anchor="topright",
+                      shadow=False)
+        # tyre wear as bars along the bottom (0-100 % = lower third)
+        bar_h = plot.h * 0.33
         for k, e in enumerate(log):
-            h = 12 + (plot.h - 12) * (1.0 - (e["time"] - lo) / (hi - lo))
-            col = (160, 110, 40) if e["pit"] else (90, 140, 220) if e["valid"] else (80, 80, 90)
-            pygame.draw.rect(screen, col, (plot.x + k * step + 2, plot.bottom - h, max(2, step - 4), h),
+            comp = COMPOUNDS.get(e["compound"])
+            col = comp.color if comp else (120, 120, 130)
+            h = bar_h * min(1.0, e["wear"])
+            x = plot.x + k * step
+            pygame.draw.rect(screen, tuple(int(c * 0.35) for c in col), (x - 5, plot.bottom - h, 10, h),
                              border_radius=2)
-        pts = [(plot.x + (k + 0.5) * step, plot.bottom - plot.h * e["wear"]) for k, e in enumerate(log)]
-        pygame.draw.lines(screen, YELLOW, False, pts, 2)
-        for p in pts:
-            pygame.draw.circle(screen, YELLOW, p, 3)
-        draw_text(screen, format_time(lo)[2:], f.tiny, GREY, (plot.x - 6, plot.y), anchor="topright", shadow=False)
-        draw_text(screen, format_time(hi)[2:], f.tiny, GREY, (plot.x - 6, plot.bottom - 12), anchor="topright",
+        pts = [(plot.x + k * step, plot.y + plot.h * (e["time"] - lo) / (hi - lo)) for k, e in enumerate(log)]
+        pygame.draw.lines(screen, (150, 160, 180), False, pts, 2)
+        best = min((e["time"] for e in log if e["valid"]), default=None)
+        for (x, y), e in zip(pts, log):
+            comp = COMPOUNDS.get(e["compound"])
+            col = comp.color if comp else WHITE
+            if e["time"] == best:
+                pygame.draw.circle(screen, PURPLE, (x, y), 8)
+            if e["pit"]:
+                pygame.draw.circle(screen, ORANGE, (x, y), 8, 2)
+            pygame.draw.circle(screen, col if e["valid"] else (20, 20, 24), (x, y), 5)
+            pygame.draw.circle(screen, col, (x, y), 5, 0 if e["valid"] else 2)
+        for k, e in enumerate(log):
+            if len(log) <= 12 or k % 2 == 0:
+                draw_text(screen, str(e["lap"]), f.tiny, GREY, (plot.x + k * step, plot.bottom + 4), anchor="midtop",
+                          shadow=False)
+        draw_text(screen, "höher = schneller · Punktfarbe = Reifen · lila = Bestzeit · Ring = Boxenrunde · "
+                          "hohl = ungültig · Balken = Verschleiß", f.tiny, GREY, (box.x + 14, box.bottom - 20),
                   shadow=False)
-        draw_text(screen, "Balken = Rundenzeit (höher = schneller) · gelb = Reifenverschleiß · braun = Boxenrunde",
-                  f.tiny, GREY, (box.x + 14, box.bottom - 24), shadow=False)
 
     # ------------------------------------------------------------------ tab: sectors
     def _tab_sectors(self, screen: pygame.Surface) -> None:
@@ -592,12 +652,19 @@ class PracticeAnalysisScreen:
         self._lines(screen, pygame.Rect(470, 474, 770, 206), "ZUSTAND DES AUTOS NACH DEM TRAINING", state, 110)
 
     # ------------------------------------------------------------------ tab: race strategy
+    def _rule_note(self) -> str:
+        return (f"Ab {self.RULE_LAPS} Runden Pflicht: zwei verschiedene Mischungen (sonst DSQ)"
+                if self.race_laps >= self.RULE_LAPS else "")
+
     def _tab_strategy(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
         box = pygame.Rect(40, 134, 1200, 382)
         draw_panel(screen, box, PANEL, 215)
         draw_text(screen, f"RENNSIMULATION · {self.race_laps} RUNDEN · Boxenstopp kostet ~{self._pit_loss():.1f}s",
                   f.tiny, GREY, (box.x + 14, box.y + 12), shadow=False)
+        note = self._rule_note()
+        if note:
+            draw_text(screen, note, f.tiny, ORANGE, (box.right - 16, box.y + 12), anchor="topright", shadow=False)
         if not self.strategies:
             draw_text(screen, "Zu wenig Daten für eine Rennsimulation - fahre ein paar Runden am Stück.", f.small,
                       GREY, (box.x + 14, box.y + 46), shadow=False)
