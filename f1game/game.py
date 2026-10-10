@@ -6,7 +6,7 @@ import gc
 from dataclasses import replace
 import time
 from typing import Callable, Protocol
-
+import ctypes
 import pygame
 
 from .car_setup import CarSetup, load_setups, recommended, save_setups
@@ -37,12 +37,15 @@ class GameState(Protocol):
 
 
 class Game:
-
+    
     def __init__(self) -> None:
+        myappid = 'Olivers Gieles F1 Game.1.0.1'
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        
         pygame.mixer.pre_init(22050, -16, 2, 1024)       # 512 underran on slow frames (crackling)
         pygame.init()
         pygame.display.set_caption("Gulivers Gieles F1 Game")
-        icon_surface = pygame.image.load('dein_icon.png')
+        icon_surface = pygame.image.load('image.png')
         pygame.display.set_icon(icon_surface)
         self.settings = UserSettings.load()
         set_language(self.settings.language)
