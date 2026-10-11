@@ -22,11 +22,7 @@ from .profiles import DATA_DIR, BrainLibrary, Team, load_drivers, load_teams, pl
 from .tyres import ALL_COMPOUNDS
 from .screens import AnalysisScreen, ChampionshipScreen, MainMenu, PodiumScreen, ResultsScreen, SettingsScreen, SetupScreen
 from .sessions import PracticeSession, QualifyingSession, RaceSession, Session, WeekendConfig
-<<<<<<< Updated upstream
 from .settings import DEFAULT_DIFFICULTY, FPS, difficulty_index, GREY, MAX_FRAME_DT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE
-=======
-from .settings import DIFFICULTY_DEFAULT, FPS, GREY, MAX_FRAME_DT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, difficulty_index
->>>>>>> Stashed changes
 from .track import TRACK_DEFS, Track
 from .sound import SoundSystem
 from .training_screen import TrainingScreen
@@ -66,12 +62,8 @@ class Game:
         self.fonts = Fonts()
         self.hud = HUD(self.fonts)
         self.tracks: dict[str, Track] = {d.key: Track(d) for d in TRACK_DEFS}
-<<<<<<< Updated upstream
         self.menu_choice: dict[str, int] = {"track": 0, "mode": 0, "laps": 8, "diff": difficulty_index(DEFAULT_DIFFICULTY),
                                             "opponents": 21,
-=======
-        self.menu_choice: dict[str, int] = {"track": 0, "mode": 0, "laps": 8, "diff": difficulty_index(DIFFICULTY_DEFAULT), "opponents": 21,
->>>>>>> Stashed changes
                                             "team": 4, "tyre": 1}
         self.player_name = self.settings.player_name
         self.brains = BrainLibrary()

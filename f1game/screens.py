@@ -16,11 +16,7 @@ from .tyres import ALL_COMPOUNDS, COMPOUND_ORDER, COMPOUNDS
 from .user_settings import (ANTIALIAS_LEVELS, ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, GEARBOX_MODES,
                             GRAPHICS_LEVELS, GRAPHICS_PRESETS, HUD_ASSIST, HUD_STYLES, TYRE_WEAR_MODES, UNITS,
                             speed_in)
-<<<<<<< Updated upstream
 from .settings import (CYAN, DIFFICULTY_LEVELS, LEGACY_DIFFICULTY, ai_skill_name, ai_strength, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
-=======
-from .settings import (CYAN, DIFFICULTY_LEVELS, difficulty_label, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
->>>>>>> Stashed changes
                        TOP_SPEED,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .track import TRACK_DEFS
@@ -489,12 +485,8 @@ class SetupScreen:
         if row == "Rennrunden":
             return f"{self.c['laps']} Runden"
         if row == "KI-Stärke":
-<<<<<<< Updated upstream
             name = self.diffs[self.c["diff"]]
             return f"{name}  ·  {ai_skill_name(ai_strength(name))}"
-=======
-            return difficulty_label(self.diffs[self.c["diff"]])
->>>>>>> Stashed changes
         if row in ("Gegner", "Fahrerfeld"):
             return f"{self.c['opponents']} KI-Fahrer"
         if row == "Dein Team":
@@ -667,11 +659,7 @@ class SetupScreen:
             mins = self.c["laps"] * track.length / (TOP_SPEED * 0.8) / 60
             return f"Renndauer ca. {max(1, round(mins))} min"
         if row == "KI-Stärke":
-<<<<<<< Updated upstream
             return ai_skill_hint(ai_strength(self.diffs[self.c["diff"]]))
-=======
-            return "Fahrkönnen der KI - gleiche Autos, 30% ist ca. 5-10 s pro Runde langsamer als 100%"
->>>>>>> Stashed changes
         if row in ("Gegner", "Fahrerfeld"):
             return f"Starterfeld {self.c['opponents'] + (0 if self.spectator else 1)} Autos"
         if row == "Dein Team":
@@ -743,11 +731,7 @@ class SetupScreen:
             self._pills(screen, area, row, "mode", [(k, short.get(m[0], m[1]), None) for k, m in enumerate(self.modes)],
                         c["mode"], mouse, accent)
         elif row == "KI-Stärke":
-<<<<<<< Updated upstream
             self._stepper(screen, area, row, self._value(row), mouse, _strength_color(ai_strength(self.diffs[c["diff"]])))
-=======
-            self._stepper(screen, area, row, difficulty_label(self.diffs[c["diff"]]), mouse)
->>>>>>> Stashed changes
         elif row == "Spieler":
             self._pills(screen, area, row, "players", [(1, "1 Spieler", None), (2, "2 Spieler", None)],
                         c.get("players", 1), mouse, accent)
@@ -1605,11 +1589,7 @@ class ChampionshipScreen:
             self._draw_calendar(screen, pygame.Rect(600, 128, 640, 300), None)
             return
         sub = (f"Runde {min(champ.round + 1, len(champ.rounds))}/{len(champ.rounds)} · "
-<<<<<<< Updated upstream
                f"{dict(FORMATS)[champ.format]} · {champ.laps} Rd. · KI {LEGACY_DIFFICULTY.get(champ.difficulty, champ.difficulty)}"
-=======
-               f"{dict(FORMATS)[champ.format]} · {champ.laps} Rd. · KI {difficulty_label(champ.difficulty)}"
->>>>>>> Stashed changes
                + (" · Zuschauer" if champ.spectator else f" · {champ.player_name} ({champ.team})"))
         draw_text(screen, sub, f.small, GREY, (86, 86))
         self._draw_driver_table(screen, champ)
