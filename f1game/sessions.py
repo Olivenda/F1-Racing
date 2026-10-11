@@ -738,6 +738,9 @@ class Session:
     def extra_objects(self) -> list:
         return []
 
+    def recovery_people(self) -> list[tuple]:
+        return []
+
     @property
     def aero_active(self) -> bool:
         return False
