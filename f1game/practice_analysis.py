@@ -471,9 +471,8 @@ class PracticeAnalysisScreen:
             if len(log) <= 12 or k % 2 == 0:
                 draw_text(screen, str(e["lap"]), f.tiny, GREY, (plot.x + k * step, plot.bottom + 4), anchor="midtop",
                           shadow=False)
-        draw_text(screen, "höher = schneller · Punktfarbe = Reifen · lila = Bestzeit · Ring = Boxenrunde · "
-                          "hohl = ungültig · Balken = Verschleiß", f.tiny, GREY, (box.x + 14, box.bottom - 20),
-                  shadow=False)
+        draw_text(screen, "höher = schneller · Farbe = Reifen · lila = Bestzeit · Ring = Box · Balken = Verschleiß",
+                  f.tiny, GREY, (box.x + 14, box.bottom - 20), shadow=False)
 
     # ------------------------------------------------------------------ tab: sectors
     def _tab_sectors(self, screen: pygame.Surface) -> None:

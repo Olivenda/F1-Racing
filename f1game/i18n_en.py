@@ -1557,3 +1557,5 @@ TEMPLATES += [("Grand Prix von {} · {#} Runden", "{} Grand Prix · {} laps"), (
               ("Start P{#}", "Grid P{}"), ("beste {}", "best {}"), ("{#} Stopp", "{} stop"), ("{#} Stopps", "{} stops"),
               ("ENTER: {}", "ENTER: {}")]
 EXACT.update({"Pflicht: 2. Mischung": "Mandatory: 2nd compound"})
+EXACT.update({"höher = schneller · Farbe = Reifen · lila = Bestzeit · Ring = Box · Balken = Verschleiß":
+              "higher = faster · colour = tyre · purple = best · ring = pit · bars = wear"})

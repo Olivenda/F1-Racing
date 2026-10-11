@@ -1105,7 +1105,8 @@ class Session:
             self.add_feed(f"Schnellste Runde: {car.short} {format_time(lap_time)}")
         # the box is past the line: a car crossing it in the pit lane is still on the old set - don't
         # order a second stop for it
-        if not car.session_done and car.pit_request is None and car.pit_state is None and not car.is_player:
+        if not car.session_done and car.pit_request is None and car.pit_state is None and \
+                (not car.is_player or getattr(car, "autopilot", None) is not None):   # autopilot plans like the AI
             call = self.weather_tyre_call(car)
             car.pit_request = call or self.plan_pit(car)
             if call:

@@ -1,17 +1,33 @@
+# Python
 .venv/
+venv/
 __pycache__/
 *.pyc
-.DS_Store
+*.pyo
 
+# OS / editors
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.log
+
+# per-player data (created by the game on each PC)
 data/careers/
 data/recordings/
+data/screenshots/
 data/championship.json
 data/records.json
 data/settings.json
 data/setups.json
+data/controls.json
+
+# AI training: backups and paused runs of the brains (the brains themselves are shipped)
 data/brains/*.bak*
+data/brains/*.backup.json
+data/brains/*.ctrain.state*
+data/train_data.bin
 
 # native trainer (built locally, see ctrain/build.bat)
-ctrain/f1train.exe
-data/train_data.bin
-data/brains/*.ctrain.state*
+ctrain/*.exe
