@@ -27,7 +27,8 @@ COOLDOWN = 60.0
 YELLOW_TIME = 12.0
 PUNCTURE_WEAR = 0.88
 GIVE_BACK_TIME = 15.0
-GRACE = 1.5
+GRACE = 3.0               # a pass already under way when the neutralisation is called may still be completed
+RESTART_LINE_TIME = 25.0  # after the restart: no overtaking until a car has crossed the control line itself
 
 
 class SafetyCar:
@@ -138,7 +139,10 @@ class RaceControl:
         self._puncture_timer = 0.0
         self.give_back: dict[tuple, float] = {}
         self._pending: dict[tuple, float] = {}
-        self._order: dict = {}
+        self._ref: list = []                      # the order the field has to keep under SC/VSC
+        self._rank: dict = {}
+        self._line_due: dict = {}                 # restart: car -> lap count it has to complete before passing
+        self._line_until = 0.0
         self._order_timer = 0.0
         self._since = 0.0
         self._lead: "Car | None" = None
@@ -195,7 +199,8 @@ class RaceControl:
             s.message("VIRTUAL SAFETY CAR - Tempo reduzieren", YELLOW, 3.5)
         s.add_feed(f"{'SAFETY CAR' if mode == 'SC' else 'VSC'}: {reason}")
         self._since = s.time
-        self._order = {}
+        self._ref, self._rank = [], {}
+        self._line_due = {}
         self._pending = {}
         self._cheap_stops()
 
@@ -226,6 +231,9 @@ class RaceControl:
         self.cooldown_until = s.time + COOLDOWN
         self.green_until = s.time + 6.0
         self.yellow.clear()
+        # the field keeps its order until each car has crossed the control line
+        self._line_due = {c: c.laps_done for c in self._ref if self._racing(c)}
+        self._line_until = s.time + RESTART_LINE_TIME
 
     def step(self, h: float) -> None:
         s = self.s
@@ -236,7 +244,7 @@ class RaceControl:
                 self.cleared[k] = now + 6.0
         self._punctures(h)
         self._order_timer -= h
-        if self._order_timer <= 0 and (self.active or self.give_back):
+        if self._order_timer <= 0 and (self.active or self.give_back or self._line_due):
             self._order_timer = 0.25
             self._check_overtakes()
         if self.mode == "VSC" and now >= self.until:
@@ -283,15 +291,22 @@ class RaceControl:
                 self._end()
 
     def governor(self, car: "Car") -> None:
-        if not self.active or car.in_pit or car.session_done or car.frozen:
+        if car.in_pit or car.session_done or car.frozen:
+            return
+        yielding = self.must_yield(car) and not car.is_player
+        if not self.active and not yielding:
             return
         top = car.top_speed
         if self.mode == "VSC":
             target = top * VSC_SPEED
-        else:
+        elif self.mode == "SC":
             target = self._follow_target(car, top)
-        if self.must_yield(car) and car is not self.s.player:
-            target *= 0.5
+        else:
+            target = top
+        if yielding:
+            # an AI that has to give a place back: lift until the car it passed is by again
+            victim = next(b for a, b in self.give_back if a is car)
+            target = min(target, max(top * 0.2, victim.speed_fwd * 0.8))
         v = car.speed_fwd
         if v > target + 4.0:
             car.throttle = 0.0
@@ -300,18 +315,25 @@ class RaceControl:
             car.throttle = min(car.throttle, 0.25)
         car.straight_mode = False
 
+    def _ahead_in_order(self, o: "Car", car: "Car") -> bool:
+        """Whether o is ahead of car in the order to be kept (the reference order, race distance otherwise)."""
+        ro, rc = self._rank.get(o), self._rank.get(car)
+        if ro is not None and rc is not None:
+            return ro < rc
+        return o.distance > car.distance
+
     def _follow_target(self, car: "Car", top: float) -> float:
         s = self.s
         L = s.track.length
         best_gap, best_speed = None, 0.0
         yielding = {a for a, b in self.give_back if b is car}
-        objects = [(o.s, o.speed_fwd, o.distance > car.distance) for o in s.cars if o is not car and not o.in_pit
-                   and not o.dnf and not o.session_done and o not in yielding]
+        objects = [(o.s, o.speed_fwd, self._ahead_in_order(o, car)) for o in s.cars if o is not car
+                   and not o.in_pit and not o.dnf and not o.session_done and o not in yielding]
         if self.sc is not None and self.sc.on_track:
             objects.append((self.sc.s, self.sc.speed, True))
         for os_, ov, in_front in objects:
             gap = (os_ - car.s + L / 2) % L - L / 2
-            # side by side: only the car that is behind in the race order falls back into line
+            # side by side: only the car that is behind in the kept order falls back into line
             lower = -60.0 if in_front else 5.0
             if lower < gap < 900.0 and (best_gap is None or gap < best_gap):
                 best_gap, best_speed = gap, ov
@@ -333,15 +355,43 @@ class RaceControl:
     def _fair_victim(self, b: "Car") -> bool:
         return self._racing(b) and not self.must_yield(b) and b.pit_request is None and b.speed_fwd > 60.0
 
-    PASS_MARGIN = 26.0
-    PASS_HOLD = 1.0
+    PASS_MARGIN = CAR_LENGTH * 1.25     # clearly past: more than a whole car length ahead (not side by side)
+    PASS_HOLD = 1.5
+
+    def _sync_reference(self, order: list["Car"]) -> None:
+        """Keep the reference order: cars that pit or retire leave it, cars back from the pit lane join it where
+        they rejoined. During the grace period it simply follows the track."""
+        racing = [c for c in order if self._racing(c)]
+        if self.active and self.s.time - self._since <= GRACE:
+            self._ref = racing
+            self._rank = {c: k for k, c in enumerate(racing)}
+            return
+        keep = set(racing)
+        ref = [c for c in self._ref if c in keep]
+        known = set(ref)
+        rank = {c: k for k, c in enumerate(order)}
+        for c in racing:
+            if c in known:
+                continue
+            at = next((k for k, o in enumerate(ref) if rank[o] > rank[c]), len(ref))
+            ref.insert(at, c)
+        self._ref = ref
+        self._rank = {c: k for k, c in enumerate(ref)}
+
+    def _no_passing(self, a: "Car") -> bool:
+        """Whether car a may not overtake right now: SC/VSC, or after the restart before its own line crossing."""
+        if self.active:
+            return self.s.time - self._since > GRACE
+        due = self._line_due.get(a)
+        return due is not None and a.laps_done <= due
 
     def _check_overtakes(self) -> None:
         s = self.s
         now = s.time
-        order = {c: k for k, c in enumerate(s.standings())}
+        order = s.standings()
+        pos = {c: k for k, c in enumerate(order)}
         for (a, b), deadline in list(self.give_back.items()):
-            if order[a] > order[b]:
+            if pos[a] > pos[b]:
                 del self.give_back[(a, b)]
                 s.stewards.announce(f"{a.short} hat die Position an {b.short} zurückgegeben", "info", 5.0)
                 if a is s.player:
@@ -351,32 +401,47 @@ class RaceControl:
             elif now >= deadline:
                 del self.give_back[(a, b)]
                 s.stewards.penalty(a, 5.0, f"unter {self.mode or 'Safety Car'} {b.short} überholt")
-        if self.active and now - self._since > GRACE and self._order:
-            for a, ka in order.items():
-                kb_prev = self._order.get(a)
-                if kb_prev is None or ka >= kb_prev or not self._racing(a):
+        if self._line_due:
+            self._line_due = {c: d for c, d in self._line_due.items()
+                              if c.laps_done <= d and self._racing(c) and now < self._line_until}
+        if not self.active and not self._line_due:
+            self._ref, self._rank = [], {}
+            self._pending.clear()
+            return
+        self._sync_reference(order)
+        ref = self._ref
+        for i, b in enumerate(ref):
+            for a in ref[i + 1:]:
+                # a should be behind b - is it ahead on the road?
+                if pos[a] > pos[b] or a.laps_done < b.laps_done:
+                    self._pending.pop((a, b), None)
                     continue
-                for b, kb in order.items():
-                    if b is a or (a, b) in self.give_back or not self._fair_victim(b):
-                        continue
-                    prev_a, prev_b = self._order.get(a), self._order.get(b)
-                    if prev_b is not None and prev_a > prev_b and ka < kb and a.laps_done >= b.laps_done:
-                        self._pending.setdefault((a, b), now)
-            for (a, b), since in list(self._pending.items()):
-                if order.get(a, 0) > order.get(b, 0) or not self._racing(a) or not self._fair_victim(b):
-                    del self._pending[(a, b)]
-                elif a.distance - b.distance > self.PASS_MARGIN and now - since >= self.PASS_HOLD:
+                if not self._no_passing(a) or not self._fair_victim(b) or self.must_yield(b) or \
+                        (a, b) in self.give_back:
+                    # a legal place change (b slow with a problem, in the pit entry, giving a place back; or
+                    # still in the grace period): the reference follows the road
+                    if (a, b) not in self.give_back:
+                        self._pending.pop((a, b), None)
+                        ref.remove(a)
+                        ref.insert(ref.index(b), a)
+                        self._rank = {c: k for k, c in enumerate(ref)}
+                        return      # indices changed: carry on with the next check
+                    continue
+                since = self._pending.setdefault((a, b), now)
+                if a.distance - b.distance > self.PASS_MARGIN and now - since >= self.PASS_HOLD:
                     del self._pending[(a, b)]
                     self.give_back[(a, b)] = now + GIVE_BACK_TIME
-                    s.stewards.announce(f"Überholen unter {self.mode}: {a.short} muss Platz an {b.short} "
+                    what = self.mode or "Restart"
+                    s.stewards.announce(f"Überholen unter {what}: {a.short} muss Platz an {b.short} "
                                         "zurückgeben", "investigation", 6.0)
                     if a is s.player:
-                        s.message(f"Unter {self.mode} überholt! Lass {b.short} vorbei ({GIVE_BACK_TIME:.0f} s)",
+                        s.message(f"Unter {what} überholt! Lass {b.short} vorbei ({GIVE_BACK_TIME:.0f} s)",
                                   (255, 140, 30), 4.0)
                     elif b is s.player:
-                        s.message(f"{a.short} hat dich unter {self.mode} überholt - er muss zurückgeben",
+                        s.message(f"{a.short} hat dich unter {what} überholt - er muss zurückgeben",
                                   YELLOW, 3.0)
-        self._order = {c: k for c, k in order.items() if self._racing(c)}
+        for key in [k for k in self._pending if k[0] not in ref or k[1] not in ref]:
+            del self._pending[key]
 
     def must_yield(self, car: "Car") -> bool:
         return any(a is car for a, _ in self.give_back)

@@ -1564,7 +1564,9 @@ TEMPLATES += [("Fahrer: {}", "Driver: {}"), ("Fahrhilfen: {}", "Assists: {}"), (
               ("Aufnahmen: {#} Samples", "Recordings: {} samples")]
 # AI strength in percent, the driven pit stop, the pit menu's tyre choice
 EXACT.update({"Anfänger": "Beginner", "Amateur": "Amateur", "Profi": "Pro", "Weltklasse": "World class",
-              "Volle Stärke: die KI fährt am Limit": "Full strength: the AI drives at the limit",
+              "Fährt am Limit": "Drives at the limit",
+              "Fährt am Limit · kaum Fehler": "Drives at the limit · hardly any mistakes",
+              "viele": "many", "einige": "some", "seltene": "rare",
               "REIFEN": "TYRES", "CREW": "CREW", "STEHZEIT": "STANDING", "VERLUST": "LOSS", "RAUS ALS": "REJOIN",
               "ANGEFORDERT": "REQUESTED", "NICHT ANGEFORDERT": "NOT REQUESTED", "DEINE BOX": "YOUR BOX",
               "LIMITER AKTIV - bremst automatisch": "LIMITER ON - slowing down automatically",
@@ -1575,11 +1577,38 @@ EXACT.update({"Anfänger": "Beginner", "Amateur": "Amateur", "Profi": "Pro", "We
               "GO GO GO!  -  GAS!": "GO GO GO!  -  THROTTLE!", "Fahrer": "Driver"})
 TEMPLATES += [
     ("{}  ·  {}", "{}  ·  {}"),
-    ("Gleiche Autos, schwächere Fahrer: {#}% Kurventempo, bremst früher",
-     "Same cars, weaker drivers: {}% corner speed, brakes earlier"),
+    ("Kurven {#}% · bremst früher", "Corners {}% · brakes earlier"),
+    ("Kurven {#}% · bremst früher · {} Fehler", "Corners {}% · brakes earlier · {} mistakes"),
     ("BOX ANFAHREN  ·  LIMITER {#} {}", "APPROACH BOX  ·  LIMITER {} {}"),
     ("REAKTION {#}s", "REACTION {}s"), ("Reaktion {#}s", "Reaction {}s"),
     ("{#} m zu kurz  +{#}s", "{} m short  +{}s"), ("{#} m zu weit  +{#}s", "{} m long  +{}s"),
     ("ÜBER DIE MARKIERUNG! Crew schiebt zurück  +{#}s", "PAST THE MARKS! Crew pushes you back  +{}s"),
     ("{}-Reifen · Wahl: {}", "{} tyres · choice: {}"),
+]
+
+# weather broadcast, radar, restart rules, blue flags
+EXACT.update({
+    "Trocken: nie Regen. Wechselhaft: höchstens ein Regenschauer pro Wochenende, angekündigt im Wetterbericht. "
+    "Regen: nasses Rennen. Bei Nässe Intermediates (grün) oder Wets (blau) holen.":
+        "Dry: never rains. Changeable: at most one shower per weekend, announced in the weather broadcast. Rain: "
+        "wet race. In the wet, fit intermediates (green) or wets (blue).",
+    "Trocken - kein Regen erwartet": "Dry - no rain expected",
+    "Starkregen über die ganze Distanz - Full Wets": "Heavy rain for the whole distance - full wets",
+    "Regen über die ganze Distanz": "Rain for the whole distance",
+    "RADAR": "RADAR", "WETTERBERICHT RENNEN": "WEATHER BROADCAST RACE",
+    "WETTERBERICHT QUALIFYING": "WEATHER BROADCAST QUALIFYING", "Wetterbericht": "Forecast",
+    "grün trocken · blau Regen · hellblau nass": "green dry · blue rain · light blue wet",
+    "Restart": "restart",
+})
+TEMPLATES += [
+    ("Leichter Schauer um Runde {#} - Strecke bleibt fast trocken",
+     "Light shower around lap {} - track stays almost dry"),
+    ("Nasser Start, trocknet ab ca. Runde {#}", "Wet start, drying from about lap {}"),
+    ("Regen ab ca. Runde {#}, nass ab Runde {#}", "Rain from about lap {}, wet from lap {}"),
+    ("Schauer: nass von Runde {#} bis {#}", "Shower: wet from lap {} to {}"),
+    ("{} - im Plan berücksichtigt", "{} - included in the plan"),
+    ("Rd. {#}", "Lap {}"),
+    ("Radar: in ca. {#} Rd. nass - kein Stopp auf Slicks mehr, wir warten auf Inters.",
+     "Radar: wet in about {} laps - no more stops for slicks, we wait for inters."),
+    ("Radar: trocken - Slicks in ca. {#} Rd.", "Radar: drying - slicks in about {} laps"),
 ]

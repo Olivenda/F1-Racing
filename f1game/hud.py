@@ -15,6 +15,7 @@ from .car import PLANK_LIMIT_MM
 from .pitlane import BOX_PERFECT, BOX_WINDOW, PIT_BRAKE, PIT_COAST
 from .flags import FLAG_COLORS, FLAG_NAMES, car_flag, hazard_ahead, led_board
 from .tyres import COMPOUNDS
+from .weather import WET_THRESHOLD, plan_fits
 from .i18n import tr
 from .user_settings import speed_in
 from .utils import draw_panel, draw_text, format_gap, format_time
@@ -95,6 +96,7 @@ class HUD:
             self._delta_panel(screen, s)
         self._sectors(screen, s)
         self._weather(screen, s)
+        self._broadcast(screen, s)
         self._neutralization(screen, s)
         if assist != "off":
             self._flag_display(screen, s, assist == "full")
@@ -234,7 +236,7 @@ class HUD:
         if w is None or (w.mode == "dry" and w.wetness < 0.01):
             return
         f = self.f
-        x, y, bw, bh = 812, 14, 200, 50
+        x, y, bw, bh = 812, 14, 200, 66
         draw_panel(screen, (x, y, bw, bh))
         # cloud with rain drops / sun
         cx, cy = x + 24, y + 22
@@ -257,6 +259,55 @@ class HUD:
             if dry is not None and dry < 90:
                 sub += f" · Ende ~{dry:.0f}s"
         draw_text(screen, sub, f.tiny, (180, 180, 190), (x + 46, y + 28), shadow=False)
+        # radar: rain chance for the next laps
+        outlook = self._outlook(s, 5)
+        draw_text(screen, "RADAR", f.tiny, GREY, (x + 8, y + 46), shadow=False)
+        for k, (chance, wet) in enumerate(outlook):
+            r = pygame.Rect(x + 52 + k * 29, y + 47, 26, 12)
+            col = (40, 44, 52) if chance < 0.05 else (60, 100, 170) if wet < WET_THRESHOLD else (60, 140, 255)
+            pygame.draw.rect(screen, col, r, border_radius=3)
+            if chance >= 0.05:
+                draw_text(screen, f"{chance * 100:.0f}", f.tiny, WHITE, r.center, anchor="center", shadow=False)
+
+    @staticmethod
+    def _outlook(s: "Session", laps: int) -> list[tuple[float, float]]:
+        """Rain chance and expected wetness for the next laps, refreshed every couple of seconds."""
+        w = s.weather
+        cache = getattr(s, "_outlook_cache", None)
+        if cache is None or s.time - cache[0] > 2.0 or len(cache[1]) != laps:
+            cache = (s.time, w.lap_outlook(s.forecast_lap_time(), laps))
+            s._outlook_cache = cache
+        return cache[1]
+
+    def _broadcast(self, screen: pygame.Surface, s: "Session") -> None:
+        """The weather broadcast for the session: shown on the grid / at the start of qualifying."""
+        w = getattr(s, "weather", None)
+        if w is None or s.kind not in ("qualifying", "race") or s.time > 10.0 or \
+                (s.kind == "race" and getattr(s, "race_started", False) and s.time - s.race_start_time > 3.0):
+            return
+        cache = getattr(s, "_broadcast_cache", None)
+        if cache is None:
+            lap = s.forecast_lap_time()
+            laps = s.total_laps if s.kind == "race" else max(3, int(s.expected_duration() / lap))
+            cache = s._broadcast_cache = (w.lap_outlook(lap, laps, from_time=0.0), w.summary(lap, laps, 0.0))
+        outlook, text = cache
+        f = self.f
+        bw = 560
+        rect = pygame.Rect(SCREEN_WIDTH // 2 - bw // 2, 150, bw, 104)
+        draw_panel(screen, rect, (14, 18, 28), 225, border=(60, 140, 255))
+        title = "WETTERBERICHT RENNEN" if s.kind == "race" else "WETTERBERICHT QUALIFYING"
+        draw_text(screen, title, f.small_bold, (90, 160, 255), (rect.x + 14, rect.y + 8), shadow=False)
+        draw_text(screen, text, f.small, WHITE, (rect.x + 14, rect.y + 32), shadow=False)
+        n = max(1, len(outlook))
+        cw = (bw - 28) / n
+        for k, (chance, wet) in enumerate(outlook):
+            r = pygame.Rect(rect.x + 14 + int(k * cw), rect.y + 62, max(2, int(cw) - 2), 18)
+            col = (60, 160, 80) if chance < 0.05 else (60, 100, 170) if wet < WET_THRESHOLD else (60, 140, 255)
+            pygame.draw.rect(screen, col, r, border_radius=2)
+        draw_text(screen, "Rd. 1", f.tiny, GREY, (rect.x + 14, rect.y + 84), shadow=False)
+        draw_text(screen, f"Rd. {n}", f.tiny, GREY, (rect.right - 14, rect.y + 84), anchor="topright", shadow=False)
+        draw_text(screen, "grün trocken · blau Regen · hellblau nass", f.tiny, GREY, (rect.centerx, rect.y + 84),
+                  anchor="midtop", shadow=False)
 
     def _neutralization(self, screen: pygame.Surface, s: "Session") -> None:
         rc = getattr(s, "rc", None)
@@ -744,12 +795,21 @@ class HUD:
             eta = w.eta_rain(60.0)
             if eta is not None:
                 return f"Regen kommt in ca. {eta:.0f} Sekunden.", (90, 150, 255)
+            if s.kind == "race" and car.tyres is not None:
+                outlook = self._outlook(s, 3)
+                slick = car.tyres.compound.kind == "slick"
+                for k, (_, wet) in enumerate(outlook):
+                    if slick and wet >= WET_THRESHOLD:
+                        return (f"Radar: in ca. {k + 1} Rd. nass - kein Stopp auf Slicks mehr, "
+                                "wir warten auf Inters."), (90, 150, 255)
+                    if not slick and wet < WET_THRESHOLD * 0.6 and w.rain < 0.05:
+                        return f"Radar: trocken - Slicks in ca. {k + 1} Rd.", YELLOW
         if car.fuel_per_lap > 0 and remaining is not None and remaining > 0 and                 car.fuel_laps < remaining - (car.distance % s.track.length) / s.track.length - 0.05:
             return "Sprit reicht nicht! Lift and Coast oder zum Tanken an die Box.", (255, 90, 90)
         if car.plank_per_lap > 0 and car.plank_wear > 0.85 * PLANK_LIMIT_MM and s.kind == "race":
             return "Planke fast am Limit! Randsteine meiden, sonst Disqualifikation.", (255, 90, 90)
         plan = car.next_planned_stop() if s.kind == "race" and car.is_player else None
-        if plan is not None and not car.in_pit:
+        if plan is not None and not car.in_pit and plan_fits(COMPOUNDS[plan[1]].kind, s.track.wetness):
             lap, comp = plan
             to_go = lap - (car.laps_done + 1)
             if to_go <= 0:

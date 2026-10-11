@@ -23,7 +23,8 @@ from .pitlane import SPEED_LIMIT
 from .race_control import PUNCTURE_WEAR
 from .settings import (CYAN, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PURPLE, PX_PER_S_TO_KMH, SCREEN_HEIGHT, SCREEN_WIDTH,
                        WHITE, YELLOW)
-from .tyres import COMPOUND_ORDER, COMPOUNDS
+from .tyres import ALL_COMPOUNDS, COMPOUND_ORDER, COMPOUNDS
+from .weather import FULL_WET_THRESHOLD, WET_THRESHOLD
 from .user_settings import speed_in
 from .utils import draw_panel, draw_text, format_time, mouse_item
 
@@ -220,16 +221,36 @@ class PracticeAnalysisScreen:
         return pit.length / SPEED_LIMIT - pit.length / race_speed + 2.4 + 2.0
 
     @staticmethod
-    def _splits(n: int, stints: int) -> list[tuple[int, ...]]:
-        """Ways to cut n laps into `stints` parts (each at least one lap), thinned out for long races."""
+    def _splits(n: int, stints: int, prefer: set[int] | None = None) -> list[tuple[int, ...]]:
+        """Ways to cut n laps into `stints` parts (each at least one lap), thinned out for long races. With a
+        rain forecast the cuts come from the laps around the weather change plus a coarse grid."""
         if stints == 1:
             return [(n,)]
+        if prefer:
+            cuts = sorted({c for c in prefer if 0 < c < n} | set(range(max(1, n // 8), n, max(1, n // 8))))
+            return sorted({tuple(b - a for a, b in zip((0,) + cut, cut + (n,)))
+                           for cut in itertools.combinations(cuts, stints - 1)})
         out = sorted({tuple(b - a for a, b in zip((0,) + cut, cut + (n,)))
                       for cut in itertools.combinations(range(1, n), stints - 1)})
         return out[::max(1, len(out) // 40)]
 
+    def _base_lap(self) -> float:
+        laps = self._clean()
+        times = sorted(e["time"] for e in laps) or [self.car.track.length / 425.0]
+        return times[len(times) // 3]
+
+    def race_forecast(self, lap_time: float) -> list[tuple[float, float]]:
+        """(rain chance, track wetness) for every lap of the race, from the weekend's weather broadcast."""
+        cfg = getattr(self.session, "config", None)
+        if cfg is None or cfg.weather == "dry":
+            return []
+        from .sessions import session_weather
+        weather = session_weather(cfg, self.car.track, "race")
+        return weather.lap_outlook(lap_time, self.race_laps, from_time=0.0)
+
     def _strategies(self) -> list[tuple[float, list[tuple[str, int]]]]:
-        """Every 0/1/2-stop plan over the race distance with the measured pace, wear rates and fuel weight."""
+        """Every 0/1/2-stop plan over the race distance with the measured pace, wear rates and fuel weight - and
+        with rain in the forecast, plans with intermediates/wets for the wet laps (up to three stops)."""
         laps = self._clean()
         valid = sorted(e["time"] for e in laps if e["valid"]) or sorted(e["time"] for e in laps)
         if not valid:
@@ -240,39 +261,60 @@ class PracticeAnalysisScreen:
         if COMPOUNDS[ref].kind != "slick":
             ref = "medium"          # practice on rain tyres: the plan is still a dry one
         rates = self._wear_rates()
-        measured = next(iter(rates.items()), None)
-        options = COMPOUND_ORDER    # dry tyres only: rain is the engineer's call during the race
+        measured = next(((k, v) for k, v in rates.items() if COMPOUNDS[k].kind == "slick"), None)
         fuel_kg = self.car.fuel_per_lap * n
         pit_loss = self._pit_loss()
         # pace of fresh softs, from the compound the laps were done on (avg fuel load in practice)
         base_soft = base / (1.0 + 0.35 * (1.0 - math.sqrt(COMPOUNDS[ref].grip / COMPOUNDS["soft"].grip)))
+        self.forecast = self.race_forecast(base)
+        wet = [w for _, w in self.forecast] or [0.0] * n
+        rain = any(w >= WET_THRESHOLD for w in wet)
+        options = ALL_COMPOUNDS if rain else COMPOUND_ORDER
+        prefer: set[int] = set()
+        if rain:
+            for k in range(1, n):
+                if (wet[k - 1] >= WET_THRESHOLD) != (wet[k] >= WET_THRESHOLD) or \
+                        (wet[k - 1] >= FULL_WET_THRESHOLD) != (wet[k] >= FULL_WET_THRESHOLD):
+                    prefer |= {k - 1, k, k + 1}
 
         def rate(c: str) -> float:
             if c in rates:
                 return rates[c]
-            if measured is not None and measured[0] in COMPOUNDS:
+            if measured is not None:
                 return measured[1] * COMPOUNDS[measured[0]].life / COMPOUNDS[c].life
             return 0.85 * base / COMPOUNDS[c].life
 
+        cache: dict[tuple[str, int, int], float | None] = {}
+
         def stint(c: str, start: int, length: int) -> float | None:
-            total, wear = 0.0, 0.0
-            for k in range(length):
-                wear += rate(c)
+            key = (c, start, length)
+            if key in cache:
+                return cache[key]
+            total, wear, comp = 0.0, 0.0, COMPOUNDS[c]
+            for k in range(start, start + length):
+                wear += rate(c) * comp.wear_factor(wet[k])
                 if wear > 0.97:
-                    return None
+                    total = None
+                    break
                 cliff = max(0.0, wear - 0.70) / 0.30
-                rel = COMPOUNDS[c].grip / COMPOUNDS["soft"].grip * (1.0 - 0.12 * wear - 0.25 * cliff * cliff)
+                rel = comp.grip / COMPOUNDS["soft"].grip * (1.0 - 0.12 * wear - 0.25 * cliff * cliff)
+                rel *= comp.wet_factor(wet[k])
                 lap = base_soft * (1.0 + 0.35 * (1.0 - math.sqrt(max(0.05, rel))))
-                lap *= 1.0 + FUEL_LAP_FACTOR * (fuel_kg * (1.0 - (start + k) / n) - fuel_kg / 2)
+                if rel < 0.55:
+                    lap += 8.0 * (0.55 - rel) / 0.55 * base_soft     # slicks in the wet: off every other corner
+                lap *= 1.0 + FUEL_LAP_FACTOR * (fuel_kg * (1.0 - k / n) - fuel_kg / 2)
                 if wear > PUNCTURE_WEAR:
                     lap += 30.0 * (wear - PUNCTURE_WEAR) / (1.0 - PUNCTURE_WEAR)
                 total += lap
+            cache[key] = total
             return total
 
         plans: dict[tuple, float] = {}
-        for stops in range(0, min(3, n)):
-            for combo in itertools.product(options, repeat=stops + 1):
-                for split in self._splits(n, stops + 1):
+        for stops in range(0, min(4 if rain else 3, n)):
+            for split in self._splits(n, stops + 1, prefer if rain else None):
+                for combo in itertools.product(options, repeat=stops + 1):
+                    if any(a == b for a, b in zip(combo, combo[1:])) and rain:
+                        continue        # a stop onto the same compound only makes sense for worn tyres
                     total, start = stops * pit_loss, 0
                     for c, length in zip(combo, split):
                         part = stint(c, start, length)
@@ -281,7 +323,8 @@ class PracticeAnalysisScreen:
                         total += part
                         start += length
                     else:
-                        if n >= self.RULE_LAPS and len(set(combo)) < 2:
+                        wet_used = any(COMPOUNDS[c].kind != "slick" for c in combo)
+                        if n >= self.RULE_LAPS and len(set(combo)) < 2 and not wet_used:
                             continue        # one compound only would be a disqualification
                         plans[tuple(zip(combo, split))] = total
         ranked = sorted(plans.items(), key=lambda kv: kv[1])[:8]
@@ -701,10 +744,12 @@ class PracticeAnalysisScreen:
         if race is not None:
             lines.append(("Planke", f"~{race:.2f} mm im Rennen (Limit {PLANK_LIMIT_MM:.1f} mm)",
                           RED if race > PLANK_LIMIT_MM else GREEN))
-        w = getattr(self.session, "weather", None)
-        if w is not None and w.mode != "dry":
-            lines.append(("Wetter", "Wechselhaft gemeldet - Intermediates bereithalten, die Strategie kann kippen."
-                          if w.mode == "dynamic" else "Regenrennen erwartet - Wets/Intermediates.", CYAN))
+        cfg = getattr(self.session, "config", None)
+        if cfg is not None and cfg.weather != "dry":
+            from .sessions import session_weather
+            text = session_weather(cfg, self.car.track, "race").summary(self._base_lap(), self.race_laps, 0.0)
+            wet = any(w >= WET_THRESHOLD for _, w in getattr(self, "forecast", []))
+            lines.append(("Wetterbericht", text + (" - im Plan berücksichtigt" if wet else ""), CYAN))
         lines.append(("Bedienung", "Hoch/runter wählt den Plan fürs Rennen: Startreifen, Boxenstopp-Menü und "
                                    "Funk vom Renningenieur folgen ihm.", GREY))
         self._lines(screen, pygame.Rect(40, 526, 1200, 154), "STRATEGIE", lines, 140)

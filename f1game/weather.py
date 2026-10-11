@@ -22,47 +22,77 @@ if TYPE_CHECKING:
 WEATHER_MODES = {"dry": "Trocken", "dynamic": "Wechselhaft", "wet": "Regen"}
 WET_THRESHOLD = 0.22      # above this slicks are slower than intermediates
 FULL_WET_THRESHOLD = 0.68  # above this full wets beat intermediates
-WET_WEEKEND_CHANCE = 0.33  # "dynamic": share of weekends with rain in the forecast
-SHOWER_CHANCE = 0.7        # ...and the chance that a session of such a weekend actually gets a shower
+RAIN_WEEKEND_CHANCE = 0.30  # "dynamic": share of weekends with a shower at all
+# ...and which ONE session of such a weekend gets it: never more than one shower per weekend
+RAIN_SESSION = (("race", 0.5), ("qualifying", 0.3), ("practice", 0.2))
+
+
+def rain_session(mode: str, weekend_seed: int) -> str | None:
+    """"dynamic" weather: the one session of the weekend that gets a shower (None = a dry weekend)."""
+    if mode != "dynamic":
+        return None
+    rng = random.Random(weekend_seed * 7919 + 17)
+    if rng.random() >= RAIN_WEEKEND_CHANCE:
+        return None
+    r = rng.random()
+    for kind, share in RAIN_SESSION:
+        if r < share:
+            return kind
+        r -= share
+    return "race"
+
+
+def plan_fits(compound_kind: str, wetness: float) -> bool:
+    """Whether a planned stop onto this kind of tyre still makes sense on the track as it is: rain tyres only
+    once it is wet, slicks only once it is dry enough (the forecast can be a lap or two out)."""
+    if compound_kind == "slick":
+        return wetness < WET_THRESHOLD
+    return wetness >= WET_THRESHOLD * 0.8
 
 
 class Weather:
 
-    def __init__(self, mode: str, seed: int, duration: float, weekend_seed: int | None = None) -> None:
+    def __init__(self, mode: str, seed: int, duration: float, weekend_seed: int | None = None,
+                 kind: str = "race") -> None:
         """duration: rough length of the session in seconds, the forecast covers it.
-        weekend_seed: shared by all sessions of a weekend, decides whether rain is in the forecast at all."""
+        weekend_seed: shared by all sessions of a weekend, decides which session (if any) gets the shower."""
         rng = random.Random(seed)
         self.mode = mode
+        self.duration = duration
         self.points: list[tuple[float, float]] = []   # (time, rain) keyframes
-        if mode == "dynamic":
-            # changeable weather is the exception: about one weekend in three has rain about, and even then not
-            # every session gets a shower - a wet race roughly every fourth to fifth weekend
-            wet_weekend = random.Random(seed if weekend_seed is None else weekend_seed).random() < WET_WEEKEND_CHANCE
-            if not wet_weekend or rng.random() >= SHOWER_CHANCE:
-                mode = "dry"
+        if mode == "dynamic" and rain_session(mode, seed if weekend_seed is None else weekend_seed) != kind:
+            mode = "dry"
         if mode == "wet":
-            base = rng.uniform(0.45, 0.85)
+            # steady rain: the intensity drifts slowly instead of changing every minute
+            base = rng.uniform(0.5, 0.8)
             t = 0.0
             while t < duration + 120:
-                self.points.append((t, max(0.15, min(1.0, base + rng.uniform(-0.3, 0.25)))))
-                t += rng.uniform(40, 90)
+                self.points.append((t, max(0.3, min(0.95, base + rng.uniform(-0.12, 0.12)))))
+                t += rng.uniform(150, 300)
         elif mode == "dynamic":
-            # at most ONE change per session: either a dry start and rain that sets in and stays, or a wet
-            # start that clears up and the track dries
-            t = rng.uniform(0.25, 0.6) * duration
+            # exactly ONE rain period: it sets in and stays, passes as a single shower, or a wet start clears up
+            peak = rng.uniform(0.4, 0.9)
             ramp = rng.uniform(25, 60)
-            end = max(t + ramp, duration) + 120
-            if rng.random() < 0.7:
-                peak = rng.uniform(0.35, 0.95)
-                self.points += [(0.0, 0.0), (t, 0.0), (t + ramp, peak), (end, peak * rng.uniform(0.8, 1.0))]
+            end = duration + 120
+            shape = rng.random()
+            if shape < 0.45:
+                t = rng.uniform(0.25, 0.65) * duration
+                self.points += [(0.0, 0.0), (t, 0.0), (t + ramp, peak), (max(end, t + ramp + 1), peak * 0.9)]
+            elif shape < 0.8:
+                t = rng.uniform(0.15, 0.5) * duration
+                stop = t + ramp + rng.uniform(0.2, 0.4) * duration
+                self.points += [(0.0, 0.0), (t, 0.0), (t + ramp, peak), (stop, peak * 0.85),
+                                (stop + ramp, 0.0), (max(end, stop + ramp + 1), 0.0)]
             else:
-                start = rng.uniform(0.35, 0.75)
-                self.points += [(0.0, start), (t, start * rng.uniform(0.8, 1.0)), (t + ramp, 0.0), (end, 0.0)]
+                start = peak * 0.85
+                t = rng.uniform(0.2, 0.5) * duration
+                self.points += [(0.0, start), (t, start * 0.9), (t + ramp, 0.0), (max(end, t + ramp + 1), 0.0)]
         else:
             self.points = [(0.0, 0.0), (duration + 120, 0.0)]
         self.points.sort()
         self.rain = self.forecast(0.0)
         self.wetness = self.rain * 0.9 if mode == "wet" else self.rain * 0.6
+        self.start_wetness = self.wetness
         self.time = 0.0
         self._drops: list[list[float]] = [[rng.uniform(0, SCREEN_WIDTH), rng.uniform(0, SCREEN_HEIGHT),
                                            rng.uniform(0.6, 1.0)] for _ in range(260)]
@@ -77,17 +107,73 @@ class Weather:
                 return r0 + (r1 - r0) * (0.5 - 0.5 * math.cos(math.pi * k))
         return pts[-1][1]
 
+    @staticmethod
+    def wet_step(wetness: float, rain: float, dt: float, cars_on_track: int) -> float:
+        """Standing water after dt seconds of this rain."""
+        if rain > 0.02:
+            target = min(1.0, rain * 1.08)
+            # water builds up over ~25-50 s of steady rain and runs off slowly when the rain eases
+            rate = 0.03 * (0.4 + rain) if wetness < target else 0.006
+            return wetness + (target - wetness) * min(1.0, rate * dt)
+        # drying: wind/sun plus a dry line cut by the cars
+        return max(0.0, wetness - dt * (0.0025 + 0.00025 * cars_on_track))
+
+    def predict_wetness(self, ahead: float, cars_on_track: int = 20, step: float = 2.0) -> list[float]:
+        """Track wetness every `step` seconds over the next `ahead` seconds, from the forecast."""
+        w, t, out = self.wetness, self.time, []
+        while t < self.time + ahead:
+            t += step
+            w = self.wet_step(w, self.forecast(t), step, cars_on_track)
+            out.append(w)
+        return out
+
+    # ------------------------------------------------------------------ the forecast in laps
+    def lap_outlook(self, lap_time: float, laps: int, from_time: float | None = None,
+                    cars_on_track: int = 20) -> list[tuple[float, float]]:
+        """(rain chance, expected track wetness) for each of the next `laps` laps. The chance is the forecast
+        made a little uncertain: a lap next to the rain shows some chance too."""
+        lap_time = max(10.0, lap_time)
+        t0 = self.time if from_time is None else from_time
+        rains, wets = [], []
+        w, t = self.wetness if from_time is None else self.start_wetness, t0
+        for k in range(laps):
+            peak, end = 0.0, t0 + (k + 1) * lap_time
+            while t < end:
+                t += 2.0
+                r = self.forecast(t)
+                peak = max(peak, r)
+                w = self.wet_step(w, r, 2.0, cars_on_track)
+            rains.append(peak)
+            wets.append(w)
+        out = []
+        for k in range(laps):
+            near = max([rains[k]] + [0.55 * rains[j] for j in (k - 1, k + 1) if 0 <= j < laps])
+            chance = 0.0 if near <= 0.05 else min(0.95, 0.45 + 0.6 * near)
+            out.append((chance, wets[k]))
+        return out
+
+    def summary(self, lap_time: float, laps: int, from_time: float | None = None) -> str:
+        """The weather broadcast in one line, counted in laps."""
+        outlook = self.lap_outlook(lap_time, laps, from_time)
+        wet = [k + 1 for k, (_, w) in enumerate(outlook) if w >= WET_THRESHOLD]
+        rain = [k + 1 for k, (c, _) in enumerate(outlook) if c >= 0.6]
+        if not rain and not wet:
+            return "Trocken - kein Regen erwartet"
+        if wet and len(wet) == laps:
+            heavy = sum(1 for _, w in outlook if w >= FULL_WET_THRESHOLD) > laps // 2
+            return "Starkregen über die ganze Distanz - Full Wets" if heavy else "Regen über die ganze Distanz"
+        if not wet:
+            return f"Leichter Schauer um Runde {rain[0]} - Strecke bleibt fast trocken"
+        if wet[0] == 1:
+            return f"Nasser Start, trocknet ab ca. Runde {wet[-1] + 1}"
+        if wet[-1] == laps:
+            return f"Regen ab ca. Runde {rain[0] if rain else wet[0]}, nass ab Runde {wet[0]}"
+        return f"Schauer: nass von Runde {wet[0]} bis {wet[-1]}"
+
     def update(self, dt: float, track: "Track", cars_on_track: int) -> None:
         self.time += dt
         self.rain = self.forecast(self.time)
-        if self.rain > 0.02:
-            target = min(1.0, self.rain * 1.08)
-            # water builds up over ~25-50 s of steady rain and runs off slowly when the rain eases
-            rate = 0.03 * (0.4 + self.rain) if self.wetness < target else 0.006
-            self.wetness += (target - self.wetness) * min(1.0, rate * dt)
-        else:
-            # drying: wind/sun plus a dry line cut by the cars
-            self.wetness = max(0.0, self.wetness - dt * (0.0025 + 0.00025 * cars_on_track))
+        self.wetness = self.wet_step(self.wetness, self.rain, dt, cars_on_track)
         track.wetness = self.wetness
 
     def eta_rain(self, horizon: float = 120.0) -> float | None:

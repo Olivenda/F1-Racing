@@ -85,6 +85,15 @@ class AI_Car(Car):
         self._lap_seen = -1
         self._lap_factor = 1.0
         self._hesitate = 0.0
+        self._err_kind = ""             # the driving mistake under way ("late", "lock", "wide", "snap")
+        self._err_time = 0.0
+        self._was_braking = False
+
+    def mistake_chance(self, wet: float = 0.0) -> float:
+        """Chance of a driving mistake per corner: a beginner gets roughly one in eight wrong, the full-strength
+        AI one in a few hundred. A wet track makes everyone a bit more error-prone."""
+        k = (self.skill - 0.3) / 0.7
+        return (0.004 + 0.12 * (1.0 - k) ** 2) * (1.6 if wet > 0.22 else 1.0)
 
     def set_skill(self, strength: float) -> None:
         """How well this AI drives. Never touches the car: a weaker driver is slower through the corners, brakes
@@ -93,8 +102,8 @@ class AI_Car(Car):
         self.skill = max(0.3, min(1.0, strength))
         k = (self.skill - 0.3) / 0.7                    # 0 beginner .. 1 full strength
         # relative to the median full-strength driver: near 100% the cap sits above even the fastest ones
-        self.corner_factor = 1.0 if k >= 0.999 else 0.75 + 0.31 * k ** 0.5
-        self._brake_skill = 0.6 + 0.4 * k              # share of the car's real braking a driver dares to use
+        self.corner_factor = 1.0 if k >= 0.999 else 0.62 + 0.44 * k ** 0.35
+        self._brake_skill = 0.45 + 0.55 * k            # share of the car's real braking a driver dares to use
 
     def control(self, dt: float, session: "Session") -> None:
         others = session.cars if self.sees_others else ()
@@ -103,6 +112,9 @@ class AI_Car(Car):
         self._corner_limit(dt)
         if self.skill < 1.0 and not self.in_pit and not session.is_race_start_phase:
             self._driver_skill(dt)
+        rc = getattr(session, "rc", None)
+        if not self.in_pit and not session.is_race_start_phase and not (rc is not None and rc.active):
+            self._mistakes(dt)
         if others and self.collide_cars:
             # the first lap is the crowded one: more caution until the field has spread out
             caution = 1.5 if session.kind == "race" and self.laps_done == 0 else 1.0
@@ -114,7 +126,7 @@ class AI_Car(Car):
         k = (self.skill - 0.3) / 0.7
         if self.laps_done != self._lap_seen:
             self._lap_seen = self.laps_done
-            spread = 0.035 * (1.0 - k)
+            spread = 0.05 * (1.0 - k)
             self._lap_factor = 1.0 - random.uniform(0.0, spread)
         # only out of the corners: on a straight a weaker driver is flat out like everyone else
         exiting = self.speed_fwd < self.top_speed * 0.75
@@ -125,8 +137,38 @@ class AI_Car(Car):
             self._hesitate = random.uniform(0.25, 0.6)      # a beginner: now and then late on the throttle
         steer = abs(self.steer_input)
         if self.brake <= 0.0 and exiting and steer > 0.2:
-            careful = (1.0 - k) * 0.55 * min(1.0, (steer - 0.2) * 2.0)
+            careful = (1.0 - k) * 0.7 * min(1.0, (steer - 0.2) * 2.0)
             self.throttle = min(self.throttle, 1.0 - careful)
+
+    def _mistakes(self, dt: float) -> None:
+        """Now and then a driver gets a corner wrong: brakes too late or locks up and runs wide, misses the apex
+        on the way out or (weaker drivers) is too greedy on the throttle. Rarer the stronger the AI."""
+        braking = self.brake > 0.4
+        if self._err_time > 0.0:
+            self._err_time -= dt
+            kind = self._err_kind
+            if kind == "late":
+                self.brake *= 0.3                               # braked too late: carries too much speed
+            elif kind == "lock":
+                self.brake, self.throttle = 1.0, 0.0            # locked the fronts: goes straight on
+                self.steer_input *= 0.4
+            elif kind == "wide":
+                self.steer_input *= 0.45                        # missed the apex: runs out to the kerb / grass
+            elif kind == "snap":
+                self.throttle = 1.0                             # too much throttle with the wheels turned
+            if self._err_time <= 0.0:
+                self._err_kind = ""
+        else:
+            fast = self.speed_fwd > self.top_speed * 0.45
+            p = self.mistake_chance(self.track.wetness)
+            if braking and not self._was_braking and fast and random.random() < p:
+                self._err_kind = "late" if random.random() < 0.6 else "lock"
+                self._err_time = random.uniform(0.2, 0.45)
+            elif not braking and self._was_braking and abs(self.steer_input) > 0.3 and random.random() < p * 0.6:
+                greedy = self.skill < 0.6 and random.random() < 0.4
+                self._err_kind = "snap" if greedy else "wide"
+                self._err_time = random.uniform(0.25, 0.4) if greedy else random.uniform(0.4, 0.7)
+        self._was_braking = braking
 
     def _corner_limit(self, dt: float) -> None:
         """Weaker drivers: through the corners never faster than corner_factor x the typical speed of a
@@ -152,9 +194,10 @@ class AI_Car(Car):
                     t = (r / top - 0.55) / 0.3
                     if r <= 0.0 or t >= 1.0:
                         continue                # unknown, or flat out: the weaker driver is just as fast there
-                    # all of the reduction in slow corners, fading out towards the fast ones
+                    # all of the reduction in slow corners, fading out towards the fast ones - out to well above
+                    # the median driver there, so the quick ones aren't held back either
                     t = max(0.0, t)
-                    v = r * (f + (1.0 - f) * t * t * (3.0 - 2.0 * t))
+                    v = r * (f + (1.12 - f) * t * t * (3.0 - 2.0 * t))
                     allowed = min(allowed, (v * v + 2.0 * brake_decel(v) * brake_k * k * step) ** 0.5)
                 self._corner_cap = allowed
             excess = self.speed_fwd - self._corner_cap

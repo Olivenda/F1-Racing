@@ -64,10 +64,11 @@ def session_dnf(car) -> bool:
 def ai_skill_hint(strength: float) -> str:
     """What an AI strength means on track: the cars stay as fast, the drivers get worse."""
     if strength >= 0.999:
-        return "Volle Stärke: die KI fährt am Limit"
+        return "Fährt am Limit · kaum Fehler"
     k = (strength - 0.3) / 0.7
-    corner = min(100, 75 + 31 * k ** 0.5)
-    return f"Gleiche Autos, schwächere Fahrer: {corner:.0f}% Kurventempo, bremst früher"
+    corner = min(100, 62 + 44 * k ** 0.35)
+    errors = "viele" if k < 0.35 else "einige" if k < 0.75 else "seltene"
+    return f"Kurven {corner:.0f}% · bremst früher · {errors} Fehler"
 
 
 def _strength_color(strength: float) -> tuple[int, int, int]:
@@ -895,8 +896,8 @@ class SettingsScreen:
         "Getriebe": "Automatik: das Auto schaltet selbst. Sequenziell: du schaltest - Tastatur E/Q (änderbar), "
                     "Gamepad RB/LB, Lenkrad Schaltwippen. Jeder Gang hat einen Drehzahlbegrenzer, im zu hohen Gang "
                     "fehlt die Beschleunigung. Zu frühes Runterschalten wird verweigert (Motorschutz).",
-        "Wetter": "Trocken: nie Regen. Wechselhaft: höchstens ein Wetterwechsel pro Rennen. Regen: nasses Rennen. "
-                  "Bei Nässe Intermediates (grün) oder Wets (blau) holen.",
+        "Wetter": "Trocken: nie Regen. Wechselhaft: höchstens ein Regenschauer pro Wochenende, angekündigt im "
+                  "Wetterbericht. Regen: nasses Rennen. Bei Nässe Intermediates (grün) oder Wets (blau) holen.",
         "TV-Regie (Zuschauer)": "Die Kamera springt automatisch zu engen Zweikämpfen (im Rennen mit A umschalten).",
         "Sprache": "Sprache des Spiels / game language. Standard: English.",
         "Safety Car": "Bei Ausfällen und schweren Unfällen: Safety Car (Feld fährt geschlossen hinter dem SC, "

@@ -58,7 +58,7 @@ CAR_SKIP = {"track", "profile", "perf", "sf", "setup", "tyres", "damage", "_rot_
             "samples", "_rec_timer", "keyset", "slot", "autopilot", "_fb_impulse", "_ffb_jolt", "color", "remote",
             "_tel", "_lap_log_start", "brain", "net", "driver", "is_player"}
 WEATHER_SKIP = {"_drops", "_tint"}
-RC_SKIP = {"s", "sc"}
+RC_SKIP = {"s", "sc", "_ref", "_rank", "_line_due"}
 SC_KEYS = ("s", "speed", "pos", "heading")
 
 

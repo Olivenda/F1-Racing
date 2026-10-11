@@ -25,14 +25,14 @@ from .pitlane import (BOX_APPROACH, BOX_CREEP, BOX_MISS_TIME, BOX_PERFECT, BOX_W
 from .car_setup import CarSetup, recommended
 from .career_events import DEFAULT_RELIABILITY, FAILURES, MINOR_FAILURES, RETIRE_SHARE, failure_chance
 from .tyres import ALL_COMPOUNDS, COMPOUNDS, COMPOUND_ORDER, TyreSet
-from .weather import Weather
+from .weather import WET_THRESHOLD, Weather, plan_fits
 from .utils import approach
 from .sensors import RADAR_RANGE, lookahead_points
 from .race_control import PUNCTURE_WEAR, RaceControl
 from .i18n import tr
 from .stewards import Stewards
 from .settings import (TOP_SPEED, ai_strength, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
-                       SCREEN_WIDTH, SLIPSTREAM_RANGE, WHITE, YELLOW, GREEN, PX_PER_S_TO_KMH, CAR_LENGTH, Color)
+                       SCREEN_WIDTH, SLIPSTREAM_RANGE, WHITE, YELLOW, GREEN, PX_PER_S_TO_KMH, CAR_LENGTH, CAR_WIDTH, Color)
 from .utils import format_time
 
 if TYPE_CHECKING:
@@ -88,6 +88,22 @@ class WeekendConfig:
     def difficulty(self) -> float:
         """AI strength 0.3 .. 1.0: how well the AI drives (its cars keep their full performance)."""
         return ai_strength(self.difficulty_name)
+
+
+def estimated_lap(track: "Track") -> float:
+    return track.length / (TOP_SPEED * 0.85)
+
+
+def expected_duration(track: "Track", config: WeekendConfig, kind: str) -> float:
+    """Rough session length in seconds, so the rain forecast spans the session."""
+    laps = {"practice": 10, "qualifying": 4}.get(kind, config.race_laps + 1)
+    return estimated_lap(track) * laps
+
+
+def session_weather(config: WeekendConfig, track: "Track", kind: str) -> Weather:
+    """The weather of one session of the weekend - also used ahead of it for the broadcast and the strategy."""
+    return Weather(config.weather, config.weather_seed + {"practice": 0, "qualifying": 1}.get(kind, 2),
+                   expected_duration(track, config, kind), weekend_seed=config.weather_seed, kind=kind)
 
 
 def time_gap(front: Car, back: Car) -> float | None:
@@ -172,8 +188,7 @@ class Session:
         self.team_orders: dict[Car, dict] = {}
         self.failures: dict[str, str] = {}
         self.pit_menu = PitMenu()
-        self.weather = Weather(config.weather, config.weather_seed + {"practice": 0, "qualifying": 1}.get(self.kind, 2),
-                               self.expected_duration(), weekend_seed=config.weather_seed)
+        self.weather = session_weather(config, track, self.kind)
         track.wetness = self.weather.wetness
         self._frame_dt = 0.0
         self._weather_note = ""
@@ -202,10 +217,12 @@ class Session:
         return getattr(self, "lights_on", 0)
 
     def expected_duration(self) -> float:
-        """Rough session length in seconds, so the rain forecast spans the session."""
-        lap = self.track.length / (TOP_SPEED * 0.85)
-        laps = {"practice": 10, "qualifying": 4}.get(self.kind, self.config.race_laps + 1)
-        return lap * laps
+        return expected_duration(self.track, self.config, self.kind)
+
+    def forecast_lap_time(self) -> float:
+        """Lap time the weather broadcast counts in: the quickest lap so far, an estimate before that."""
+        best = [c.best_lap for c in self.cars if c.best_lap]
+        return min(best) * 1.03 if best else estimated_lap(self.track)
 
     def _create_cars(self, order: list[DriverProfile]) -> None:
         ai_setup = recommended(self.track)
@@ -355,6 +372,8 @@ class Session:
             weather = self.weather_tyre_call(car)
             plan = car.next_planned_stop() if self.kind == "race" else None
             due = plan is not None and plan[0] - (car.laps_done + 1) <= 0
+            if due and weather is None and not plan_fits(COMPOUNDS[plan[1]].kind, self.track.wetness):
+                continue    # the forecast was a little out: the stop onto rain/dry tyres waits for the weather
             if self.kind == "race" and getattr(self, "total_laps", 0) - car.laps_done <= 1 and weather is None:
                 continue                            # last lap: no stop for the strategy any more
             if weather is None and not due:
@@ -1613,6 +1632,8 @@ class RaceSession(Session):
     def pre_step(self, h: float) -> None:
         if self.race_started:
             self.go_timer = max(0.0, self.go_timer - h)
+            if self.is_race_start_phase and self.time - self.race_start_time > 2.0:
+                self.is_race_start_phase = False    # launch over: the drivers' skill and mistakes count again
             self.rc.step(h)
             return
         if self.time >= self.LIGHTS_START:
@@ -1726,11 +1747,21 @@ class RaceSession(Session):
             self._await_reaction = False
 
     BLUE_RANGE = 320.0
+    BLUE_CLOSE = 90.0           # the lapping car is right behind: from here the backmarker has to make room
+    BLUE_WARN = 5.0             # seconds holding up a lapping car before the warning ...
+    BLUE_PENALTY = 12.0         # ... and before the penalty
 
     def _check_blue_flag(self) -> None:
-        """Blue flags for every car: a car a lap (or more) up within BLUE_RANGE behind means let it through."""
+        """Blue flags for every car: a car a lap (or more) up within BLUE_RANGE behind means let it through.
+        None under SC/VSC (nobody may overtake then) or into the pit lane."""
         L = self.track.length
+        neutral = self.rc.active
         racing = [c for c in self.cars if not (c.dnf or c.session_done or c.in_pit or c.frozen)]
+        for c in self.cars:
+            if c not in racing or neutral:
+                c.blue_for, c.blue_gap = None, self.BLUE_RANGE
+        if neutral:
+            racing = []
         for x in racing:
             chaser, gap = None, self.BLUE_RANGE
             for y in racing:
@@ -1748,28 +1779,56 @@ class RaceSession(Session):
             if self.blue_flag <= 0:
                 self.message(f"BLAUE FLAGGE - lass {p.blue_for.short} überrunden", (60, 140, 255), 2.0)
             self.blue_flag = 1.0
-            if p.blue_gap < 160:
-                self._blue_ignored += 0.5
-            if self._blue_ignored >= 12.0:
+            # only the time the faster car is really stuck right behind counts, not a lapping car that is
+            # still closing in
+            if p.blue_gap < self.BLUE_CLOSE:
+                self._blue_ignored += 0.4
+            if self._blue_ignored >= self.BLUE_PENALTY:
                 self.stewards.penalty(p, 5.0, f"blaue Flaggen ignoriert ({p.blue_for.short})")
                 self._blue_ignored = 0.0
-            elif self._blue_ignored >= 6.0 and not self._blue_warned:
+            elif self._blue_ignored >= self.BLUE_WARN and not self._blue_warned:
                 self._blue_warned = True
                 self.message("Blaue Flagge ignoriert - Verwarnung! Lass ihn vorbei", (255, 140, 30), 3.0)
         else:
-            self._blue_ignored = max(0.0, self._blue_ignored - 0.5)
+            self._blue_ignored = max(0.0, self._blue_ignored - 0.8)
             if self._blue_ignored <= 0:
                 self._blue_warned = False
 
     def _yield_to_blue(self, car: Car, h: float) -> None:
-        """AI backmarker under a blue flag: lift a little and, once the lapping car is right behind, let it
-        through - the backmarker turns 'ghost' (see-through, no contact, ignored by the chaser's sensors)."""
+        """AI backmarker under a blue flag: like a real one it moves off the racing line to the side the lapping
+        car is not on and lifts on the straight so it gets by. Only if the faster car is still stuck right behind
+        after a few seconds (a tight section) does the backmarker turn 'ghost' to let it through."""
         chaser = car.blue_for
-        if chaser is None or car is self.player or self.rc.active or car.blue_gap > 140.0:
+        if chaser is None or car.is_player or self.rc.active or car.blue_gap > 160.0:
+            car.blue_side = 0.0
+            car.blue_stuck = 0.0
             return
-        car.throttle = min(car.throttle, 0.85)
+        tr_ = self.track
+        n = tr_.n
+        t0 = tr_.tangents[car.idx]
+        straight = all(abs(t0.x * t.y - t0.y * t.x) < 0.12 and t0.dot(t) > 0
+                       for t in (tr_.tangents[(car.idx + k) % n] for k in (12, 25)))
+        side = getattr(car, "blue_side", 0.0)
+        if not side:
+            # keep to the side the backmarker already leans to - unless the lapping car is coming that way
+            side = 1.0 if car.lateral >= 0 else -1.0
+            if abs(chaser.lateral - car.lateral) < CAR_WIDTH * 2 and (chaser.lateral - car.lateral) * side > 0:
+                side = -side
+            car.blue_side = side
+        if straight:
+            target = side * (tr_.half_width - CAR_WIDTH * 1.2)
+            car.steer_input = max(-1.0, min(1.0, car.steer_input + max(-0.3, min(0.3, (target - car.lateral)
+                                                                                     * 0.015))))
+            if car.blue_gap < self.BLUE_CLOSE:
+                car.throttle = min(car.throttle, 0.7)
+        else:
+            car.throttle = min(car.throttle, 0.92)        # in the corner: hold the line, a little early off
         car.straight_mode = False
-        car.ghost_timer = max(car.ghost_timer, 0.5)
+        stuck = getattr(car, "blue_stuck", 0.0)
+        stuck = stuck + h if car.blue_gap < 45.0 else max(0.0, stuck - h)
+        car.blue_stuck = stuck
+        if stuck > 3.0:
+            car.ghost_timer = max(car.ghost_timer, 0.5)
 
     def standings(self) -> list[Car]:
         def key(c: Car) -> tuple[float, int, float]:
@@ -1858,6 +1917,13 @@ class RaceSession(Session):
             return None
         if tyres.compound.kind != "slick" or self.track.wetness > 0.15:
             return None     # wet running: the weather call decides
+        wet_in = self.laps_until_wet(car, remaining)
+        if wet_in is not None:
+            # rain on the radar: the slicks only have to last until the stop for rain tyres, which also
+            # lifts the two-compound rule - no point in a fresh set of slicks for a lap or two
+            remaining, must = max(1, wet_in), False
+            if remaining < 2:
+                return None
         rate = self._wear_rate(car)
         cur = tyres.compound
         full = self.pit_loss(car)
@@ -1903,6 +1969,14 @@ class RaceSession(Session):
         margin = 0.5 + (sum(map(ord, car.name)) % 7) * 0.25
         if now + margin < later:
             return opener[remaining - old_laps]
+        return None
+
+    def laps_until_wet(self, car: Car, horizon: int) -> int | None:
+        """Laps until the forecast has the track too wet for slicks (None if it stays dry for `horizon` laps)."""
+        lap = self._lap_estimate(car)
+        for k, (_, wet) in enumerate(self.weather.lap_outlook(lap, horizon)):
+            if wet >= WET_THRESHOLD:
+                return k
         return None
 
     def on_lap_completed(self, car: Car, lap_time: float) -> None:
