@@ -82,6 +82,7 @@ class AI_Car(Car):
         self.engine_factor = engine_factor
         self.driver = NeuralDriver(self, network, marshal)
         self.sees_others = True
+<<<<<<< Updated upstream
         self.corner_factor = 1.0        # < 1: a weaker driver is held to a share of the full-strength AI's speed
         self._corner_timer = 0.0
         self._corner_cap = 1e9
@@ -110,6 +111,33 @@ class AI_Car(Car):
         # relative to the median full-strength driver: near 100% the cap sits above even the fastest ones
         self.corner_factor = 1.0 if k >= 0.999 else 0.62 + 0.44 * k ** 0.35
         self._brake_skill = 0.45 + 0.55 * k            # share of the car's real braking a driver dares to use
+=======
+        self._corner_timer = 0.0
+        self._corner_cap = 1e9
+        self._pace_ref: list[float] | None = None
+        self.set_skill(1.0)
+
+    # ------------------------------------------------------------------ driver skill (difficulty)
+    # The difficulty never touches the car: it is how well the driver drives it. A weaker driver carries less
+    # speed through corners, brakes earlier and more gently, squeezes the throttle on exit instead of flooring it,
+    # is less consistent from lap to lap and now and then has a "moment". 100% = the trained net untouched.
+    SKILL_CORNER_LOSS: float = 0.38     # corner speed at 0% skill: 62% of the full-strength AI's
+    SKILL_CURVE: float = 1.25           # > 1: the top end stays close together, the bottom spreads out
+
+    def set_skill(self, skill: float) -> None:
+        s = self.skill = max(0.0, min(1.0, skill))
+        weak = 1.0 - s
+        self.corner_factor = 1.0 - self.SKILL_CORNER_LOSS * weak ** self.SKILL_CURVE
+        self.brake_commit = 0.85 - 0.40 * weak          # share of the braking limit it dares to use
+        self.throttle_rate = 3.0 + 12.0 * s              # how fast it gets back on the throttle (1/s)
+        self.traction_care = 0.65 * weak                 # lifts while the wheel is turned
+        self.consistency = 0.015 * weak                  # lap-to-lap spread of the corner speed
+        self.mistake_rate = 0.035 * weak                 # "moments" per second
+        self._lap_factor = self.corner_factor
+        self._lap_seen = -1
+        self._mistake = 0.0
+        self._last_throttle = 0.0
+>>>>>>> Stashed changes
 
     def control(self, dt: float, session: "Session") -> None:
         others = session.cars if self.sees_others else ()
@@ -121,8 +149,14 @@ class AI_Car(Car):
             extra = [o for o in session.extra_objects() if getattr(o, "on_track", True)]
             seen = list(others) + extra if extra else others
         self.throttle, self.brake, self.steer_input = self.driver.update(
+<<<<<<< Updated upstream
             dt, seen, self.track, race_start=session.is_race_start_phase, neutral=neutral,
             hold=rc is not None and rc.mode == "RED")      # stopped for a red flag: not stuck
+=======
+            dt, others, self.track, race_start=session.is_race_start_phase)
+        if self.skill < 1.0:
+            self._driver_skill(dt)
+>>>>>>> Stashed changes
         self._corner_limit(dt)
         if self.skill < 1.0 and not self.in_pit and not session.is_race_start_phase:
             self._driver_skill(dt)
@@ -184,24 +218,50 @@ class AI_Car(Car):
                 self._err_time = random.uniform(0.25, 0.4) if greedy else random.uniform(0.4, 0.7)
         self._was_braking = braking
 
+    def _driver_skill(self, dt: float) -> None:
+        if self.laps_done != self._lap_seen:
+            self._lap_seen = self.laps_done
+            self._lap_factor = min(1.0, self.corner_factor * (1.0 + random.gauss(0.0, self.consistency)))
+        if self._mistake > 0.0:
+            self._mistake -= dt
+            self.throttle = min(self.throttle, 0.25)
+        elif self.speed_fwd > 150.0 and random.random() < self.mistake_rate * dt:
+            self._mistake = random.uniform(0.4, 1.1)
+        self.throttle = min(self.throttle, 1.0 - self.traction_care * min(1.0, abs(self.steer_input) * 1.6),
+                            self._last_throttle + self.throttle_rate * dt)
+        self._last_throttle = self.throttle
+
     def _corner_limit(self, dt: float) -> None:
+<<<<<<< Updated upstream
         """Weaker drivers: through the corners never faster than corner_factor x the typical speed of a
         full-strength AI there (see ai_pace), braking for it early; on the straights they are just as fast. Cars
         not held back keep the reference up to date."""
+=======
+        """Weaker drivers: never faster than corner_factor x the reference speed of a full-strength AI at this
+        point of the track (see ai_pace), braking for it in time. Cars not held back teach the reference."""
+>>>>>>> Stashed changes
         track = self.track
         if self.in_pit or self.frozen:
             return
         ref = self._pace_ref
         if ref is None or len(ref) != track.n:
             ref = self._pace_ref = ai_pace.profile(track.definition.key, track.n)
+<<<<<<< Updated upstream
         f = self.corner_factor * self._lap_factor
+=======
+        f = self._lap_factor
+>>>>>>> Stashed changes
         if self.skill < 1.0:
             self._corner_timer -= dt
             if self._corner_timer <= 0.0:
                 self._corner_timer = AI_CONTROL_INTERVAL
                 n, step = track.n, track.WAYPOINT_SPACING
+<<<<<<< Updated upstream
                 brake_k = self.performance()["brake"] * self._brake_skill
                 top = self.top_speed
+=======
+                brake_k = self.performance()["brake"] * self.brake_commit
+>>>>>>> Stashed changes
                 allowed = 1e9
                 for k in range(0, 40, 2):
                     r = ref[(self.idx + k) % n]

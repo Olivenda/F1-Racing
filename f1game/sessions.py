@@ -32,8 +32,13 @@ from .race_control import PUNCTURE_WEAR, RaceControl
 from .race_director import RaceDirector
 from .i18n import tr
 from .stewards import Stewards
+<<<<<<< Updated upstream
 from .settings import (TOP_SPEED, ai_strength, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
                        SCREEN_WIDTH, SLIPSTREAM_RANGE, WHITE, YELLOW, GREEN, PX_PER_S_TO_KMH, CAR_LENGTH, CAR_WIDTH, Color)
+=======
+from .settings import (TOP_SPEED, difficulty_percent, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
+                       SCREEN_WIDTH, SLIPSTREAM_RANGE, WHITE, YELLOW, GREEN, Color)
+>>>>>>> Stashed changes
 from .utils import format_time
 
 if TYPE_CHECKING:
@@ -87,6 +92,7 @@ class WeekendConfig:
 
     @property
     def difficulty(self) -> float:
+<<<<<<< Updated upstream
         """AI strength 0.3 .. 1.0: how well the AI drives (its cars keep their full performance)."""
         return ai_strength(self.difficulty_name)
 
@@ -105,6 +111,10 @@ def session_weather(config: WeekendConfig, track: "Track", kind: str) -> Weather
     """The weather of one session of the weekend - also used ahead of it for the broadcast and the strategy."""
     return Weather(config.weather, config.weather_seed + {"practice": 0, "qualifying": 1}.get(kind, 2),
                    expected_duration(track, config, kind), weekend_seed=config.weather_seed, kind=kind)
+=======
+        """AI driver skill 0..1."""
+        return difficulty_percent(self.difficulty_name) / 100.0
+>>>>>>> Stashed changes
 
 
 def time_gap(front: Car, back: Car) -> float | None:
@@ -255,7 +265,10 @@ class Session:
                 net = self.game.brains.network(prof.brain, prof.checkpoint)
                 car = AI_Car(prof, self.track, net, engine_factor=prof.pace)
                 car.grip_bonus = driver_grip(prof.pace)
+<<<<<<< Updated upstream
                 car.driver.sc_net = sc_net
+=======
+>>>>>>> Stashed changes
                 car.set_skill(self.config.difficulty)
                 car.apply_setup(ai_setup)
             if self.ghost_field:

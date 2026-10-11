@@ -11,7 +11,11 @@ from .career import NATIONALITIES, PERSONAL, PERSONAL_COST, REBRAND_COST
 from .career_achievements import ACHIEVEMENTS, available
 from .career_screens import GOLD, MEDAL, RED, _fit, _Screen, _wrap, draw_form, draw_livery
 from .championship import FORMATS
+<<<<<<< Updated upstream
 from .settings import CYAN, DIFFICULTY_LEVELS, difficulty_index, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, \
+=======
+from .settings import CYAN, DIFFICULTY_LEVELS, difficulty_index, difficulty_label, difficulty_percent, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, \
+>>>>>>> Stashed changes
     YELLOW
 from .utils import draw_panel, draw_text, mouse_item
 
@@ -547,7 +551,7 @@ class CareerOptionsScreen(_RowScreen):
 
     def _value(self, row: str) -> str:
         return {"Rennrunden": f"{self.laps} Runde{'n' if self.laps != 1 else ''} pro Rennen",
-                "KI-Stärke": self.diffs[self.diff], "Format": FORMATS[self.fmt][1]}.get(row, "")
+                "KI-Stärke": difficulty_label(self.diffs[self.diff]), "Format": FORMATS[self.fmt][1]}.get(row, "")
 
     def draw(self, screen: pygame.Surface) -> None:
         f, c = self.game.fonts, self.career
@@ -577,7 +581,7 @@ class CareerOptionsScreen(_RowScreen):
                 "Training und Qualifying gibt. Fortschritt, Verträge und Erfolge bleiben erhalten.")
         for k, line in enumerate(_wrap(text, f.small, hb.w - 36)):
             draw_text(screen, line, f.small, (205, 205, 210), (hb.x + 18, hb.y + 18 + k * 24), shadow=False)
-        changed = (self.laps, self.diffs[self.diff], FORMATS[self.fmt][0]) != (c.laps, c.difficulty, c.format)
+        changed = (self.laps, self.diffs[self.diff], FORMATS[self.fmt][0]) != (c.laps, f"{difficulty_percent(c.difficulty)}%", c.format)
         if changed:
             draw_text(screen, "Ungespeicherte Änderungen", f.small_bold, YELLOW, (hb.x + 18, hb.bottom - 34),
                       shadow=False)

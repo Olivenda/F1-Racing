@@ -453,6 +453,8 @@ class Car:
         if self.start_boost > 0.0:
             self.start_boost = max(0.0, self.start_boost - dt)
             engine *= 1.0 + 0.06 * self.skills.get("start", 0)
+        if self.out_of_fuel:
+            engine = 0.0                # tank dry: the engine has died, the car only rolls
         brake_force = brake_decel(vf) * perf.brakes * sf.brake * (self.tyres.braking if self.tyres else 1.0) * \
             self.damage.brake_factor
         if self.on_grass:

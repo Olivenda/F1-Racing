@@ -180,7 +180,7 @@ class Career:
     def create(cls, slot: str, kind: str, player_name: str, difficulty: str, laps: int, fmt: str, teams: list[Team],
                team_name: str = "", team_color: tuple[int, int, int] = (255, 0, 140),
                player_drives: bool = True, short: str = "", number: int = 0, nationality: str = "",
-               helmet: tuple[int, int, int] = (0, 230, 255)) -> "Career":
+               helmet: tuple[int, int, int] = (0, 230, 255), takeover: str = "") -> "Career":
         team_data = {t.name: {"color": list(t.color), "engine": t.engine, "aero": t.aero, "top_speed": t.top_speed,
                               "brakes": t.brakes, "tyre_wear": t.tyre_wear} for t in teams}
         drivers: dict[str, dict[str, Any]] = {}
@@ -194,6 +194,11 @@ class Career:
                                   "nationality": d.get("nationality", ""), "tyre_mgmt": float(d.get("tyre_mgmt", 1.0)),
                                   "salary": float(d.get("salary", 1.0)), "potential": int(d.get("potential", 0)),
                                   "years": 2 if seat else 0}
+        # taking over an existing driver: you become them - name, helmet and (in the driver career) their seat
+        taken = drivers.pop(takeover, None) if (kind == "driver" or player_drives) else None
+        if taken is not None:
+            player_name, short, nationality = takeover, taken["short"], taken.get("nationality", "")
+            helmet = tuple(taken.get("helmet") or helmet)
         career = cls(kind=kind, player_name=player_name, difficulty=difficulty, laps=laps, format=fmt,
                      teams=team_data, drivers=drivers, player_drives=player_drives if kind == "team" else True,
                      slot=slot, player_short=short.strip().upper()[:3], player_number=number,
@@ -205,9 +210,24 @@ class Career:
             career.staff_offers = staff_candidates(career.team_rep, set())
             career.news.append(f"Willkommen, Teamchef! {name} startet mit {START_BUDGET:.0f} Mio Budget.")
             career.news.append("Hol dir im Fahrermarkt " + ("einen Teamkollegen." if player_drives else "zwei Fahrer."))
+            if taken is not None:
+                career.news.append(f"{player_name} wechselt von {taken['team'] or 'der Ersatzbank'} zu {name}.")
+        elif taken is not None and taken["team"]:
+            seat = taken["team"]
+            rank = career.team_ranking().index(seat) + 1
+            career.team = seat
+            career.contract = {"salary": float(taken.get("salary", 1.0)), "years": 2,
+                               "goal": max(2, min(20, round(rank * 1.6) + 2))}
+            career.reputation = max(20.0, min(95.0, (int(taken["rating"]) - 55) * 2.2))
+            career.news.append(f"Du übernimmst das Cockpit von {player_name} bei {seat}: 2 J., "
+                               f"{career.contract['salary']:.1f} Mio/Saison, Ziel P{career.contract['goal']}")
         else:
+            if taken is not None:
+                career.reputation = max(20.0, min(95.0, (int(taken["rating"]) - 55) * 2.2))
             career.offers = career._make_offers(first=True)
             career.news.append("Willkommen in der Formel 1! Wähle deinen ersten Vertrag.")
+        if taken is not None:
+            career._fill_seats(announce=False)         # the old team signs a replacement
         career._new_championship()
         return career
 

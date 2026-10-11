@@ -1514,11 +1514,23 @@ EXACT.update({
         "Arrows select/change · click tracks/buttons · ENTER starts · ESC back",
     "Pfeile wählen/ändern · Klick auf Strecke/Knöpfe · ENTER starten · TAB Team/Feld · R Zufallsrennen · ESC zurück":
         "Arrows select/change · click tracks/buttons · ENTER starts · TAB team/grid · R random race · ESC back",
+    "Eigener neuer Fahrer": "Own new driver", "Fahrer": "Driver", "ohne Cockpit": "no seat",
+    "der Ersatzbank": "the reserve bench",
+    "Fahrkönnen der KI - gleiche Autos, 30% ist ca. 5-10 s pro Runde langsamer als 100%":
+        "AI driving skill - same cars, 30% is about 5-10 s a lap slower than 100%",
 })
 TEMPLATES += [
     ("Renndauer ca. {#} min", "Race length approx. {} min"), ("Starterfeld {#} Autos", "Grid of {} cars"),
     ("STARTERFELD · {#} AUTOS", "GRID · {} CARS"), ("+ {#} weitere", "+ {} more"),
     ("Grip {#}% · {}", "Grip {}% · {}"), ("{#}% Motor · {#}% Kurventempo", "{}% engine · {}% corner speed"),
+    ("{#}% · Legende", "{}% · Legend"), ("{#}% · Profi", "{}% · Pro"), ("{#}% · Erfahren", "{}% · Experienced"),
+    ("{} · {} · Wertung {#}", "{} · {} · rating {}"),
+    ("Du übernimmst {}: Cockpit bei {}, Helm und Kürzel.", "You take over {}: seat at {}, helmet and code."),
+    ("{} verlässt {} und fährt für dein Team.", "{} leaves {} and drives for your team."),
+    ("Du übernimmst das Cockpit von {} bei {}: {#} J., {} Mio/Saison, Ziel P{#}",
+     "You take over {}'s seat at {}: {} yrs, {} M/season, target P{}"),
+    ("{} wechselt von {} zu {}.", "{} moves from {} to {}."),
+    ("{#}% · Amateur", "{}% · Amateur"), ("{#}% · Anfänger", "{}% · Beginner"), ("{#}% · Neuling", "{}% · Rookie"),
     ("Eigenes: Flügel {} · Höhe {}", "Own: wing {} · ride height {}"),
     ("Empfohlen: Flügel {} · Höhe {}", "Recommended: wing {} · ride height {}"),
     ("Fahrhilfen {} · {} · Schaden {} · Reifen {} · Wetter {}", "Assists {} · {} · damage {} · tyres {} · weather {}"),

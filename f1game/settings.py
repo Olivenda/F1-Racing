@@ -53,6 +53,7 @@ SPIN_TRANSFER: float = 0.55
 
 GEAR_THRESHOLDS: tuple[float, ...] = (85.0, 153.0, 220.0, 288.0, 355.0, 423.0, 456.0)
 
+<<<<<<< Updated upstream
 # AI strength in percent: how well the AI drives - never how fast its car is (30% beginner .. 100% full strength)
 DIFFICULTY_LEVELS: dict[str, float] = {f"{p}%": p / 100 for p in range(30, 101, 5)}
 DEFAULT_DIFFICULTY: str = "70%"
@@ -75,6 +76,31 @@ def difficulty_index(name: str) -> int:
 def ai_skill_name(strength: float) -> str:
     return "Anfänger" if strength < 0.45 else "Amateur" if strength < 0.65 else "Profi" if strength < 0.85 \
         else "Weltklasse"
+=======
+# AI driver skill 0-100%: the cars stay the same, the drivers get better (see AI_Car.set_skill).
+# Roughly: 100% = the trained nets flat out, 70% ~1.5 s a lap slower, 30% ~6-9 s, 0% ~11-16 s.
+DIFFICULTY_LEVELS: dict[str, int] = {f"{p}%": p for p in range(0, 101, 5)}
+DIFFICULTY_DEFAULT: str = "85%"
+_LEGACY_DIFFICULTY: dict[str, int] = {"Leicht": 70, "Mittel": 85, "Schwer": 100}
+_DIFFICULTY_TIERS: tuple[tuple[int, str], ...] = ((95, "Legende"), (85, "Profi"), (70, "Erfahren"),
+                                                   (50, "Amateur"), (25, "Anfänger"), (0, "Neuling"))
+
+
+def difficulty_percent(name: str) -> int:
+    """Skill in percent of a difficulty name; also reads the old Leicht/Mittel/Schwer of earlier saves."""
+    if name in DIFFICULTY_LEVELS:
+        return DIFFICULTY_LEVELS[name]
+    return _LEGACY_DIFFICULTY.get(name, DIFFICULTY_LEVELS[DIFFICULTY_DEFAULT])
+
+
+def difficulty_index(name: str) -> int:
+    return list(DIFFICULTY_LEVELS).index(f"{difficulty_percent(name)}%")
+
+
+def difficulty_label(name: str) -> str:
+    p = difficulty_percent(name)
+    return f"{p}% · {next(t for lo, t in _DIFFICULTY_TIERS if p >= lo)}"
+>>>>>>> Stashed changes
 AI_CONTROL_INTERVAL: float = 1.0 / 30.0
 
 Color = tuple[int, int, int]
