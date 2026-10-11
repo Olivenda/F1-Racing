@@ -1118,7 +1118,48 @@ class HUD:
             draw_text(screen, f"R{lap}", f.tiny, (130, 130, 140), (x + 12, ty), shadow=False)
             draw_text(screen, tr(text)[:48], f.tiny, colors.get(kind, WHITE), (x + 46, ty), shadow=False)
 
+    CHAT_LINES = 8
+    CHAT_W = 370
+
+    def chat_rect(self) -> pygame.Rect:
+        h = 30 + self.CHAT_LINES * 17
+        return pygame.Rect(16, SCREEN_HEIGHT - 30 - h, self.CHAT_W, h)
+
+    def _chat(self, screen: pygame.Surface, s: "Session") -> None:
+        """Race director: every announcement in one small log down on the left (mouse wheel scrolls back)."""
+        f = self.f
+        rect = self.chat_rect()
+        draw_panel(screen, rect, (10, 14, 26), 215)
+        pygame.draw.rect(screen, (30, 70, 200), (rect.x + 8, rect.y + 7, 34, 14), border_radius=3)
+        draw_text(screen, "OIA", f.tiny, (255, 220, 40), (rect.x + 25, rect.y + 14), anchor="center", shadow=False)
+        draw_text(screen, "RENNLEITUNG", f.tiny, GREY, (rect.x + 50, rect.y + 7), shadow=False)
+        chat = s.chat or []
+        n = self.CHAT_LINES
+        s.chat_scroll = max(0, min(s.chat_scroll, len(chat) - n))
+        end = len(chat) - s.chat_scroll
+        lines = chat[max(0, end - n):end]
+        hint = f"zurückgescrollt ({s.chat_scroll}) · Mausrad" if s.chat_scroll else "Mausrad scrollt"
+        draw_text(screen, hint, f.tiny, (110, 110, 120), (rect.right - 10, rect.y + 7), anchor="topright",
+                  shadow=False)
+        y = rect.y + 27
+        width = rect.w - 92
+        for t, lap, text, color in lines:
+            if s.time - t < 3.0 and not s.chat_scroll:
+                pygame.draw.rect(screen, (34, 40, 60), (rect.x + 4, y - 1, rect.w - 8, 17), border_radius=3)
+            m, sec = divmod(int(t), 60)
+            draw_text(screen, f"R{lap} {m:02d}:{sec:02d}", f.tiny, (120, 120, 132), (rect.x + 10, y), shadow=False)
+            msg = tr(text)
+            while msg and f.tiny.size(msg)[0] > width:
+                msg = msg[:-2]
+            if msg != tr(text):
+                msg = msg[:-1] + "…"
+            draw_text(screen, msg, f.tiny, color, (rect.x + 82, y), shadow=False)
+            y += 17
+
     def _race_control(self, screen: pygame.Surface, s: "Session") -> None:
+        if getattr(s, "chat", None) is not None:
+            self._chat(screen, s)
+            return
         log = s.stewards.log
         if not log:
             return
@@ -1215,6 +1256,8 @@ class HUD:
             y += 50
 
     def _feed(self, screen: pygame.Surface, s: "Session") -> None:
+        if getattr(s, "chat", None) is not None:
+            return          # in the race director's chat log
         x, y = SCREEN_WIDTH - 256, 196
         d = getattr(s, "race_director", None)
         if d is not None:

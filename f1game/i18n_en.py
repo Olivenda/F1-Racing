@@ -243,6 +243,19 @@ EXACT: dict[str, str] = {
     "ZUSCHAUER-RENNEN  ·  C Kamera  ·  A TV-Regie  ·  +/- Zeitraffer  ·  X Rennleitung":
         "SPECTATOR RACE  ·  C camera  ·  A TV director  ·  +/- time warp  ·  X race director",
     # ---------------------------------------------------------------- race director / red flag
+    "Replay: letzter Vorfall": "Replay: last incident", "Platz zurückgeben": "Give the place back",
+    "Boxengasse": "Pit lane", "offen": "open", "geschlossen": "closed", "läuft": "running",
+    "Leichter Regen": "Light rain", "Starker Regen": "Heavy rain", "LIVE": "LIVE", "Unfall": "Crash",
+    "R Replay · X schließen": "R replay · X close", "AKTIVE PAUSE": "ACTIVE PAUSE",
+    "AKTIVE PAUSE - umsehen mit Maus ziehen / WASD": "ACTIVE PAUSE - look around by dragging the mouse / WASD",
+    "Rennen läuft weiter": "Race continues",
+    "LEER weiter · Maus ziehen / WASD umsehen · C/1-0 Fahrer · R Replay · X Rennleitung":
+        "SPACE continue · drag mouse / WASD look around · C/1-0 driver · R replay · X race director", "Boxengasse GESCHLOSSEN": "Pit lane CLOSED",
+    "Boxengasse wieder offen": "Pit lane open again", "Mausrad scrollt": "mouse wheel scrolls",
+    "Noch keine Aufnahme für ein Replay": "Nothing recorded for a replay yet",
+    "Im Replay nicht möglich - erst zurück zum Rennen (R)": "Not possible in the replay - back to the race first (R)",
+    "LEER Play/Pause · Punkt ziehen · <-/-> 5 s · ,/. Tempo · Q/E Vorfall · R/ESC zurück":
+        "SPACE play/pause · drag the dot · <-/-> 5 s · ,/. speed · Q/E incident · R/ESC back",
     "RENNLEITUNG": "RACE DIRECTOR", "X schließen": "X close", "Pfeile wählen · ENTER ausführen":
         "arrows select · ENTER apply", "VORSCHLÄGE · Y annehmen · N ablehnen": "SUGGESTIONS · Y accept · N reject",
     "RENNLEITUNG · Y annehmen · N ablehnen": "RACE DIRECTOR · Y accept · N reject",
@@ -1268,6 +1281,11 @@ TEMPLATES: list[tuple[str, str]] = [
      "Left/right tabs · ENTER {} · G garage · arrows scroll · ESC menu"),
     ("SEKTOR {#}", "SECTOR {}"), ("Sektor {#}", "Sector {}"),
     ("{#}s Strafe für {} - {}", "{}s penalty for {} - {}"),
+    ("zurückgescrollt ({#}) · Mausrad", "scrolled back ({}) · mouse wheel"),
+    ("Kein Vorfall von {} in den letzten 2 Minuten", "No incident of {} in the last 2 minutes"),
+    ("Hinter {} ist niemand", "Nobody behind {}"), ("Platz an {} zurückgeben", "Give the place back to {}"),
+    ("Rennleitung: {} muss {} vorbeilassen ({#} s)", "Race director: {} has to let {} by ({} s)"),
+    ("Wetter: {}", "Weather: {}"), ("{} · jetzt {#}% nass", "{} · now {}% wet"),
     ("Rennleitung: {}  (Y annehmen · N ablehnen)", "Race director: {}  (Y accept · N reject)"),
     ("Keine weitere Maßnahme: {}", "No further action: {}"), ("Assistent der Rennleitung: {}", "Race director assistant: {}"),
     ("Schwarz-weiße Flagge: {} (Verwarnung der Rennleitung)", "Black and white flag: {} (race director warning)"),

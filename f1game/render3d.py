@@ -434,6 +434,7 @@ class Renderer3D:
         self.focal = FOCAL
         self.near = NEAR
         self._initialized = False
+        self.extra_people: list = []        # people outside the boxes (crews recovering cars), same format
         self.mode = 0
         # anti-aliasing: "off", "edges" (smoothed polygon borders) or "high" (2x supersampling)
         self.antialias = "edges"
@@ -1526,8 +1527,8 @@ class Renderer3D:
         objects.sort(key=lambda o: -o[0])
         labels: list[tuple[tuple[float, float], "Car", float]] = []
         city = d.scenery == "city"
-        if detail and crews and not lite:
-            for person in self._crew_people(crews):
+        if detail and (crews or self.extra_people) and not lite:
+            for person in (self._crew_people(crews) if crews else []) + self.extra_people:
                 p = person[0]
                 dx, dy = p.x - cx, p.y - cy
                 fwd = dx * sfx + dy * sfy

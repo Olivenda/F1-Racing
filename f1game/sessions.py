@@ -27,21 +27,26 @@ from .car_setup import CarSetup, recommended
 from .career_events import DEFAULT_RELIABILITY, FAILURES, MINOR_FAILURES, RETIRE_SHARE, failure_chance
 from .tyres import ALL_COMPOUNDS, COMPOUNDS, COMPOUND_ORDER, TyreSet
 from .weather import WET_THRESHOLD, Weather, plan_fits
-from .utils import approach
+from .utils import approach, wrap_angle
 from .sensors import RADAR_RANGE, lookahead_points
 from .formation import FormationLap
 from .race_control import PUNCTURE_WEAR, RaceControl
 from .race_director import RaceDirector
+from .replay import Replay
 from .i18n import tr
 from .stewards import DRIVE_PENALTY_NAME, DRIVE_PENALTY_TIME, STOP_GO_TIME, Stewards
-from .settings import (TOP_SPEED, ai_strength, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
+from .settings import (TOP_SPEED, ai_strength, CYAN, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
                        SCREEN_WIDTH, SLIPSTREAM_RANGE, WHITE, YELLOW, GREEN, PX_PER_S_TO_KMH, CAR_LENGTH, CAR_WIDTH, Color)
-from .utils import format_time
+from .utils import draw_text, format_time
 
 if TYPE_CHECKING:
     from .championship import Championship
     from .game import Game
     from .track import Track
+
+
+CHAT_KEEP = 300            # race director chat: lines kept
+LOOK_SPEED = 900.0         # px/s the view moves with WASD while the race stands still
 
 
 @dataclass
@@ -175,6 +180,9 @@ class Session:
         self.show_line = False
         self.messages: list[list] = []
         self.feed: list[list] = []
+        # race director: every announcement goes into one chat log instead of big text (None: off)
+        self.chat: list[list] | None = None
+        self.chat_scroll = 0
         self.fastest_lap: tuple[float, str] | None = None
         self._label_cache: dict[str, pygame.Surface] = {}
         self.view3d = config.view3d
@@ -422,11 +430,31 @@ class Session:
         self.camera.snap(self.focus.pos)
 
     def message(self, text: str, color: Color = WHITE, duration: float = 2.5) -> None:
+        if self.chat is not None:
+            self.log_chat(text, color)
+            return
         self.messages = [m for m in self.messages if m[0] != text]
         self.messages.append([text, color, duration])
         self.messages = self.messages[-3:]
 
+    def log_chat(self, text: str, color: Color = WHITE) -> None:
+        """A line in the race director's chat log: [race time, lap, text, colour], newest last."""
+        chat = self.chat
+        if chat is None:
+            return
+        if chat and chat[-1][2] == text and self.time - chat[-1][0] < 3.0:
+            return          # the same announcement again right away
+        leader = self.standings()[0] if self.cars else None
+        lap = min(leader.laps_done + 1, getattr(self, "total_laps", 99)) if leader is not None else 1
+        chat.append([self.time, lap, text, color])
+        del chat[:-CHAT_KEEP]
+        if self.chat_scroll:
+            self.chat_scroll += 1           # scrolled back: keep looking at the same lines
+
     def add_feed(self, text: str) -> None:
+        if self.chat is not None:
+            self.log_chat(text, (190, 195, 210))
+            return
         self.feed.append([text, 6.0])
         self.feed = self.feed[-5:]
 
@@ -1467,6 +1495,7 @@ class Session:
             self.r3d.view_dist = VIEW_DISTANCES[self.game.settings.view_distance][1]
             positions = {c: k + 1 for k, c in enumerate(self.standings())}
             shown = [c for c in self.cars if not c.despawned]
+            self.r3d.extra_people = self.recovery_people()
             self.r3d.draw(screen, self.track, shown + self.extra_objects(), self.cars[self.cam_index],
                           self.show_brake_line,
                           self.game.fonts.tiny, self.garages(), rain=self.weather.rain,
@@ -1505,6 +1534,10 @@ class Session:
         for car in sorted(self.cars, key=lambda c: not c.is_ghost):
             if not car.despawned:
                 car.draw(screen, off)
+        for p, face, color, *_ in self.recovery_people():
+            c = (p.x - off.x, p.y - off.y)
+            pygame.draw.circle(screen, (20, 20, 24), c, 3.2)
+            pygame.draw.circle(screen, color, c, 2.4)
         for obj in self.extra_objects():
             obj.draw(screen, off, self.time)
         self.fx.draw(screen, off)
@@ -1733,8 +1766,15 @@ class RaceSession(Session):
         self._order_timer = 0.0
         self._player_pos = self.cars.index(self.player) + 1 if self.player is not None else 0
         self.rc = RaceControl(self, config.safety_car)
+        if self.spectator and not self.online:
+            self.chat = []
         # spectator races: the viewer can run race control (X)
         self.race_director = RaceDirector(self) if self.spectator and not self.online else None
+        self.replay = Replay(self) if self.race_director is not None else None
+        self.pit_lane_closed = False
+        self.active_pause = False       # spectator: the race stands still, the camera can look around
+        self.free_cam = False           # the camera was moved away from the focused car
+        self._panning = False
         self.pos_history: dict[Car, list[int]] = {c: [c.grid_slot] for c in self.cars}
         if self.player is not None:
             self.message(f"Startplatz P{self._player_pos} - " +
@@ -1748,17 +1788,101 @@ class RaceSession(Session):
                          WHITE, 5.0)
 
     def handle_event(self, event: pygame.event.Event) -> None:
-        d = self.race_director
+        if event.type == pygame.MOUSEWHEEL and self.chat is not None:
+            self.chat_scroll = max(0, self.chat_scroll + event.y)       # up: further back
+            return
+        d, rp = self.race_director, self.replay
+        if rp is not None and not self.paused and self._spectator_mouse(event):
+            return
+        if event.type == pygame.KEYDOWN and not self.paused and rp is not None:
+            key = event.key
+            if rp.active:
+                if key != pygame.K_r and d is not None and d.open and d.handle_key(key):
+                    return          # the race control panel works during the replay too
+                if rp.handle_key(key):
+                    return
+            elif key == pygame.K_r and self.race_started:
+                # R: the last seconds again - with SHIFT the focused driver's last incident
+                at = rp.last_incident(self.focus) if event.mod & pygame.KMOD_SHIFT else None
+                if event.mod & pygame.KMOD_SHIFT and at is None:
+                    self.message(f"Kein Vorfall von {self.focus.short} in den letzten 2 Minuten", ORANGE_CALL, 2.0)
+                else:
+                    rp.start(at, self.focus if at is not None else None)
+                return
+            elif key == pygame.K_SPACE and self.race_started:
+                self.active_pause = not self.active_pause
+                self.free_cam = False
+                self.message("AKTIVE PAUSE - umsehen mit Maus ziehen / WASD" if self.active_pause
+                             else "Rennen läuft weiter", CYAN, 2.0)
+                return
+            if (self.active_pause or rp.active) and key in (pygame.K_w, pygame.K_a, pygame.K_s, pygame.K_d) \
+                    and not (d is not None and d.open):
+                return              # looking around (held keys, see _look_around)
         if d is not None and event.type == pygame.KEYDOWN and not self.paused and d.handle_key(event.key):
             return
         super().handle_event(event)
+
+    def _spectator_mouse(self, event: pygame.event.Event) -> bool:
+        """Replay timeline dragging, and while the race stands still: drag the view around."""
+        rp = self.replay
+        if rp.active and event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION) and \
+                rp.handle_mouse(event):
+            return True
+        still = self.active_pause or rp.active
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3) and still and event.pos[0] > 240:
+            self._panning = True            # (left of that the timing tower takes clicks)
+            return True
+        if event.type == pygame.MOUSEBUTTONUP and self._panning:
+            self._panning = False
+            return True
+        if event.type == pygame.MOUSEMOTION and self._panning:
+            if still:
+                self.camera.pos -= Vector2(event.rel)
+                self.free_cam = True
+            return True
+        return False
+
+    def focus_car(self, car: Car, manual: bool = True) -> None:
+        self.free_cam = False           # a driver picked: the camera goes back to following
+        super().focus_car(car, manual)
+
+    def _look_around(self, frame_dt: float) -> None:
+        """While the race stands still: WASD moves the view, otherwise it follows the focused car."""
+        d = self.race_director
+        if not (d is not None and d.open):
+            keys = pygame.key.get_pressed()
+            move = Vector2(keys[pygame.K_d] - keys[pygame.K_a], keys[pygame.K_s] - keys[pygame.K_w])
+            if move.length_squared():
+                self.camera.pos += move.normalize() * LOOK_SPEED * frame_dt
+                self.free_cam = True
+        target = self.cars[self.cam_index]
+        if not self.free_cam:
+            self.camera.update(target, frame_dt)
+        if self.view3d:
+            self.r3d.update_camera(target, frame_dt)
 
     def draw(self, screen: pygame.Surface) -> None:
         super().draw(screen)
         if self.race_director is not None and not self.paused and not self.hide_hud:
             self.race_director.draw(screen)
+        if self.replay is not None and not self.paused:
+            self.replay.draw(screen)
+            if self.active_pause and not self.replay.active:
+                self._draw_active_pause(screen)
+
+    def _draw_active_pause(self, screen: pygame.Surface) -> None:
+        f = self.game.fonts
+        rect = pygame.Rect(SCREEN_WIDTH // 2 - 300, 84, 600, 48)
+        pygame.draw.rect(screen, (24, 30, 44), rect, border_radius=6)
+        pygame.draw.rect(screen, CYAN, rect, 2, border_radius=6)
+        draw_text(screen, "AKTIVE PAUSE", f.small_bold, WHITE, (rect.centerx, rect.y + 6), anchor="midtop",
+                  shadow=False)
+        draw_text(screen, "LEER weiter · Maus ziehen / WASD umsehen · C/1-0 Fahrer · R Replay · X Rennleitung",
+                  f.tiny, (190, 200, 215), (rect.centerx, rect.y + 28), anchor="midtop", shadow=False)
 
     def _step(self, h: float) -> None:
+        if self.replay is not None and self.race_started:
+            self.replay.record()
         if self.rc.frozen:
             # red flag: the whole race stands still until the restart
             self.rc.frozen_step(h)
@@ -1771,6 +1895,7 @@ class RaceSession(Session):
         return super().gantry_lights()
 
     def pre_step(self, h: float) -> None:
+        self._step_h = h
         if self.race_started:
             self.go_timer = max(0.0, self.go_timer - h)
             if self.is_race_start_phase and self.time - self.race_start_time > 2.0:
@@ -1836,7 +1961,8 @@ class RaceSession(Session):
             car.finish_time is None and not car.session_done
 
     def pit_closed(self) -> bool:
-        return not self.race_started
+        # the race director may close the pit lane (never during a red flag: everyone has to come in then)
+        return not self.race_started or (self.pit_lane_closed and self.rc.mode != "RED")
 
     def on_pit_release(self, car: Car) -> bool:
         return self.rc.red_pit_release(car)
@@ -1856,29 +1982,112 @@ class RaceSession(Session):
             return car.tyres.compound.key
         return self._compound_for_laps(max(1, self.total_laps - car.laps_done))
 
-    DSQ_DESPAWN = 10.0      # a disqualified car stands in its box this long, then it is gone
+    DSQ_DESPAWN = 10.0      # a disqualified car stands (in its box / off the track) this long, then it is gone
+    RECOVERY_WALK = 2.5     # s: the crew walks out from behind the wall to the stopped car...
+    RECOVERY_PUSH = 5.0     # ...and pushes it off the track
+    # where each of the crew pushes (car frame: x forward, y towards the track side)
+    _RECOVERY_CREW = ((-13.5, -5.0), (-13.5, 5.0), (6.0, 11.0), (-5.0, 11.0))
 
     def disqualify(self, car: Car, reason: str) -> None:
-        """Black flag: the car is out of the race, drives (as a ghost) into its box and disappears there."""
+        """Black flag: the car is out of the race. On track it pulls over to the side and stops, its crew comes
+        out and pushes it off, then it is gone; in the pit lane it parks in its box and disappears there."""
         car.dsq = car.dnf = True
         car.dsq_reason = reason
         car.session_done = car.retired_ghost = True
         car.penalty_unserved = 0.0
         car.drive_penalty = None
-        if car.frozen or self.track.pit is None:
-            # standing somewhere (grid, red flag) or no pit lane: it simply goes after a while
+        if car.frozen:
+            # standing somewhere (grid, red flag): it simply goes after a while
             car.pit_request = None
             car.despawn_at = self.time + self.DSQ_DESPAWN
         elif not car.in_pit:
-            car.pit_request = "none"
-        if isinstance(car, Player_Car) and car.autopilot is None:
-            self.enable_player_autopilot(car)       # the autopilot brings the car in
+            car.pit_request = None
+            car.frozen = True           # from now on moved by _recover
+            car.throttle = car.brake = 0.0
+            car.recovery = {"phase": "pull", "t": 0.0, "v": max(0.0, car.speed_fwd), "s": car.s,
+                            "lat": car.lateral, "side": 1.0 if car.lateral >= 0 else -1.0}
+        elif car.pit_stopped:
+            # already stopped in (or leaving) its box: the crew stops work, the car stays where it is
+            car.pit_stop_timer, car.pit_hold, car.pit_service = 0.0, False, None
+            car.pit_wheels_off, car.pit_lift = None, 0.0
+            car.despawn_at = self.time + self.DSQ_DESPAWN
+        if isinstance(car, Player_Car) and car.autopilot is None and car.recovery is None:
+            self.enable_player_autopilot(car)       # the autopilot brings the car into its box
         self.stewards.announce(f"SCHWARZE FLAGGE: {car.short} disqualifiziert - {reason}", "penalty", 10.0)
         self.add_feed(f"DISQUALIFIZIERT: {car.name}")
         if car is self.player or car is self.player2:
             self.message(f"SCHWARZE FLAGGE - {reason}", (255, 80, 80), 5.0)
         if all(c.session_done for c in self.cars) and self.end_timer is None:
             self.end_timer = 3.0
+
+    def _recover(self, h: float) -> None:
+        """Disqualified cars on track: slow down and pull over beyond the track edge, stop, then the crew pushes
+        the car further off the track (towards the wall) until it disappears."""
+        tr = self.track
+        for car in self.cars:
+            r = car.recovery
+            if r is None or car.despawned:
+                continue
+            r["t"] += h
+            side = r["side"]
+            if r["phase"] == "pull":
+                target = side * min(tr.half_width + 8.0, tr.wall_limit - 14.0)
+                d = target - r["lat"]
+                v = max(0.0, r["v"] - h * (260.0 if r["v"] > 200.0 else 150.0))
+                if abs(d) > 6.0:
+                    v = max(v, min(max(r["v"], 50.0), 110.0))     # crawls on until it is off the racing surface
+                rate = max(-v * 0.22, min(v * 0.22, d * 1.4))
+                r["v"] = v
+                r["s"] = (r["s"] + v * h) % tr.length
+                r["lat"] += rate * h
+                pos, hd = tr.pose_at(r["s"], r["lat"])
+                car.pos.update(pos)
+                car.heading = hd + math.atan2(rate, max(v, 1.0))
+                if v <= 0.0 or r["t"] > 15.0:
+                    r.update(phase="crew", t=0.0, x0=pos.x, y0=pos.y, h0=car.heading)
+                    p1, h1 = tr.pose_at(r["s"] + 24.0, side * (tr.wall_limit - 9.0))
+                    r.update(x1=p1.x, y1=p1.y, h1=h1 + side * 0.65)
+                    car.despawn_at = self.time + self.DSQ_DESPAWN
+                    v = 0.0
+            else:
+                v = 0.0
+                k = (r["t"] - self.RECOVERY_WALK) / self.RECOVERY_PUSH
+                if 0.0 < k:
+                    k = min(1.0, k)
+                    e = k * k * (3.0 - 2.0 * k)
+                    car.pos.update(r["x0"] + (r["x1"] - r["x0"]) * e, r["y0"] + (r["y1"] - r["y0"]) * e)
+                    car.heading = r["h0"] + wrap_angle(r["h1"] - r["h0"]) * e
+                    v = 12.0 * math.sin(math.pi * k)       # walking pace
+            car.speed_fwd = v
+            car.vel.update(math.cos(car.heading) * v, math.sin(car.heading) * v)
+
+    def recovery_people(self) -> list[tuple]:
+        """The crews out on track to recover disqualified cars, in the renderer's person format: (position,
+        heading, shirt colour, crouching, carried tyre, lollipop)."""
+        people = []
+        tr = self.track
+        for car in self.cars:
+            r = car.recovery
+            if r is None or car.despawned or r["phase"] != "crew":
+                continue
+            color = car.perf.color if car.perf.name == car.profile.team else car.color
+            f = Vector2(math.cos(car.heading), math.sin(car.heading))
+            right = Vector2(-f.y, f.x)
+            inward = -r["side"] * (1.0 if right.dot(tr.normals[car.idx]) > 0 else -1.0)
+            walk = min(1.0, r["t"] / self.RECOVERY_WALK)
+            for k, (x, y) in enumerate(self._RECOVERY_CREW):
+                spot = car.pos + f * x + right * (y * inward)
+                if walk < 1.0:
+                    start, _ = tr.pose_at(r["s"] + (k - 1.5) * 9.0, r["side"] * (tr.wall_limit + 6.0))
+                    p = start + (spot - start) * walk
+                    d = spot - start
+                    face = math.atan2(d.y, d.x)
+                else:
+                    p = spot
+                    d = car.pos - spot
+                    face = math.atan2(d.y, d.x)        # leaning into the car
+                people.append((p, face, color, False, None, None))
+        return people
 
     def _despawn(self) -> None:
         for car in self.cars:
@@ -1919,6 +2128,7 @@ class RaceSession(Session):
             self.rc.puncture(car, "Kontakt")
 
     def post_collisions(self) -> None:
+        self._recover(getattr(self, "_step_h", PHYSICS_STEP))
         if not self.race_started:
             return
         for car in self.cars:
@@ -2254,6 +2464,14 @@ class RaceSession(Session):
         super().on_lap_completed(car, lap_time)
 
     def update(self, frame_dt: float) -> None:
+        if self.replay is not None and (self.replay.active or self.active_pause) and not self.paused:
+            # watching the replay or actively paused: the race stands still, the camera keeps working
+            self.replay.update(frame_dt)
+            self._look_around(frame_dt)
+            for m in self.messages:
+                m[2] -= frame_dt
+            self.messages = [m for m in self.messages if m[2] > 0]
+            return
         super().update(frame_dt)
         if self.paused or not self.race_started:
             return

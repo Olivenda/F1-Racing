@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import pygame
 
-from .race_control import YELLOW_TIME
+from .race_control import GIVE_BACK_TIME, YELLOW_TIME
 from .stewards import DRIVE_PENALTY_NAME
 from .settings import CYAN, GREY, ORANGE, PANEL, PANEL_LIGHT, SCREEN_WIDTH, WHITE, YELLOW
 from .utils import draw_panel, draw_text
@@ -29,15 +29,21 @@ GREEN = (60, 220, 90)
 WARN_REASONS = ["Track Limits", "Gefährliches Fahren", "Blockieren", "Blaue Flaggen ignoriert",
                 "Unsportliches Verhalten", "Kollision", "Zu langsam unter SC/VSC"]
 SORT_MODES = [("infr", "Verstöße"), ("pos", "Position")]
+# (label, rain from now on)
+WEATHER_STEPS = [("Trocken", 0.0), ("Leichter Regen", 0.35), ("Starker Regen", 0.8)]
+WEATHER_RAMP = 25.0         # s until the new rain has fully set in
+LIVE_ONLY = ("sc", "vsc", "red", "green", "chequered")     # not while watching the replay
 
 ROWS = [("assist", "Assistent"), ("car", "Fahrer"), ("warning", "Verwarnung"), ("penalty", "Zeitstrafe"),
         ("warn", "Schwarz-weiße Flagge"),
         ("pit", "An die Box rufen"), ("clear", "Offene Strafen aufheben"), ("dsq", "Disqualifizieren"),
         ("green", "Grüne Flagge"), ("yellow", "Gelbe Flagge"), ("sc", "Safety Car"), ("vsc", "Virtual Safety Car"),
-        ("red", "Rote Flagge"), ("chequered", "Zielflagge nach dieser Runde"), ("sort", "Verstöße-Liste")]
+        ("red", "Rote Flagge"), ("chequered", "Zielflagge nach dieser Runde"), ("sort", "Verstöße-Liste"),
+        ("give", "Platz zurückgeben"), ("pitlane", "Boxengasse"),
+        ("weather", "Wetter")]
 PANEL_X, PANEL_W = SCREEN_WIDTH - 372, 356     # the panel's place on the right of the screen
-VALUE_ROWS = ("assist", "car", "warning", "penalty", "yellow", "vsc", "sort")
-DRIVER_ROWS = ("car", "warn", "pit", "clear", "dsq")    # left/right picks the driver
+VALUE_ROWS = ("assist", "car", "warning", "penalty", "yellow", "vsc", "sort", "weather")
+DRIVER_ROWS = ("car", "warn", "pit", "clear", "dsq", "give")    # left/right picks the driver
 
 
 def penalty_label(p) -> str:
@@ -60,13 +66,14 @@ class RaceDirector:
         self.s = session
         self.open = False
         self.sel = 0
-        self.assist = "auto"
+        self.assist = "suggest"     # the director decides: race control only suggests (Y/N)
         self.target: "Car | None" = None
         self.penalty_i = 0
         self.vsc_i = 2
         self.reason_i = 0
         self.sort = "infr"          # the Verstöße list: most infringements first, or race order
         self.sector = 0
+        self.weather_i = 0
         self.suggestions: list[dict] = []
         self._confirm_dsq: "Car | None" = None
         session.stewards.director = self
@@ -148,7 +155,7 @@ class RaceDirector:
             self._confirm_dsq = None
         elif key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_a, pygame.K_d):
             self._change(row, -1 if key in (pygame.K_LEFT, pygame.K_a) else 1)
-        elif key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+        elif key in (pygame.K_RETURN, pygame.K_KP_ENTER):     # (SPACE is the active pause)
             self._execute(row)
         else:
             return False        # camera, time-lapse etc. keep working with the panel open
@@ -169,6 +176,8 @@ class RaceDirector:
             self.sort = keys[(keys.index(self.sort) + d) % len(keys)]
         elif row == "yellow":
             self.sector = (self.sector + d) % 3
+        elif row == "weather":
+            self.weather_i = (self.weather_i + d) % len(WEATHER_STEPS)
         elif row == "vsc":
             self.vsc_i = (self.vsc_i + d) % len(VSC_TIMES)
             rc = self.s.rc
@@ -193,8 +202,20 @@ class RaceDirector:
     def _execute(self, row: str) -> None:
         s, rc = self.s, self.s.rc
         car = self.target or s.focus
+        replay = getattr(s, "replay", None)
+        if row in LIVE_ONLY and replay is not None and replay.active:
+            s.message("Im Replay nicht möglich - erst zurück zum Rennen (R)", ORANGE, 2.0)
+            return
         if row == "assist":
             self._change(row, 1)
+        elif row == "give":
+            self._give_place_back(car)
+        elif row == "pitlane":
+            s.pit_lane_closed = not s.pit_lane_closed
+            s.stewards.announce("Boxengasse GESCHLOSSEN" if s.pit_lane_closed else "Boxengasse wieder offen",
+                                "investigation" if s.pit_lane_closed else "info", 6.0)
+        elif row == "weather":
+            self._set_weather(*WEATHER_STEPS[self.weather_i])
         elif row == "car":
             s.focus_car(car)
         elif row == "penalty":
@@ -264,6 +285,28 @@ class RaceDirector:
                 s.stewards.announce(f"Rennen endet nach Runde {s.total_laps}", "info", 8.0)
                 s.add_feed("Rennleitung: Zielflagge am Ende dieser Runde")
 
+    def _give_place_back(self, car: "Car") -> None:
+        """The driver has to let the car behind through (the AI lifts until it is by, a penalty otherwise)."""
+        s, rc = self.s, self.s.rc
+        order = [c for c in s.standings() if not c.dnf and not c.session_done]
+        if car not in order or order.index(car) + 1 >= len(order):
+            s.message(f"Hinter {car.short} ist niemand", ORANGE, 2.0)
+            return
+        victim = order[order.index(car) + 1]
+        rc.give_back[(car, victim)] = s.time + GIVE_BACK_TIME
+        s.stewards.log_incident(car, "warn", f"Platz an {victim.short} zurückgeben")
+        s.stewards.announce(f"Rennleitung: {car.short} muss {victim.short} vorbeilassen ({GIVE_BACK_TIME:.0f} s)",
+                            "investigation")
+
+    def _set_weather(self, label: str, rain: float) -> None:
+        """From now on this rain (the track gets wet or dries on its own, as with the forecast)."""
+        s = self.s
+        w = s.weather
+        t = w.time
+        w.points = [p for p in w.points if p[0] < t] + [(t, w.rain), (t + WEATHER_RAMP, rain),
+                                                        (t + 1e6, rain)]
+        s.stewards.announce(f"Wetter: {label}", "info", 6.0)
+
     def _neutralise(self, mode: str) -> None:
         s, rc = self.s, self.s.rc
         if rc.mode == mode:
@@ -329,6 +372,14 @@ class RaceDirector:
             return vsc_label(VSC_TIMES[self.vsc_i])
         if key == "yellow":
             return f"Sektor {self.sector + 1}"
+        if key == "pitlane":
+            return "geschlossen" if self.s.pit_lane_closed else "offen"
+        if key == "weather":
+            return f"{WEATHER_STEPS[self.weather_i][0]} · jetzt {self.s.weather.wetness * 100:.0f}% nass"
+        if key == "give":
+            order = [c for c in self.s.standings() if not c.dnf and not c.session_done]
+            k = order.index(car) + 1 if car in order else len(order)
+            return f"{car.short} -> {order[k].short}" if k < len(order) else "-"
         return ""
 
     def draw(self, screen: pygame.Surface) -> None:
@@ -346,16 +397,17 @@ class RaceDirector:
                     draw_text(screen, g["text"], f.tiny, WHITE if i == 0 else GREY, (x + 12, sy + 27 + i * 20),
                               shadow=False)
             return
-        row_h = 24
-        h = 64 + len(ROWS) * row_h + (24 + 20 * min(3, len(self.suggestions)) if self.suggestions else 0)
-        y = 196
+        row_h = 20
+        h = 58 + len(ROWS) * row_h + (24 + 20 * min(3, len(self.suggestions)) if self.suggestions else 0)
+        y = 192
         draw_panel(screen, (x, y, w, h), PANEL, 235)
         pygame.draw.rect(screen, RED, (x, y, w, 3), border_radius=2)
         draw_text(screen, "RENNLEITUNG", f.small_bold, WHITE, (x + 12, y + 8), shadow=False)
-        draw_text(screen, "X schließen", f.tiny, GREY, (x + w - 12, y + 12), anchor="topright", shadow=False)
+        draw_text(screen, "R Replay · X schließen", f.tiny, GREY, (x + w - 12, y + 12), anchor="topright",
+                  shadow=False)
         draw_text(screen, "Pfeile wählen · ENTER ausführen · BILD auf/ab Fahrer", f.tiny, GREY, (x + 12, y + 32),
                   shadow=False)
-        ry = y + 54
+        ry = y + 52
         for i, (key, base) in enumerate(ROWS):
             sel = i == self.sel
             if sel:
@@ -365,12 +417,12 @@ class RaceDirector:
             label = self._label(key, base)
             if key == "dsq" and self._confirm_dsq is not None:
                 label = "Wirklich? ENTER bestätigt"
-            draw_text(screen, label, f.tiny, col, (x + 16, ry + 4), shadow=False)
+            draw_text(screen, label, f.tiny, col, (x + 16, ry + 2), shadow=False)
             value = self._value(key)
             if value:
                 arrows = key in VALUE_ROWS and sel
                 draw_text(screen, f"< {value} >" if arrows else value, f.tiny, YELLOW if sel else (200, 200, 208),
-                          (x + w - 14, ry + 4), anchor="topright", shadow=False)
+                          (x + w - 14, ry + 2), anchor="topright", shadow=False)
             ry += row_h
         if self.suggestions:
             draw_text(screen, "VORSCHLÄGE · Y annehmen · N ablehnen", f.tiny, CYAN, (x + 12, ry + 4), shadow=False)
@@ -386,8 +438,12 @@ class RaceDirector:
             return (255, 120, 110)
         if key == "green":
             return GREEN
-        if key == "warning":
+        if key in ("warning", "give"):
             return YELLOW
+        if key == "weather":
+            return (120, 180, 255)
+        if key == "pitlane":
+            return ORANGE if self.s.pit_lane_closed else WHITE
         if key in ("yellow", "sc", "vsc"):
             return YELLOW if not (key == "sc" and rc.mode == "SC" or key == "vsc" and rc.mode == "VSC") else ORANGE
         return WHITE

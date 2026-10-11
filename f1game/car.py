@@ -211,6 +211,7 @@ class Car:
         self.retired_ghost = False
         self.despawn_at: float | None = None    # disqualified: parked in the box, gone from the track at this time
         self.despawned = False                  # ...and from then on not drawn any more (still in the results)
+        self.recovery: dict | None = None       # disqualified on track: pulling over / being pushed off by the crew
         self.collision_flash = 0.0
         self.slipstream = 0.0
         self.slip_target = 0.0

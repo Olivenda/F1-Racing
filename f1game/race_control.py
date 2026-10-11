@@ -213,6 +213,9 @@ class RaceControl:
         sector = self.sector_of(car)
         self.yellow[sector] = s.time + YELLOW_TIME
         self.yellow_at[sector] = car.s % s.track.length
+        replay = getattr(s, "replay", None)
+        if replay is not None:
+            replay.mark(car, "crash", "Ausfall" if severity == "dnf" else "Unfall")
         if not self._can_start():
             return
         if severity == "dnf":
@@ -237,6 +240,9 @@ class RaceControl:
     def deploy(self, mode: str, reason: str, duration: float | None = None) -> None:
         """duration: VSC only - seconds until it ends (inf: until race control calls green), random if None."""
         s = self.s
+        replay = getattr(s, "replay", None)
+        if replay is not None:
+            replay.mark(None, "flag", {"SC": "Safety Car", "RED": "Rote Flagge"}.get(mode, "VSC") + f" - {reason}")
         leader = self._leader()
         if leader is None:
             return
