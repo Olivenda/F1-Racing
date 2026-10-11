@@ -20,6 +20,13 @@ TL_PENALTY_EVERY = 5
 CONTACT_THRESHOLD = 200.0
 HARD_CONTACT = 340.0
 DECISION_DELAY = 4.0
+SERVE_LAPS = 3              # a drive-through / stop & go has to be served within this many laps
+STOP_GO_TIME = 10.0
+# not served before the flag: the time added instead (as in F1)
+DRIVE_PENALTY_TIME = {"DT": 20.0, "SG": 30.0}
+DRIVE_PENALTY_NAME = {"DT": "Drive-Through", "SG": "Stop & Go"}
+WARNINGS_PER_PENALTY = 3    # every third official warning brings a 5 s penalty
+INCIDENT_LOG = 30           # incidents kept per car
 
 
 class Stewards:
@@ -34,6 +41,31 @@ class Stewards:
     def announce(self, text: str, kind: str = "info", duration: float = 9.0) -> None:
         self.log.append([text, duration, kind])
         self.log = self.log[-4:]
+
+    def log_incident(self, car: "Car", kind: str, text: str) -> None:
+        """Keep a car's history for the race director: kind "cut", "col", "warn", "bw", "pen" or "info"."""
+        car.incidents.append((car.laps_done + 1, kind, text))
+        del car.incidents[:-INCIDENT_LOG]
+
+    def warn(self, car: "Car", reason: str) -> None:
+        """An official warning; every WARNINGS_PER_PENALTY-th one brings a 5 s penalty (which a race director's
+        assistant may hold as a suggestion like any other)."""
+        s = self.session
+        car.warnings += 1
+        n = car.warnings
+        self.log_incident(car, "warn", f"Verwarnung {n} - {reason}")
+        self.announce(f"Verwarnung {n}: {car.short} - {reason}", "investigation")
+        if car is s.player or car is getattr(s, "player2", None):
+            s.message(f"VERWARNUNG ({n}) - {reason}", YELLOW, 3.0)
+        if n % WARNINGS_PER_PENALTY == 0:
+            self.penalty(car, 5.0, f"{n} Verwarnungen")
+
+    def black_white(self, car: "Car", reason: str) -> None:
+        s = self.session
+        car.bw_until = s.time + 10.0
+        car.bw_count += 1
+        self.log_incident(car, "bw", f"Schwarz-weiße Flagge - {reason}")
+        self.announce(f"Schwarz-weiße Flagge: {car.short} ({reason})", "investigation")
 
     def tick(self, frame_dt: float) -> None:
         for entry in self.log:
@@ -70,6 +102,8 @@ class Stewards:
                 car.tl_speed = car.speed_fwd
         elif lat < hw:
             car.tl_off = False
+            if self.racing:
+                car.tl_wide += 1
             duration = now - car.tl_since
             if not car.tl_forced and duration >= TL_MIN_TIME:
                 progress_rate = (car.distance - car.tl_distance) / duration
@@ -87,12 +121,12 @@ class Stewards:
             return
         car.tl_count += 1
         n = car.tl_count
+        self.log_incident(car, "cut", f"Track Limits mit Vorteil ({n})")
         if n < WARNINGS:
             if car is s.player:
                 s.message(f"Track Limits - Verwarnung {n}/{WARNINGS}", YELLOW, 2.0)
         elif n == WARNINGS:
-            self.announce(f"Schwarz-weiße Flagge: {car.short} (Track Limits)", "investigation")
-            car.bw_until = s.time + 10.0
+            self.black_white(car, "Track Limits")
             if car is s.player:
                 s.message("SCHWARZ-WEISSE FLAGGE - nächster Verstoß wird bestraft", (240, 240, 240), 3.0)
         elif (n - WARNINGS) % TL_PENALTY_EVERY == 1:
@@ -116,6 +150,8 @@ class Stewards:
         else:
             return
         self._pair_cooldown[key] = now
+        culprit.contacts_caused += 1
+        self.log_incident(culprit, "col", f"Kollision mit {victim.short} verursacht")
         self.pending.append((now + DECISION_DELAY, culprit, victim, impulse))
         self.announce(f"Untersuchung: Kollision {culprit.short} / {victim.short}", "investigation")
 
@@ -130,6 +166,34 @@ class Stewards:
         else:
             car.penalty_unserved += seconds
         self.penalties_issued += 1
+        self.log_incident(car, "pen", f"{seconds:.0f}s Zeitstrafe - {reason}")
         self.announce(f"{seconds:.0f}s Zeitstrafe: {car.short} - {reason}", "penalty")
         if car is s.player:
             s.message(f"{seconds:.0f} SEKUNDEN STRAFE - {reason}", ORANGE, 4.0)
+
+    def drive_penalty(self, car: "Car", kind: str, reason: str, auto: bool = True) -> None:
+        """A drive-through ("DT") or 10 s stop & go ("SG"): into the pit lane within SERVE_LAPS laps (not under
+        SC/VSC), black flag otherwise. A car that has finished gets the time instead."""
+        if auto and self.director is not None and self.director.intercept_penalty(car, kind, reason):
+            return
+        s = self.session
+        name = DRIVE_PENALTY_NAME[kind]
+        if car.finish_time is not None:
+            self.penalty(car, DRIVE_PENALTY_TIME[kind], f"{name} (nach dem Ziel) - {reason}", auto=False)
+            return
+        if car.drive_penalty is not None:
+            # a second one on top: the stewards make it a stop & go
+            kind, name = "SG", DRIVE_PENALTY_NAME["SG"]
+        car.drive_penalty = kind
+        car.drive_penalty_due = car.laps_done + SERVE_LAPS
+        self.penalties_issued += 1
+        self.log_incident(car, "pen", f"{name} - {reason}")
+        self.announce(f"{name}: {car.short} - {reason}", "penalty")
+        if car is s.player or car is getattr(s, "player2", None):
+            s.message(f"{name.upper()} - in {SERVE_LAPS} Runden in die Box!", ORANGE, 4.0)
+
+    def drive_penalty_served(self, car: "Car") -> None:
+        name = DRIVE_PENALTY_NAME.get(car.drive_penalty or "", "Strafe")
+        car.drive_penalty = None
+        self.log_incident(car, "info", f"{name} abgesessen")
+        self.announce(f"{car.short} hat die {name}-Strafe abgesessen", "info")

@@ -13,7 +13,7 @@ from .championship import FORMATS, Championship
 from .profiles import recording_stats
 from .sound import VOLUMES
 from .tyres import ALL_COMPOUNDS, COMPOUND_ORDER, COMPOUNDS
-from .user_settings import (ANTIALIAS_LEVELS, ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, GEARBOX_MODES,
+from .user_settings import (VIEW_DISTANCES, ANTIALIAS_LEVELS, ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, GEARBOX_MODES,
                             GRAPHICS_LEVELS, GRAPHICS_PRESETS, HUD_ASSIST, HUD_STYLES, TYRE_WEAR_MODES, UNITS,
                             speed_in)
 from .settings import (CYAN, DIFFICULTY_LEVELS, LEGACY_DIFFICULTY, ai_skill_name, ai_strength, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
@@ -878,8 +878,8 @@ class SettingsScreen:
     TABS: list[tuple[str, list[str]]] = [
         ("ALLGEMEIN", ["Sprache", "Spielername", "Einheiten", "Sound", "Lenkrad & Controller"]),
         ("FAHREN", ["Fahrhilfen", "Getriebe", "Schaden", "Reifenverschleiß"]),
-        ("RENNEN", ["Wetter", "Safety Car", "Ansicht", "TV-Regie (Zuschauer)"]),
-        ("GRAFIK", ["Grafik-Voreinstellung", "Grafikdetails", "Kantenglättung", "Partikel & Effekte", "Bildrate",
+        ("RENNEN", ["Wetter", "Safety Car", "Einführungsrunde", "Ansicht", "TV-Regie (Zuschauer)"]),
+        ("GRAFIK", ["Grafik-Voreinstellung", "Grafikdetails", "Sichtweite", "Kantenglättung", "Partikel & Effekte", "Bildrate",
                     "Vollbild", "FPS anzeigen"]),
         ("HUD & KAMERA", ["HUD-Stil", "HUD-Assistenz", "Startkamera"]),
     ]
@@ -900,6 +900,8 @@ class SettingsScreen:
                   "Wetterbericht. Regen: nasses Rennen. Bei Nässe Intermediates (grün) oder Wets (blau) holen.",
         "TV-Regie (Zuschauer)": "Die Kamera springt automatisch zu engen Zweikämpfen (im Rennen mit A umschalten).",
         "Sprache": "Sprache des Spiels / game language. Standard: English.",
+        "Einführungsrunde": "Vor dem Start eine Runde hinter dem Polesetter, ohne Überholen; danach stellt sich "
+                            "jedes Auto wieder auf seinen Startplatz und die Ampel geht an.",
         "Safety Car": "Bei Ausfällen und schweren Unfällen: Safety Car (Feld fährt geschlossen hinter dem SC, "
                       "Restart) oder Virtuelles Safety Car (alle langsamer). Gelbe Flaggen, Reifenschäden.",
         "Sound": "V6-Turbo-Motor mit Zündfolge, Turbopfeifen, Getriebesurren, Schaltrucken und Fehlzündungen "
@@ -915,6 +917,8 @@ class SettingsScreen:
         "Grafikdetails": "Niedrig: nur Strecke und Autos. Mittel: + Tribünen, Banden, Bremsschilder, Startampel, "
                          "digitale Flaggen-Tafeln, Partikel in 3D. Hoch: + Rückspiegel im Cockpit, Linsenreflexe, "
                          "Vignette, Regentropfen auf der Linse.",
+        "Sichtweite": "Wie weit die 3D-Ansicht nach vorne zeichnet, bevor alles im Dunst verschwindet. "
+                      "Weiter sieht besser aus, kostet aber Bildrate.",
         "Kantenglättung": "Kanten glätten kostet kaum Leistung. Hoch rendert in 1,5-facher Auflösung - schöner, "
                           "aber deutlich langsamer.",
         "HUD-Stil": "Modern: Schaltlichter, Auto-Status mit Reifenverschleiß, Reifentemperaturen, Schäden und "
@@ -928,8 +932,8 @@ class SettingsScreen:
     }
     ATTRS = {"Sprache": "language", "Einheiten": "units", "Sound": "sound", "Fahrhilfen": "assists",
              "Getriebe": "gearbox", "Schaden": "damage", "Reifenverschleiß": "tyre_wear", "Wetter": "weather",
-             "Safety Car": "safety_car", "Ansicht": "view3d", "TV-Regie (Zuschauer)": "auto_camera",
-             "Grafikdetails": "graphics", "Kantenglättung": "antialias", "Partikel & Effekte": "effects",
+             "Safety Car": "safety_car", "Einführungsrunde": "formation_lap", "Ansicht": "view3d", "TV-Regie (Zuschauer)": "auto_camera",
+             "Grafikdetails": "graphics", "Sichtweite": "view_distance", "Kantenglättung": "antialias", "Partikel & Effekte": "effects",
              "Bildrate": "fps", "Vollbild": "fullscreen", "FPS anzeigen": "show_fps", "HUD-Stil": "hud_style",
              "HUD-Assistenz": "hud_assist", "Startkamera": "camera_mode"}
     _last = (0, 0)
@@ -977,6 +981,8 @@ class SettingsScreen:
             return list(WEATHER_MODES.items()), st.weather
         if row == "Safety Car":
             return on_off, st.safety_car
+        if row == "Einführungsrunde":
+            return on_off, st.formation_lap
         if row == "Ansicht":
             return [(False, "2D"), (True, "3D")], st.view3d
         if row == "TV-Regie (Zuschauer)":
@@ -987,6 +993,8 @@ class SettingsScreen:
                     next((k for k, v in GRAPHICS_PRESETS.items() if v[1] == now), None))
         if row == "Grafikdetails":
             return list(GRAPHICS_LEVELS.items()), st.graphics
+        if row == "Sichtweite":
+            return [(k, v[0]) for k, v in VIEW_DISTANCES.items()], st.view_distance
         if row == "Kantenglättung":
             return [("off", "Aus"), ("edges", "Kanten"), ("high", "Hoch 1,5x")], st.antialias
         if row == "Partikel & Effekte":
@@ -1579,6 +1587,7 @@ class ChampionshipScreen:
     def draw(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
         self.bg.draw(screen)
+        
         pygame.draw.rect(screen, (255, 200, 40), (60, 40, 8, 60))
         draw_text(screen, "WELTMEISTERSCHAFT", f.big, WHITE, (84, 36))
         champ = self.champ

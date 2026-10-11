@@ -165,7 +165,7 @@ class Track:
         self.pit = PitLane(self)
         lane = self.pit.outline(24.0)
         self.scenery = [item for item in self._build_scenery()
-                        if min((item[1] - (l + r) * 0.5).length() for l, r in lane) > self.pit.HALF_WIDTH + 90]
+                        if min((item[1] - (l + r) * 0.5).length() for l, r in lane) > self.pit.GARAGE_D + 60]
         self.wall_edges = self._edge_points(self.wall_limit + 2)
         pit_wall = self.wall_edges[0] if self.pit.side < 0 else self.wall_edges[1]
         for i in self.pit.ramp_indices():
@@ -463,22 +463,27 @@ class Track:
                 pygame.draw.polygon(surf, color, [at(u, d0), at(v, d0), at(v, d1), at(u, d1)])
                 u = v
 
-        hw = pit.HALF_WIDTH
+        hw, bl = pit.HALF_WIDTH, pit.HALF_WIDTH + pit.BOX_LANE
         work0, work1 = pit.RAMP, pit.length - pit.RAMP
-        # concrete apron in front of the garages, the lane itself, then its markings
-        band(work0 - 20, work1 + 20, hw, hw + 50, (112, 114, 118))
-        band(work0 - 20, work1 + 20, hw + 2, hw + 4, (150, 152, 156))
+        # concrete apron in front of the garages, the box lane, the fast lane, then the markings
+        band(work0 - 20, work1 + 20, bl, pit.GARAGE_D + 18, (112, 114, 118))
+        band(work0, work1, hw, bl, (60, 61, 66))
+        band(work0, work1, bl - 2, bl, (235, 235, 235))
         edges = pit.outline(8.0)
         for (l0, r0), (l1, r1) in zip(edges, edges[1:]):
             pygame.draw.polygon(surf, (50, 51, 56), [l0, l1, r1, r0])
+        inner = 1 if pit.side > 0 else 0               # the fast lane's edge towards the boxes
         for k in range(len(edges) - 1):
-            for side in (0, 1):
-                pygame.draw.line(surf, (235, 235, 235), edges[k][side], edges[k + 1][side], 2)
+            pygame.draw.line(surf, (235, 235, 235), edges[k][1 - inner], edges[k + 1][1 - inner], 2)
+            u = k * 8.0
+            if not work0 <= u < work1 or k // 2 % 2 == 0:
+                # dashed between the fast lane and the box lane, solid where there are no boxes
+                pygame.draw.line(surf, (235, 235, 235), edges[k][inner], edges[k + 1][inner], 2)
         font = pygame.font.SysFont("arial", 15, bold=True)
         for u, limit in ((pit.RAMP, True), (pit.length - pit.RAMP, False)):
             p, heading = pit.pose(u)
             nrm = Vector2(-math.sin(heading), math.cos(heading)) * hw
-            pygame.draw.line(surf, (255, 210, 40), p - nrm, p + nrm, 4)
+            pygame.draw.line(surf, (255, 210, 40), at(u, -hw), at(u, bl), 4)
             sign = p - nrm * pit.side * 1.9
             if limit:
                 # the speed limit sign: red ring, white disc

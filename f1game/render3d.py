@@ -439,6 +439,7 @@ class Renderer3D:
         self.antialias = "edges"
         # graphics detail: "low" (bare track), "medium" (+ trackside detail), "high" (+ post effects, mirrors)
         self.detail = "high"
+        self.view_dist = 1.0       # factor on FAR (user setting "Sichtweite")
         self.ss = 1
         self.aa = True
         self.time = 0.0
@@ -751,7 +752,7 @@ class Renderer3D:
             zenith, haze = _mix(zenith, _RAIN_SKY[0], mix), _mix(haze, _RAIN_SKY[1], mix)
         else:
             zenith, haze = _mix(zenith, (14, 16, 24), mix), _mix(haze, (44, 46, 56), mix)
-        fog_far = FAR * (0.62 if night else 1.0) * (1.0 - 0.45 * mix)
+        fog_far = FAR * self.view_dist * (0.62 if night else 1.0) * (1.0 - 0.45 * mix)
         az, el = look.get("sun", (0.0, 0.18))
         t = self.time
         # the sun wanders slowly across the sky during a session; clouds drift past it now and then
@@ -1750,13 +1751,22 @@ class Renderer3D:
                 out.append(([at(u, d0), at(v, d0), at(v, d1), at(u, d1)], color, z))
                 u = v
 
-        work0, work1 = pit.RAMP - 20, pit.length - pit.RAMP + 20
-        band(work0, work1, hw, hw + 50, (118, 120, 124), 0.0, 48.0)
+        bl = hw + pit.BOX_LANE
+        work0, work1 = pit.RAMP, pit.length - pit.RAMP
+        band(work0 - 20, work1 + 20, bl, pit.GARAGE_D + 18, (118, 120, 124), 0.0, 48.0)
+        band(work0, work1, hw, bl, (60, 61, 66), 0.0, 48.0)
         band(0.0, pit.length, -hw, hw, (52, 53, 58), 0.0, 24.0)
-        for d in (-hw, hw - 1.4):
-            band(0.0, pit.length, d, d + 1.4, (225, 225, 225), 0.12, 24.0)
+        band(0.0, pit.length, -hw, -hw + 1.4, (225, 225, 225), 0.12, 24.0)
+        band(work0, work1, bl - 1.4, bl, (225, 225, 225), 0.12, 48.0)
+        # between the fast lane and the box lane: solid where there are no boxes, dashed along them
+        band(0.0, work0, hw - 1.4, hw, (225, 225, 225), 0.12, 24.0)
+        band(work1, pit.length, hw - 1.4, hw, (225, 225, 225), 0.12, 24.0)
+        u = work0
+        while u < work1:
+            band(u, min(work1, u + 16.0), hw - 1.4, hw, (225, 225, 225), 0.12, 16.0)
+            u += 32.0
         for u in (pit.RAMP, pit.length - pit.RAMP):
-            band(u - 1.5, u + 1.5, -hw, hw, (255, 205, 40), 0.15, 3.0)
+            band(u - 1.5, u + 1.5, -hw, bl, (255, 205, 40), 0.15, 3.0)
         return out
 
     def _draw_garage(self, surf: pygame.Surface, pos: Vector2, heading: float, color: Color, side: int,

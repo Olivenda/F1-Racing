@@ -20,6 +20,8 @@ GEARBOX_MODES = {"auto": "Automatik", "manual": "Sequenziell (selbst schalten)"}
 GRAPHICS_LEVELS = {"low": "Niedrig", "medium": "Mittel", "high": "Hoch"}
 HUD_STYLES = {"modern": "Modern", "classic": "Klassisch"}
 HUD_ASSIST = {"off": "Aus", "flags": "Flaggen", "full": "Voll"}
+# 3D view distance: label and factor on the renderer's base distance
+VIEW_DISTANCES = {"normal": ("Normal", 1.0), "far": ("Weit (1,5x)", 1.5), "max": ("Sehr weit (2x)", 2.0)}
 # graphics presets: (graphics detail, anti-aliasing, effects)
 GRAPHICS_PRESETS = {"perf": ("Leistung", ("low", "off", "low")),
                     "balanced": ("Ausgewogen", ("medium", "edges", "high")),
@@ -43,6 +45,7 @@ class UserSettings:
     fullscreen: bool = False
     sound: str = "normal"
     safety_car: bool = True
+    formation_lap: bool = True
     language: str = "en"
     units: str = "kmh"
     fps: int = 60
@@ -57,6 +60,7 @@ class UserSettings:
     hud_assist: str = "full"
     train_gpu: str = "best"         # C trainer: "best" (strongest GPU), "all" or a GPU number from --list-gpus
     camera_mode: int = 0
+    view_distance: str = "max"
 
     @property
     def tyre_wear_factor(self) -> float:
@@ -95,6 +99,8 @@ class UserSettings:
             settings.hud_assist = "full"
         if not isinstance(settings.camera_mode, int) or settings.camera_mode < 0:
             settings.camera_mode = 0
+        if settings.view_distance not in VIEW_DISTANCES:
+            settings.view_distance = "max"
         if settings.gearbox not in GEARBOX_MODES:
             settings.gearbox = "auto"
         if settings.weather not in ("dry", "dynamic", "wet"):

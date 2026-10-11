@@ -101,8 +101,8 @@ class Player_Car(Car):
         self._feedback(controls, dt)
 
     def pit_pedals(self, session: "Session") -> tuple[float, float]:
-        """(throttle, brake) in the pit lane, where the driver brakes into the box and pulls away again; the
-        steering follows the lane."""
+        """(throttle, brake) in the pit lane: the car drives itself, the driver times the brake into the box and
+        the throttle on the release."""
         controls = self.remote if self.remote is not None else session.game.controls
         up, down, _, _ = self.held_keys(controls)
         throttle, brake = (1.0 if up else 0.0), (1.0 if down else 0.0)
