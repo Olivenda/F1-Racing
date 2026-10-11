@@ -242,6 +242,13 @@ EXACT: dict[str, str] = {
         "SPECTATOR RACE  ·  C camera  ·  A TV director  ·  +/- time warp",
     "ZUSCHAUER-RENNEN  ·  C Kamera  ·  A TV-Regie  ·  +/- Zeitraffer  ·  X Rennleitung":
         "SPECTATOR RACE  ·  C camera  ·  A TV director  ·  +/- time warp  ·  X race director",
+    # ---------------------------------------------------------------- auto-updater
+    "NEUES UPDATE VERFÜGBAR": "NEW UPDATE AVAILABLE", "J / ENTER  Aktualisieren": "Y / ENTER  Update",
+    "N / ESC  Später": "N / ESC  Later", "AKTUALISIERE ...": "UPDATING ...",
+    "git pull läuft - einen Moment": "git pull running - one moment", "UPDATE INSTALLIERT": "UPDATE INSTALLED",
+    "Das Spiel startet neu ...": "The game restarts ...", "UPDATE FEHLGESCHLAGEN": "UPDATE FAILED",
+    "Das Spiel läuft mit der jetzigen Version weiter. ENTER: OK": "The game keeps running on this version. ENTER: OK",
+    "1 neue Änderung auf GitHub - jetzt aktualisieren?": "1 new change on GitHub - update now?",
     # ---------------------------------------------------------------- race director / red flag
     "Replay: letzter Vorfall": "Replay: last incident", "Platz zurückgeben": "Give the place back",
     "Boxengasse": "Pit lane", "offen": "open", "geschlossen": "closed", "läuft": "running",
@@ -989,6 +996,7 @@ TEMPLATES: list[tuple[str, str]] = [
     ("Verstanden, Box diese Runde - {}.", "Understood, boxing this lap - {}."),
     ("{} folgt der Anweisung: Box -> {}", "{} follows the order: box -> {}"), ("Negativ! {}", "Negative! {}"),
     ("{} lehnt den Boxenstopp ab", "{} refuses the pit stop"), ("{}: Schaden - Box für Reparatur", "{}: damage - pitting for repairs"),
+    ("{}: Box zum Nachtanken", "{}: pitting to refuel"),
     ("AUSFALL: {} ({})", "RETIREMENT: {} ({})"), ("AUSFALL - {}", "RETIREMENT - {}"),
     ("{} Boxenstopp -> {}", "{} pit stop -> {}"), ("{} sitzt {#}s Strafe in der Box ab", "{} serves a {}s penalty in the pits"),
     ("Reifenwechsel: {}  +  Reparatur ({#}s)", "Tyre change: {}  +  repair ({}s)"), ("Reifenwechsel: {}", "Tyre change: {}"),
@@ -1281,6 +1289,7 @@ TEMPLATES: list[tuple[str, str]] = [
      "Left/right tabs · ENTER {} · G garage · arrows scroll · ESC menu"),
     ("SEKTOR {#}", "SECTOR {}"), ("Sektor {#}", "Sector {}"),
     ("{#}s Strafe für {} - {}", "{}s penalty for {} - {}"),
+    ("{#} neue Änderungen auf GitHub - jetzt aktualisieren?", "{} new changes on GitHub - update now?"),
     ("zurückgescrollt ({#}) · Mausrad", "scrolled back ({}) · mouse wheel"),
     ("Kein Vorfall von {} in den letzten 2 Minuten", "No incident of {} in the last 2 minutes"),
     ("Hinter {} ist niemand", "Nobody behind {}"), ("Platz an {} zurückgeben", "Give the place back to {}"),

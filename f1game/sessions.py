@@ -898,8 +898,21 @@ class Session:
             out.append((p + side, heading, colors.get(team, (200, 200, 200)), team))
         return out
 
+    FUEL_CALL_LAPS = 2.3    # practice/qualifying: fuel for fewer laps than this -> in at the next pit entry
+    FUEL_RUN_LAPS = 7.0     # ...and is filled up for at least this many laps
+
     def plan_pit(self, car: Car, neutralised: bool = False) -> str | None:
-        return None
+        """Practice and qualifying: the crew watches the fuel - the car comes in to refuel (and gets a fresh set)
+        while it can still make it round to the pit entry."""
+        if car.fuel_per_lap <= 0 or car.tyres is None or self.track.pit is None or \
+                car.fuel / car.fuel_per_lap >= self.FUEL_CALL_LAPS:
+            return None
+        # a proper run of laps on the next fill, not just the race distance (short races would mean a stop every lap)
+        fill = max(self.start_fuel_laps(car), self.FUEL_RUN_LAPS)
+        car.pit_plan = {"fuel": max(0.0, fill - car.fuel / car.fuel_per_lap),
+                        "front_wing": 0, "repair": True}
+        self.add_feed(f"{car.short}: Box zum Nachtanken")
+        return car.tyres.compound.key
 
     def damage_pit_allowed(self, car: Car) -> bool:
         return True
@@ -2471,6 +2484,11 @@ class RaceSession(Session):
             # watching the replay or actively paused: the race stands still, the camera keeps working
             self.replay.update(frame_dt)
             self._look_around(frame_dt)
+            rp = self.replay
+            if rp.active and rp.playing and not rp.dragging:
+                self.game.sound.update(self)    # the replayed cars are heard (their speed and throttle)
+            else:
+                self.game.sound.stop()          # standing still: silence, no endless wind/skid loops
             for m in self.messages:
                 m[2] -= frame_dt
             self.messages = [m for m in self.messages if m[2] > 0]

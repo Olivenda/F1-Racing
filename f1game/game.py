@@ -20,6 +20,7 @@ from .garage import GarageScreen
 from .hud import HUD, Fonts
 from .profiles import DATA_DIR, BrainLibrary, Team, load_drivers, load_teams, player_profile
 from .tyres import ALL_COMPOUNDS
+from .updater import Updater
 from .screens import AnalysisScreen, ChampionshipScreen, MainMenu, PodiumScreen, ResultsScreen, SettingsScreen, SetupScreen
 from .sessions import PracticeSession, QualifyingSession, RaceSession, Session, WeekendConfig
 from .settings import DEFAULT_DIFFICULTY, FPS, difficulty_index, GREY, MAX_FRAME_DT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE
@@ -42,7 +43,7 @@ class Game:
     
     def __init__(self) -> None:
         if sys.platform == "win32":    # own taskbar icon instead of python.exe's; Windows-only API
-            myappid = 'Safety Car Not Included.1.0.1'
+            myappid = 'SafetyCarNotIncluded.Game.1.0.1'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         
         pygame.mixer.pre_init(22050, -16, 2, 1024)       # 512 underran on slow frames (crackling)
@@ -79,6 +80,8 @@ class Game:
         self.running = True
         self.toast: tuple[str, int] | None = None
         self.net: NetPlay | None = None          # online multiplayer link (net.py)
+        self.updater = Updater()
+        self.updater.start_check()                # in the background: is there a newer version on GitHub?
         self.state: GameState = MainMenu(self)
 
     def run(self) -> None:

@@ -1,4 +1,4 @@
-# Welcome to F1-Racing
+# Welcome to Safety Car Not Included
 
 ## How We Use Claude
 

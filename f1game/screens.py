@@ -22,6 +22,7 @@ from .settings import (CYAN, DIFFICULTY_LEVELS, LEGACY_DIFFICULTY, ai_skill_name
 from .track import TRACK_DEFS
 from .weather import WEATHER_MODES
 from .i18n import LANGUAGES, set_language, tr
+from .updater import restart
 from .utils import clear_render_caches, draw_panel, draw_text, format_time, mouse_item, vertical_gradient
 
 if TYPE_CHECKING:
@@ -153,6 +154,17 @@ class MainMenu:
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type != pygame.KEYDOWN:
             return
+        up = self.game.updater
+        if up.offer:
+            # the update question is open: it gets the keys until it is answered
+            if up.state == "available":
+                if event.key in (pygame.K_y, pygame.K_j, pygame.K_RETURN, pygame.K_KP_ENTER):
+                    up.start_update()
+                elif event.key in (pygame.K_n, pygame.K_ESCAPE):
+                    up.dismiss()
+            elif up.state == "failed" and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_ESCAPE):
+                up.dismiss()
+            return
         if event.key in (pygame.K_UP, pygame.K_w):
             self.sel = (self.sel - 1) % len(self.ITEMS)
         elif event.key in (pygame.K_DOWN, pygame.K_s):
@@ -181,6 +193,10 @@ class MainMenu:
     def update(self, dt: float) -> None:
         self.t += dt
         self.bg.update(dt)
+        if self.game.updater.state == "done":
+            self._restart_in = getattr(self, "_restart_in", 1.5) - dt
+            if self._restart_in <= 0:
+                restart()           # the new version starts
         self.showcase_track = int(self.t / 8.0) % len(TRACK_DEFS)
         # the red highlight glides to the selected card instead of jumping
         target = self._card_rect(self.sel).y
@@ -194,8 +210,8 @@ class MainMenu:
         f = self.game.fonts
         self.bg.draw(screen)
         mouse = pygame.mouse.get_pos()
-        # logo: a compact slanted F1 badge sized to its text, the title beside it
-        logo = f.big.render("F1", True, WHITE)
+        # logo: a compact slanted "SCNI" badge, the title beside it
+        logo = f.big.render("SCNI", True, WHITE)
         badge = pygame.Rect(60, 32, logo.get_width() + 40, 58)
         skew = 14
         pygame.draw.polygon(screen, F1_RED, [(badge.x + skew, badge.y), (badge.right, badge.y),
@@ -204,9 +220,10 @@ class MainMenu:
                                                    (badge.right - 1, badge.y + 3), (badge.x + skew - 1, badge.y + 3)])
         screen.blit(logo, logo.get_rect(center=(badge.centerx, badge.centery + 1)))
         title_x = badge.right + 14
-        draw_text(screen, "GRAND PRIX", f.big, WHITE, (title_x, badge.y - 4))
-        draw_text(screen, _fit("Neuronale KI · Karriere · WM · Setup · 2D/3D", f.small, 560 - title_x), f.small,
-                  GREY, (title_x + 2, badge.bottom - 14), shadow=False)
+        draw_text(screen, "SAFETY CAR", f.big, WHITE, (title_x, badge.y - 4))
+        draw_text(screen, "NOT INCLUDED", f.medium, (255, 196, 40), (title_x + 2, badge.bottom - 20))
+        draw_text(screen, _fit("Neuronale KI · Karriere · WM · Setup · 2D/3D", f.small, 500), f.small,
+                  GREY, (62, badge.bottom + 6), shadow=False)
         # menu cards
         sel_rect = self._card_rect(self.sel)
         hl = sel_rect.move(0, round((self.hl_y if self.hl_y is not None else sel_rect.y) - sel_rect.y))
@@ -254,6 +271,49 @@ class MainMenu:
             x += w + 8
         draw_text(screen, "Pfeile wählen · ENTER bestätigen · ESC beenden", f.tiny, (150, 150, 160),
                   (SCREEN_WIDTH - 60, 688), anchor="topright", shadow=False)
+        if self.game.updater.offer:
+            self._draw_update(screen)
+
+    def _draw_update(self, screen: pygame.Surface) -> None:
+        """The update question (and its progress) over the menu."""
+        f = self.game.fonts
+        up = self.game.updater
+        shade = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 150))
+        screen.blit(shade, (0, 0))
+        lines = up.commits[:5] if up.state == "available" else []
+        box = pygame.Rect(0, 0, 640, 190 + 22 * len(lines))
+        box.center = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+        draw_panel(screen, box, PANEL, 245, radius=12)
+        pygame.draw.rect(screen, F1_RED, (box.x, box.y, box.w, 4), border_radius=3)
+        cx = box.centerx
+        if up.state == "available":
+            draw_text(screen, "NEUES UPDATE VERFÜGBAR", f.large, WHITE, (cx, box.y + 22), anchor="midtop")
+            n = up.behind
+            draw_text(screen, f"{n} neue Änderung{'en' if n != 1 else ''} auf GitHub - jetzt aktualisieren?", f.small,
+                      GREY, (cx, box.y + 66), anchor="midtop", shadow=False)
+            for k, line in enumerate(lines):
+                draw_text(screen, "· " + _fit(line, f.tiny, box.w - 80), f.tiny, (205, 208, 218),
+                          (box.x + 40, box.y + 100 + k * 22), shadow=False)
+            by = box.bottom - 58
+            for k, (label, col) in enumerate((("J / ENTER  Aktualisieren", F1_RED), ("N / ESC  Später", PANEL_LIGHT))):
+                r = pygame.Rect(cx - 250 + k * 260, by, 240, 40)
+                pygame.draw.rect(screen, col, r, border_radius=8)
+                draw_text(screen, label, f.small_bold, WHITE, r.center, anchor="center", shadow=False)
+        elif up.state == "updating":
+            draw_text(screen, "AKTUALISIERE ...", f.large, WHITE, (cx, box.y + 40), anchor="midtop")
+            draw_text(screen, "git pull läuft - einen Moment", f.small, GREY, (cx, box.y + 96), anchor="midtop",
+                      shadow=False)
+        elif up.state == "done":
+            draw_text(screen, "UPDATE INSTALLIERT", f.large, GREEN, (cx, box.y + 40), anchor="midtop")
+            draw_text(screen, "Das Spiel startet neu ...", f.small, GREY, (cx, box.y + 96), anchor="midtop",
+                      shadow=False)
+        else:
+            draw_text(screen, "UPDATE FEHLGESCHLAGEN", f.large, (255, 110, 100), (cx, box.y + 30), anchor="midtop")
+            draw_text(screen, _fit(up.error, f.tiny, box.w - 60), f.tiny, GREY, (cx, box.y + 84), anchor="midtop",
+                      shadow=False)
+            draw_text(screen, "Das Spiel läuft mit der jetzigen Version weiter. ENTER: OK", f.small, WHITE,
+                      (cx, box.y + 120), anchor="midtop", shadow=False)
 
     def _draw_showcase(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
