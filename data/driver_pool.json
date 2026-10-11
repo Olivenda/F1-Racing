@@ -1,5 +1,5 @@
 [
-  {"name": "Dutch Lion", "short": "DUT", "team": "Red Cow", "fixed": true, "nationality": "NE", "age": 29, "rating": 94, "potential": 99, "style": "aggressive", "checkpoint": "early", "tyre_mgmt": 1.0, "salary": 13, "color": [54, 113, 198], "helmet": [255, 210, 0]},
+  {"name": "Dutch Lion", "short": "DUT", "team": "Red Cow", "fixed": true, "nationality": "NE", "age": 29, "rating": 94, "potential": 99, "style": "base", "checkpoint": "final", "tyre_mgmt": 1.0, "salary": 13, "color": [54, 113, 198], "helmet": [255, 210, 0]},
   {"name": "Charlie the Chair", "short": "CHA", "team": "Scuderia Rosso", "fixed": true, "nationality": "MC", "age": 28, "rating": 81, "potential": 90, "style": "balanced", "checkpoint": "mid", "tyre_mgmt": 1.0, "salary": 8.2, "color": [232, 0, 45], "helmet": [255, 255, 255]},
   {"name": "Kim Talibantonelli", "short": "TAL", "team": "Silver Arrow", "fixed": true, "nationality": "IT", "age": 28, "rating": 90, "potential": 99, "style": "cautious", "checkpoint": "final", "tyre_mgmt": 1.0, "salary": 12.6, "color": [0, 245, 208], "helmet": [20, 200, 180]},
   {"name": "Oscar Pastry", "short": "PAS", "team": "Papaya GP", "fixed": true, "nationality": "AU", "age": 28, "rating": 83, "potential": 86, "style": "balanced", "checkpoint": "mid", "tyre_mgmt": 1.0, "salary": 8.2, "color": [255, 128, 0], "helmet": [30, 30, 30]},

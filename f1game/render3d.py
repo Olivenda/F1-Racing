@@ -88,12 +88,13 @@ CROWD = [(220, 40, 40), (250, 250, 250), (255, 205, 40), (40, 90, 210), (30, 30,
 
 # Car model: tapered slabs (bottom rectangle at z0, top rectangle at z1) in car space, x forward, y right, z up.
 # (bottom x0, x1, y0, y1), (top x0, x1, y0, y1), z0, z1, role, kept at distance (LOD)
-_Slab = tuple[tuple[float, float, float, float], tuple[float, float, float, float], float, float, str, bool]
+# lod: True = drawn at any distance, False = only close to the camera, None = only right in front of it
+_Slab = tuple[tuple[float, float, float, float], tuple[float, float, float, float], float, float, str, bool | None]
 
 
 def _mirrored(x: tuple[float, float], y: tuple[float, float], z: tuple[float, float], role: str,
               top_x: tuple[float, float] | None = None, top_y: tuple[float, float] | None = None,
-              lod: bool = False) -> list[_Slab]:
+              lod: bool | None = False) -> list[_Slab]:
     """A part and its mirror image on the other side of the car (y given for the right-hand side)."""
     tx, ty = top_x or x, top_y or y
     return [((x[0], x[1], y[0], y[1]), (tx[0], tx[1], ty[0], ty[1]), z[0], z[1], role, lod),
@@ -102,7 +103,7 @@ def _mirrored(x: tuple[float, float], y: tuple[float, float], z: tuple[float, fl
 
 def _part(x: tuple[float, float], y: tuple[float, float], z: tuple[float, float], role: str,
           top_x: tuple[float, float] | None = None, top_y: tuple[float, float] | None = None,
-          lod: bool = False) -> list[_Slab]:
+          lod: bool | None = False) -> list[_Slab]:
     tx, ty = top_x or x, top_y or y
     return [((x[0], x[1], y[0], y[1]), (tx[0], tx[1], ty[0], ty[1]), z[0], z[1], role, lod)]
 
@@ -151,6 +152,27 @@ CAR_MODEL: list[_Slab] = [
     # suspension arms (front, rear)
     *_mirrored((8.6, 10.4), (3.8, 6.0), (2.4, 2.8), "carbon"),
     *_mirrored((-11.4, -9.6), (3.6, 5.8), (2.6, 3.0), "carbon"),
+    # fine detail, only right in front of the camera (lod=None): 2022+ aero bits, livery, small hardware
+    *_part((14.3, 14.9), (-7.6, 7.6), (2.6, 3.0), "carbon", top_x=(14.2, 14.6), lod=None),     # third wing flap
+    *_mirrored((16.4, 18.4), (8.9, 9.3), (0.4, 1.4), "carbon", lod=None),                       # endplate foot
+    *_mirrored((12.4, 13.4), (1.4, 2.2), (3.3, 3.9), "dark", lod=None),                         # nose camera pods
+    *_part((11.6, 13.6), (-0.9, 0.9), (3.8, 3.88), "sponsor", lod=None),                        # number plate
+    *_mirrored((8.2, 11.4), (5.4, 8.6), (5.2, 5.45), "carbon", top_x=(8.6, 11.0), lod=None),    # wheel wings
+    *_mirrored((9.0, 10.6), (4.4, 5.2), (1.6, 3.4), "carbon"),                                  # front brake drum
+    *_mirrored((3.4, 3.9), (3.2, 4.2), (4.4, 5.2), "carbon", lod=None),                         # mirror stalks
+    # sidepod top: cooling louvres
+    *_mirrored((-5.4, -4.8), (4.2, 5.8), (4.6, 4.75), "dark", lod=None),
+    *_mirrored((-4.2, -3.6), (4.2, 5.8), (4.6, 4.75), "dark", lod=None),
+    *_mirrored((-3.0, -2.4), (4.2, 5.8), (4.6, 4.75), "dark", lod=None),
+    *_mirrored((-8.0, -5.2), (6.4, 7.3), (2.9, 3.9), "sponsor", top_y=(6.2, 6.9)),             # sidepod sponsor
+    *_part((-9.0, -2.6), (-0.45, 0.45), (7.6, 7.7), "stripe", lod=None),                        # spine stripe
+    *_part((0.0, 2.8), (-1.3, 1.3), (7.4, 7.9), "helmet", top_x=(0.6, 2.2), top_y=(-0.8, 0.8)),  # helmet dome
+    # rear: endplate sponsor and LED rain lights, swan-neck pylons, second beam wing, brake-duct winglets
+    *_mirrored((-17.6, -14.6), (7.4, 7.5), (5.0, 7.0), "sponsor"),
+    *_mirrored((-18.25, -17.9), (6.8, 7.3), (7.6, 8.2), "rainlight", lod=None),
+    *_mirrored((-16.4, -15.6), (0.9, 1.3), (4.4, 8.4), "carbon", top_x=(-17.0, -16.2), lod=None),
+    *_part((-17.6, -16.2), (-5.0, 5.0), (4.4, 4.8), "carbon", lod=None),
+    *_mirrored((-12.8, -8.4), (4.6, 5.0), (4.6, 5.6), "carbon", lod=None),
     # wheels: round, spinning - built separately (see _wheel_parts)
 ]
 
@@ -392,6 +414,10 @@ class _Env:
     rain: float
     wet: float
     look: dict
+    sun_az: float = 0.0
+    sun_el: float = 0.18
+    cover: float = 0.0          # 0..1: how much a passing cloud dims the sun right now
+    flash: float = 0.0          # lightning: 0..1 brightness of the flash
 
 
 class Renderer3D:
@@ -686,7 +712,7 @@ class Renderer3D:
     def fog(self, color: Color, depth: float) -> Color:
         a = self._amb
         if a is not None:
-            color = (color[0] * a[0], color[1] * a[1], color[2] * a[2])
+            color = (min(255.0, color[0] * a[0]), min(255.0, color[1] * a[1]), min(255.0, color[2] * a[2]))
         t = depth * self._fog_inv
         t = 0.0 if t <= 0 else 1.0 if t >= 1 else t ** 1.8
         fc = self._fog_col
@@ -726,7 +752,38 @@ class Renderer3D:
         else:
             zenith, haze = _mix(zenith, (14, 16, 24), mix), _mix(haze, (44, 46, 56), mix)
         fog_far = FAR * (0.62 if night else 1.0) * (1.0 - 0.45 * mix)
-        return _Env(zenith, haze, fog_far, night, not night and mix < 0.45, mix, track.wetness, look)
+        az, el = look.get("sun", (0.0, 0.18))
+        t = self.time
+        # the sun wanders slowly across the sky during a session; clouds drift past it now and then
+        az += t * 0.00035
+        noise = 0.5 * math.sin(t * 0.045) + 0.3 * math.sin(t * 0.11 + 1.7) + 0.2 * math.sin(t * 0.023 + 4.1)
+        cover = 0.0 if night else clamp((noise - 0.2) / 0.35, 0.0, 1.0) * (0.75 + 0.25 * mix)
+        env = _Env(zenith, haze, fog_far, night, not night and mix < 0.45, mix, track.wetness, look,
+                   az, el, cover, self._lightning(mix))
+        if cover > 0.0 and not night:
+            env.zenith = _mix(zenith, _RAIN_SKY[0], round(cover * 4) / 16)
+            env.haze = _mix(haze, _RAIN_SKY[1], round(cover * 4) / 20)
+        return env
+
+    def _lightning(self, rain: float) -> float:
+        """Thunderstorm: in heavy rain a flash (with a second flicker) every 8-25 s."""
+        if rain < 0.6 or self.detail != "high":
+            return 0.0
+        t = self.time
+        nxt = getattr(self, "_bolt_at", None)
+        if nxt is None or nxt < t - 2.0:
+            nxt = self._bolt_at = t + random.uniform(4.0, 12.0)
+            self._bolt_az = random.uniform(-0.6, 0.6)
+        dt = t - nxt
+        if dt < 0:
+            return 0.0
+        if dt > 0.6:
+            self._bolt_at = t + random.uniform(8.0, 25.0) * (1.4 - rain)
+            self._bolt_az = random.uniform(-0.6, 0.6)
+            self._bolt_seed = random.randrange(1 << 16)
+            return 0.0
+        flicker = 1.0 if dt < 0.08 else 0.25 if dt < 0.16 else 0.85 if dt < 0.24 else max(0.0, 1 - (dt - 0.24) / 0.36)
+        return flicker
 
     # sun light for everything in the world: same direction as the sun drawn in the sky (a bit higher, so the
     # shadows stay readable), weak and diffuse under clouds, floodlights from above at night
@@ -739,10 +796,10 @@ class Renderer3D:
         if env.night:
             sx, sy, sz, k = 0.22, -0.18, 0.96, 0.45
         else:
-            az, el = env.look.get("sun", (0.0, 0.18))
+            az, el = env.sun_az, env.sun_el
             elv = clamp(el * 2.6, 0.5, 1.0)
             sx, sy, sz = math.cos(az) * math.cos(elv), math.sin(az) * math.cos(elv), math.sin(elv)
-            k = 1.0 if env.sun else 0.35
+            k = (1.0 - 0.6 * env.cover) if env.sun else 0.35
         self._sunv = (sx, sy, sz)
         self._sun_k = k
         hl = math.hypot(sx, sy) or 1.0
@@ -884,8 +941,9 @@ class Renderer3D:
             else:
                 self._draw_sun(surf, env)
                 if env.rain < 0.75:
+                    drift = self.time * 0.003
                     for az, el, k, scale in layers["clouds"]:
-                        daz = wrap_angle(az - heading)
+                        daz = wrap_angle(az + drift - heading)
                         if abs(daz) > 1.4:
                             continue
                         p = self._dir_to_screen(daz, el)
@@ -895,6 +953,8 @@ class Renderer3D:
                         if p[0] + img.get_width() < 0 or p[0] - img.get_width() > w:
                             continue
                         surf.blit(img, (p[0] - img.get_width() / 2, p[1] - img.get_height() / 2))
+        if env.flash > 0.5 and not lite:
+            self._draw_bolt(surf, env)
         # ground: gradient from the haze at the horizon to the grass colour close by
         grass = track.definition.grass
         if env.night:
@@ -913,9 +973,31 @@ class Renderer3D:
             pygame.draw.polygon(surf, env.haze, [(0, yl), (0, y_lo - 1), (w, y_lo - 1), (w, yr)])
         self._draw_panorama(surf, layers, env, lite)
 
+    def _draw_bolt(self, surf: pygame.Surface, env: _Env) -> None:
+        """The lightning bolt itself: a jagged line from the clouds down to the horizon, with a branch."""
+        p = self._dir_to_screen(getattr(self, "_bolt_az", 0.0), 0.32)
+        q = self._dir_to_screen(getattr(self, "_bolt_az", 0.0), 0.0)
+        if p is None or q is None:
+            return
+        rng = random.Random(getattr(self, "_bolt_seed", 1))
+        w = surf.get_width()
+        x, y = p[0], min(p[1], 0.0)
+        pts = [(x, y)]
+        steps = 9
+        for k in range(1, steps + 1):
+            y = p[1] + (q[1] - p[1]) * k / steps if p[1] > 0 else y + (q[1] - y) / (steps - k + 1)
+            x += rng.uniform(-0.035, 0.035) * w
+            pts.append((x, y))
+        width = max(1, round(2 * self.ss))
+        pygame.draw.lines(surf, (235, 238, 255), False, pts, width)
+        fork = pts[rng.randrange(2, 5)]
+        branch = [fork, (fork[0] + rng.uniform(0.02, 0.05) * w * rng.choice((-1, 1)), fork[1] + (q[1] - fork[1]) * 0.4)]
+        pygame.draw.lines(surf, (200, 205, 240), False, branch, 1)
+        self._glow(pts[len(pts) // 2][0], pts[len(pts) // 2][1], 120 * self.ss, (60, 60, 90))
+
     def _draw_sun(self, surf: pygame.Surface, env: _Env) -> None:
         self._sun_screen = None
-        az, el = env.look.get("sun", (0.0, 0.18))
+        az, el = env.sun_az, env.sun_el
         daz = wrap_angle(az - self.cam_heading)
         if abs(daz) > 1.5:
             return
@@ -926,10 +1008,11 @@ class Renderer3D:
         if not (-300 < p[0] < w + 300 and -300 < p[1] < h + 100):
             return
         s = self.ss
-        k = 1.0 - env.rain
+        k = (1.0 - env.rain) * (1.0 - 0.75 * env.cover)
         self._add_glow(surf, p[0], p[1], 210 * s, (int(90 * k), int(80 * k), int(50 * k)))
         self._add_glow(surf, p[0], p[1], 70 * s, (int(160 * k), int(150 * k), int(110 * k)))
-        pygame.draw.circle(surf, _mix((255, 252, 235), env.haze, env.rain), p, max(2, int(16 * s)))
+        pygame.draw.circle(surf, _mix((255, 252, 235), env.haze, min(1.0, env.rain + 0.6 * env.cover)), p,
+                           max(2, int(16 * s)))
         self._sun_screen = p
 
     def _draw_stars(self, surf: pygame.Surface, stars: list, env: _Env) -> None:
@@ -1093,6 +1176,11 @@ class Renderer3D:
                 grade = (round(1.0 - 0.05 * k, 3), round(0.985 - 0.01 * k, 3), round(0.95 + 0.05 * k, 3))
             self._grade = grade
             self._vignette(out, target)
+        if env.flash > 0:
+            k = env.flash
+            out.fill((int(70 * k), int(72 * k), int(86 * k)), special_flags=pygame.BLEND_RGB_ADD)
+        if hi and env.sun and env.wet > 0.3 and self._sun_screen is not None:
+            self._wet_glare(out, self._sun_screen[0] / s, env)
         flash = getattr(target, "collision_flash", 0.0)
         if flash > 0 and self.cam.kind in ("onboard", "chase"):
             k = min(1.0, flash * 4)
@@ -1144,6 +1232,15 @@ class Renderer3D:
         night = env.night
         amb_track = (0.80, 0.80, 0.88) if night else None
         amb_far = (0.36, 0.38, 0.52) if night else None
+        if not night and env.cover > 0.02:
+            # a cloud in front of the sun: the whole scene goes a little flatter and darker
+            dim = round(1.0 - 0.13 * env.cover, 2)
+            amb_track = amb_far = (dim, dim, round(dim * 1.02, 2))
+        if env.flash > 0:
+            boost = 1.0 + 0.3 * env.flash
+            amb_track = tuple(c * boost for c in (amb_track or (1.0, 1.0, 1.0)))
+            amb_far = tuple(c * boost for c in (amb_far or (1.0, 1.0, 1.0)))
+        self._env_cur = env
         self._amb = amb_track
 
         n = track.n
@@ -1232,6 +1329,16 @@ class Renderer3D:
                     stripe = _fade(g0, d.grass if not night else _shade(d.grass, 0.45), fwd, 1100)
                     for side in (-1, 1):
                         self.poly(surf, strip(idx, side * (wl + 2), side * (wl + 100)), stripe, smooth=False)
+            # clumps of lighter and darker grass close by: the ground no longer looks like a painted floor
+            close_g = {i: fwd for fwd, i in visible if fwd < 700}
+            base_g = d.grass if not night else _shade(d.grass, 0.45)
+            for i0, side, a, b, ks, tone in self._tufts(track):
+                dist = close_g.get(i0)
+                if dist is None:
+                    continue
+                col = _fade(_shade(base_g, tone), base_g, dist, 700)
+                self.poly(surf, [edge(k, side * a) for k in ks] + [edge(k, side * b) for k in reversed(ks)], col,
+                          smooth=False)
             self._amb = amb_track
         if detail and not night and not lite:
             # shadows of buildings and trees fall on the ground only: drawn before the run-off and the road so
@@ -1297,16 +1404,31 @@ class Renderer3D:
             if close:
                 skid = _shade(asphalt, 0.8 + 0.12 * wet)
                 patch_hi, patch_lo = _shade(asphalt, 1.07), _shade(asphalt, 0.93)
+                # standing water mirrors the sky by day and the floodlights at night
+                sheen = _shade(asphalt, 1.35 + 0.3 * wet) if night else _mix(asphalt, env.haze, 0.12 + 0.2 * wet)
                 for i0, kind, a, b, ks in self._decals(track):
                     if i0 not in close:
                         continue
                     dist = close[i0]
-                    if kind == "patch":
+                    if kind == "snake":
+                        if dist < 600:
+                            lats = [a + b * math.sin(m * 0.6 + i0) for m in range(len(ks))]
+                            self.poly(surf, [edge(k, lat - 0.35) for k, lat in zip(ks, lats)] +
+                                      [edge(k, lat + 0.35) for k, lat in zip(reversed(ks), reversed(lats))],
+                                      _fade(_shade(asphalt, 0.8), fade_asphalt, dist, 600), smooth=False)
+                    elif kind == "puddle":
+                        if wet > 0.35:
+                            # standing water mirrors the sky
+                            self.poly(surf, [edge(k, a) for k in ks] + [edge(k, b) for k in reversed(ks)],
+                                      _fade(sheen, fade_asphalt, dist, 900))
+                    elif kind == "patch":
                         self.poly(surf, [edge(k, a) for k in ks] + [edge(k, b) for k in reversed(ks)],
                                   _fade(patch_hi if (i0 // 3) % 2 else patch_lo, fade_asphalt, dist, 900), smooth=False)
                     else:
                         self.poly(surf, [edge(k, lo[k] + a) for k in ks] + [edge(k, lo[k] + b) for k in reversed(ks)],
                                   _fade(skid, fade_asphalt, dist, 900), smooth=False)
+        if night and detail:
+            self._light_pools(surf, track, visible, asphalt, wet, edge)
         for key, fwd, idx in runs:
             if fwd < 1600 and not key[2]:
                 line = _fade((230, 230, 230), asphalt, fwd, 1600)
@@ -1323,6 +1445,11 @@ class Renderer3D:
                         self.poly(surf, [edge(i, side * (hw + 1)), edge(j, side * (hw + 1)),
                                          edge(j, side * (hw + 9)), edge(i, side * (hw + 9))],
                                   _fade(turf, runoff, fwd, 1500))
+                    if detail and fwd < 700:
+                        # the kerb is a raised block: a dark lip where it drops to the ground outside
+                        lip = _fade(_shade(col, 0.55), turf or runoff, fwd, 700)
+                        self.poly(surf, [edge(i, side * (hw + 1)), edge(j, side * (hw + 1)),
+                                         edge(j, side * (hw + 2.4)), edge(i, side * (hw + 2.4))], lip, smooth=False)
             if i == 0 or j == 0 and i > n - 3:
                 for k in range(8):
                     lat = -hw + k * hw / 4
@@ -1441,6 +1568,41 @@ class Renderer3D:
         self._amb = None
         return labels
 
+    def _light_pools(self, surf: pygame.Surface, track: "Track", visible: list, asphalt: Color, wet: float,
+                     edge: Callable[[int, float], CamPoint]) -> None:
+        """Night: every floodlight throws a pool of light onto the asphalt below it - brightest on its side of the
+        road, and on a wet track the pool turns into a shiny, mirror-like patch."""
+        floods = getattr(track, "_floods3d", None)
+        if floods is None:
+            self._props(track, True)
+            floods = getattr(track, "_floods3d", [])
+        fwd_of = {i: fwd for fwd, i in visible if fwd < 1500}
+        n, hw = track.n, track.half_width
+        outer = _shade(asphalt, 1.22 + 0.25 * wet)
+        inner = _shade(asphalt, 1.45 + 0.45 * wet)
+        for i, _p, side in floods:
+            fwd = fwd_of.get(i)
+            if fwd is None:
+                continue
+            wide = [(i + k) % n for k in range(-7, 8)]
+            core = [(i + k) % n for k in range(-4, 5)]
+            col_o = _fade(outer, asphalt, fwd, 1500)
+            col_i = _fade(inner, outer, fwd, 1500)
+            self.poly(surf, [edge(k, -hw) for k in wide] + [edge(k, hw) for k in reversed(wide)], col_o,
+                      smooth=False)
+            a, b = (0.0, hw) if side > 0 else (-hw, 0.0)
+            self.poly(surf, [edge(k, a) for k in core] + [edge(k, b) for k in reversed(core)], col_i, smooth=False)
+
+    def _flood_light(self, track: "Track", x: float, y: float) -> float:
+        """Night: how much floodlight falls on a point (0 = between the masts, 1 = right below one)."""
+        best = 0.0
+        for _i, p, _side in getattr(track, "_floods3d", ()):
+            dx, dy = p.x - x, p.y - y
+            d2 = dx * dx + dy * dy
+            if d2 < 48400.0:
+                best = max(best, 1.0 - math.sqrt(d2) / 220.0)
+        return best
+
     def _draw_wall(self, surf: pygame.Surface, obj: tuple, d, fwd: float, detail: int, city: bool) -> None:
         pts, alt, i = obj
         to_cam = self.to_cam
@@ -1475,6 +1637,11 @@ class Renderer3D:
                 self.poly(surf, bottom + row(1.6)[::-1], _fade(_shade(col, 0.72), col, fwd, 1400), smooth=False)
                 self.poly(surf, row(WALL_HEIGHT - 1.0) + top[::-1], _fade(_shade(col, 1.18), col, fwd, 1400),
                           smooth=False)
+                if fwd < 650:
+                    # joints between the concrete blocks
+                    joint = _fade(_shade(col, 0.7), col, fwd, 650)
+                    for p_ in pts[1:-1]:
+                        self._line3d(surf, to_cam(p_.x, p_.y, 1.6), to_cam(p_.x, p_.y, WALL_HEIGHT - 1.0), joint)
         if not detail:
             return
         if fwd < 1900 and (i // 9) % 5 == 0:
@@ -1830,7 +1997,37 @@ class Renderer3D:
                 lat0 = rng.uniform(-hw + 4, hw - 24)
                 ks = [(i + k) % n for k in range(rng.randint(2, 4))]
                 out.append((ks[0], "patch", lat0, lat0 + rng.uniform(8, 20), ks))
+        # tar snakes: sealed cracks meandering across the asphalt
+        for i in range(5, n, 23):
+            if rng.random() < 0.55:
+                ks = [(i + k) % n for k in range(rng.randint(3, 7))]
+                out.append((ks[0], "snake", rng.uniform(-hw + 6, hw - 6), rng.uniform(1.0, 3.0), ks))
+        # dips near the edges where water collects on a wet track
+        for i in range(11, n, 29):
+            if rng.random() < 0.5:
+                side = rng.choice((-1.0, 1.0))
+                lat0 = side * rng.uniform(hw - 22, hw - 9)
+                ks = [(i + k) % n for k in range(rng.randint(2, 4))]
+                out.append((ks[0], "puddle", lat0 - 4.0, lat0 + 4.0, ks))
         track._decals3d = out
+        return out
+
+    @staticmethod
+    def _tufts(track: "Track") -> list[tuple]:
+        """Grass clumps beyond the barriers: (first waypoint, side, lateral from, lateral to, waypoints, tone)."""
+        cached = getattr(track, "_tufts3d", None)
+        if cached is not None:
+            return cached
+        rng = random.Random(sum(map(ord, track.definition.key)) * 17 + 9)
+        n, wl = track.n, track.wall_limit
+        out = []
+        for i in range(0, n, 3):
+            for side in (-1.0, 1.0):
+                if rng.random() < 0.45:
+                    a = wl + rng.uniform(6, 80)
+                    ks = [(i + k) % n for k in range(rng.randint(1, 3) + 1)]
+                    out.append((ks[0], side, a, a + rng.uniform(4, 14), ks, rng.choice((0.86, 0.92, 1.07, 1.12))))
+        track._tufts3d = out
         return out
 
     def _props(self, track: "Track", night: bool) -> list[tuple]:
@@ -1898,11 +2095,14 @@ class Renderer3D:
             p = track.center[i] + track.normals[i] * side * min(wl - 3.0, hw + 26.0)
             props.append(("panel", p, heading_at(i), k, 14.0))
         # floodlights (night race)
+        floods = []
         for i in range(0, n, 16):
             side = 1.0 if (i // 16) % 2 else -1.0
             p = track.center[i] + track.normals[i] * side * (wl + 24)
             if clear(p, wl + 12):
-                props.append(("flood", p, heading_at(i), side, 30.0))
+                props.append(("flood", p, heading_at(i), side, i, 30.0))
+                floods.append((i, p, side))
+        track._floods3d = floods
         track._props3d = props
         return props
 
@@ -1972,7 +2172,7 @@ class Renderer3D:
         elif kind == "panel":
             self._draw_flag_panel(surf, prop, night)
         elif kind == "flood" and night:
-            _, pos, heading, side, _ = prop
+            _, pos, heading, side, wp, _ = prop
             base, top = to_cam(pos.x, pos.y, 0), to_cam(pos.x, pos.y, 78)
             self._line3d(surf, base, top, (90, 92, 100), 3)
             f = Vector2(math.cos(heading), math.sin(heading))
@@ -1983,6 +2183,20 @@ class Renderer3D:
                     sx, sy = self.project(p)
                     pygame.draw.circle(surf, (255, 250, 230), (sx, sy), max(1, self._focal * 1.6 / p[2]))
                     self._glow(sx, sy, self._focal * 34 / p[2], (130, 124, 104))
+                env = getattr(self, "_env_cur", None)
+                if env is not None and env.wet > 0.3:
+                    # mirrored in the wet asphalt: a soft streak of light on the road in front of the mast
+                    trk = self.target.track if self.target is not None else None
+                    if trk is None:
+                        return
+                    k = min(1.0, (env.wet - 0.3) / 0.4)
+                    spot = trk.center[wp] + trk.normals[wp] * side * trk.half_width * 0.55
+                    for depth_z, size in ((-4, 12), (-16, 18), (-34, 24)):
+                        q = to_cam(spot.x, spot.y, depth_z)
+                        if q[2] > self.near:
+                            qx, qy = self.project(q)
+                            self._glow(qx, qy, self._focal * size / q[2],
+                                       (int(95 * k), int(88 * k), int(70 * k)))
 
     def _draw_flag_panel(self, surf: pygame.Surface, prop: tuple, night: bool) -> None:
         """A digital marshal panel: black LED board on a post, facing the oncoming cars."""
@@ -2244,6 +2458,10 @@ class Renderer3D:
                   "spoke": (150, 152, 160), "spoke_blur": (96, 98, 106),
                   "rainlight": (255, 40, 36) if blink else (70, 12, 12),
                   "accent": (min(255, body[0] + 70), min(255, body[1] + 70), min(255, body[2] + 70))}
+        # livery: sponsor panels and the spine stripe contrast with the paint
+        light_paint = body[0] * 0.3 + body[1] * 0.59 + body[2] * 0.11 > 150
+        colors["sponsor"] = (26, 26, 30) if light_paint else (238, 238, 240)
+        colors["stripe"] = _mix(helmet, colors["sponsor"], 0.35)
         if is_sc:
             lights = getattr(car, "lights_on", True)
             flash = int(self.time * 6) % 2
@@ -2258,6 +2476,7 @@ class Renderer3D:
             colors = {k: (int(c[0] * 0.45 + FOG[0] * 0.55), int(c[1] * 0.45 + FOG[1] * 0.55),
                           int(c[2] * 0.45 + FOG[2] * 0.55)) for k, c in colors.items()}
         near = depth < 380          # small parts (mirrors, rims, stripes, ...) only close to the camera
+        fine = depth < 170 and self.detail == "high"     # louvres, winglets, decals: right in front of it
         cam_l = ((self.cx - px) * fx + (self.cy - py) * fy, (self.cx - px) * rx + (self.cy - py) * ry)
         to_cam = self.to_cam
         if not own:
@@ -2292,7 +2511,8 @@ class Renderer3D:
             geometry = geometry + _wheel_spokes(_SC_WHEELS if is_sc else _CAR_WHEELS,
                                                 self._wheel_rot.get(cid, (0.0, 0.0)),
                                                 (v / 2.5 > SPIN_BLUR, v / 2.8 > SPIN_BLUR))
-        parts = [g for g in geometry if (near or g[2]) and g[1] not in hide
+        parts = [g for g in geometry if (g[2] or near and g[2] is False or fine and g[2] is None)
+                 and g[1] not in hide
                  and intact(g[4])
                  and not (off and g[4][2] >= 0 and off[g[4][2]])]
         # painter's order: far parts first (horizontal distance to the camera in car space)
@@ -2323,6 +2543,10 @@ class Renderer3D:
         tt = depth * self._fog_inv
         t = 0.0 if tt <= 0 else 1.0 if tt >= 1 else tt ** 1.8
         amb = self._amb or (1.0, 1.0, 1.0)
+        trk_ = getattr(car, "track", None)
+        if env is not None and env.night and trk_ is not None:
+            lit = 0.82 + 0.5 * self._flood_light(trk_, px, py)
+            amb = (amb[0] * lit, amb[1] * lit, amb[2] * lit * 0.97)
         if own and self.cam.cockpit:
             amb = (amb[0] * 0.62, amb[1] * 0.62, amb[2] * 0.66)
         fc = self._fog_col
@@ -2435,6 +2659,22 @@ class Renderer3D:
         for t, r, col in ((0.35, 26, (40, 34, 14)), (0.7, 12, (22, 40, 30)), (1.1, 44, (20, 26, 44)),
                           (1.45, 18, (40, 22, 30)), (1.8, 70, (14, 18, 26))):
             self._add_glow(out, sx + dx * t, sy + dy * t, r, (int(col[0] * k), int(col[1] * k), int(col[2] * k)))
+
+    def _wet_glare(self, out: pygame.Surface, sx: float, env: _Env) -> None:
+        """A wet track mirrors the sun: a column of glare on the asphalt below it."""
+        w, h = out.get_size()
+        if not (-60 <= sx < w + 60):
+            return
+        yl, yr = self._horizon(w)
+        y0 = (yl + yr) / 2 / self.ss
+        k = min(1.0, (env.wet - 0.3) / 0.4) * (1.0 - 0.7 * env.cover)
+        for j in range(6):
+            y = y0 + 8 + j * j * 9
+            if y > h:
+                break
+            r = 26 + j * 10
+            fade = k * (1.0 - j / 7)
+            self._add_glow(out, sx, y, r, (int(70 * fade), int(66 * fade), int(52 * fade)))
 
     def _vignette(self, out: pygame.Surface, target: "Car") -> None:
         w, h = out.get_size()

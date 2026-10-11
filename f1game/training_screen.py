@@ -20,8 +20,9 @@ from .utils import draw_panel, draw_text, draw_value_arrows, mouse_item
 if TYPE_CHECKING:
     from .game import Game
 
-MODES = ["base", "balanced", "aggressive", "cautious", "clone"]
-DEFAULT_GENS = {"base": 60, "balanced": 20, "aggressive": 20, "cautious": 20, "clone": 15}
+MODES = ["base", "balanced", "aggressive", "cautious", "clone", "safetycar"]
+DEFAULT_GENS = {"base": 60, "balanced": 20, "aggressive": 20, "cautious": 20, "clone": 15, "safetycar": 25}
+PY_ONLY = ("clone", "safetycar")     # modes the C trainer doesn't know
 # training engines: the native trainer (ctrain/f1train.exe, ~1000x faster) on GPU+CPU or CPU only, or Python
 ENGINES = [("c", "auto", "C - GPU + CPU (schnellste)"), ("c", "gpu", "C - nur GPU"), ("c", "cpu", "C - nur CPU"),
            ("py", "", "Python (langsam, mit Live-Ansicht)")]
@@ -131,8 +132,9 @@ class TrainingScreen:
 
     @property
     def engine(self) -> str:
-        """'c' or 'py' - clone training (backprop on your recordings) only exists in Python."""
-        return "py" if self.mode == "clone" else ENGINES[self.engine_i][0]
+        """'c' or 'py' - clone training (backprop on your recordings) and the safety car training only exist in
+        Python."""
+        return "py" if self.mode in PY_ONLY else ENGINES[self.engine_i][0]
 
     def _saved_progress(self) -> tuple[int, int, int] | None:
         """(generation, target, population) of a paused native run of this mode."""
@@ -247,7 +249,8 @@ class TrainingScreen:
         draw_panel(screen, (px, py, pw, 340), PANEL, 220)
         values = {"Modus": REWARD_STYLES[self.mode].title, "Generationen": str(self.gens),
                   "Population": f"{self.population} Netze",
-                  "Trainer": "Python (Klon-Training)" if self.mode == "clone" else ENGINES[self.engine_i][2],
+                  "Trainer": (f"Python ({REWARD_STYLES[self.mode].title})" if self.mode in PY_ONLY
+                              else ENGINES[self.engine_i][2]),
                   "GPU": self._gpu_label()}
         for i, row in enumerate(self.ROWS):
             ry = py + 6 + i * 55
@@ -283,11 +286,21 @@ class TrainingScreen:
         style = REWARD_STYLES[self.mode]
         draw_text(screen, style.title.upper(), f.large, WHITE, (info.x + 20, info.y + 16))
         draw_text(screen, style.description, f.small, (200, 200, 205), (info.x + 20, info.y + 58))
-        lines = ["Belohnungsfunktion (Fitness):",
-                 "  + gefahrene Strecke (px)",
-                 f"  - {style.w_wall} x Mauer-Aufprallimpuls,  - 150 x Sek. neben der Strecke",
-                 "  - 400 pro Unfall,  - 250 pro Track-Limits-Verstoß"]
-        if style.w_car or style.w_gain:
+        if self.mode == "safetycar":
+            lines = ["Belohnungsfunktion (Fitness):",
+                     "  + Sek. im richtigen Abstand zum Vordermann / SC",
+                     "  - 6 pro Überholung (auch am Safety Car vorbei)",
+                     "  - 6 pro Unfall,  - 2 x Sek. zu dicht dran",
+                     "  - Kontakt-/Mauerimpuls,  - 1,5 x Sek. neben der Strecke",
+                     "  - 1,5 x Sek. ausgeschieden (stehen geblieben)",
+                     "Startet vom Basis-Netz. Im Rennen fährt die KI",
+                     "damit, solange SC/VSC draußen ist."]
+        else:
+            lines = ["Belohnungsfunktion (Fitness):",
+                     "  + gefahrene Strecke (px)",
+                     f"  - {style.w_wall} x Mauer-Aufprallimpuls,  - 150 x Sek. neben der Strecke",
+                     "  - 400 pro Unfall,  - 250 pro Track-Limits-Verstoß"]
+        if (style.w_car or style.w_gain) and self.mode != "safetycar":
             lines += [f"  - {style.w_car} x Auto-Kontaktimpuls",
                       f"  + {style.w_gain:.0f} x gewonnene Positionen",
                       f"  {'+' if style.w_tailgate >= 0 else '-'} {abs(style.w_tailgate):.0f} x Sek. dicht hinter Gegner"]
@@ -328,7 +341,10 @@ class TrainingScreen:
                 pygame.draw.polygon(screen, col, [tip, back + side, back - side])
             lp = Vector2(world.x + leader.pos.x * scale + off.x, world.y + leader.pos.y * scale + off.y)
             pygame.draw.circle(screen, YELLOW, lp, 12, 2)
-            draw_text(screen, f"{view.track.name} · {'Rennen mit Kollisionen' if view.traffic else 'Solo (Geister)'}"
+            for obj in view.extra_objects():        # the safety car
+                pygame.draw.circle(screen, (255, 160, 0),
+                                   (world.x + obj.pos.x * scale + off.x, world.y + obj.pos.y * scale + off.y), 6)
+            draw_text(screen, f"{view.track.name} · {'Hinter dem Safety Car' if view.neutralised else 'Rennen mit Kollisionen' if view.traffic else 'Solo (Geister)'}"
                               f" · {sum(view.alive)}/{len(view.cars)} aktiv · t={view.time:4.1f}s",
                       f.small_bold, WHITE, (world.x + 14, world.y + 10))
         elif self.turbo:

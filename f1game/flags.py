@@ -23,10 +23,12 @@ CHEQUERED_TIME = 8.0
 FLAG_COLORS = {
     "green": (40, 230, 90), "yellow": (255, 210, 20), "yellow2": (255, 210, 20), "blue": (40, 120, 255),
     "sc": (255, 210, 20), "vsc": (255, 210, 20), "bw": (235, 235, 235), "chequered": (240, 240, 240),
+    "red": (240, 40, 40),
 }
 FLAG_NAMES = {
     "green": "GRÜNE FLAGGE", "yellow": "GELBE FLAGGE", "yellow2": "DOPPELT GELB", "blue": "BLAUE FLAGGE",
     "sc": "SAFETY CAR", "vsc": "VIRTUAL SAFETY CAR", "bw": "SCHWARZ-WEISS", "chequered": "ZIELFLAGGE",
+    "red": "ROTE FLAGGE",
 }
 
 
@@ -63,6 +65,8 @@ def post_states(session: "Session") -> list[str]:
     rc = getattr(session, "rc", None)
     now = session.time
     states = ["off"] * len(posts)
+    if rc is not None and rc.mode == "RED":
+        return ["red"] * len(posts)
     if rc is not None and rc.active:
         restart = rc.mode == "SC" and rc.phase == "restart"
         return [("green" if restart and k == 0 else "sc") if rc.mode == "SC" else "vsc"
@@ -103,7 +107,7 @@ def car_flag(session: "Session", car: "Car") -> str | None:
         return None
     if rc is not None:
         if rc.active:
-            return "sc" if rc.mode == "SC" else "vsc"
+            return {"SC": "sc", "RED": "red"}.get(rc.mode, "vsc")
         if now < getattr(rc, "green_until", 0.0):
             return "green"
     if getattr(car, "blue_for", None) is not None and session.kind == "race":
@@ -173,8 +177,8 @@ def led_board(state: str, phase: int, cols: int = 32, rows: int = 18, pitch: int
     for y in range(rows):
         for x in range(cols):
             c = dark
-            if state in ("green", "yellow", "blue"):
-                c = col if phase == 0 or state == "green" else dim
+            if state in ("green", "yellow", "blue", "red"):
+                c = col if phase == 0 or state in ("green", "red") else dim
             elif state == "yellow2":
                 c = col if (y < rows // 2) == (phase == 0) else dim
             elif state == "chequered":

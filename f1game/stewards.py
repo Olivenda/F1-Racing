@@ -29,6 +29,7 @@ class Stewards:
         self.pending: list[tuple[float, "Car", "Car", float]] = []
         self._pair_cooldown: dict[tuple[int, int], float] = {}
         self.penalties_issued = 0
+        self.director = None            # race director (spectator): may take over the decisions
 
     def announce(self, text: str, kind: str = "info", duration: float = 9.0) -> None:
         self.log.append([text, duration, kind])
@@ -118,7 +119,10 @@ class Stewards:
         self.pending.append((now + DECISION_DELAY, culprit, victim, impulse))
         self.announce(f"Untersuchung: Kollision {culprit.short} / {victim.short}", "investigation")
 
-    def penalty(self, car: "Car", seconds: float, reason: str) -> None:
+    def penalty(self, car: "Car", seconds: float, reason: str, auto: bool = True) -> None:
+        """auto: the stewards' own decision - a race director may hold it as a suggestion or overrule it."""
+        if auto and self.director is not None and self.director.intercept_penalty(car, seconds, reason):
+            return
         s = self.session
         car.penalty_total += seconds
         if car.finish_time is not None and car.finish_time < 1e5:

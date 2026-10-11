@@ -29,6 +29,25 @@ PUNCTURE_WEAR = 0.88
 GIVE_BACK_TIME = 15.0
 GRACE = 3.0               # a pass already under way when the neutralisation is called may still be completed
 RESTART_LINE_TIME = 25.0  # after the restart: no overtaking until a car has crossed the control line itself
+RED_SPEED = 0.30          # red flag: the field slows to this share of top speed and stops in order
+RED_STOP_TIME = 6.0       # ...the leader is down to a standstill after this many seconds
+
+
+def follow_speed(gap: float, ahead_speed: float, top: float) -> float:
+    """Under the safety car: the speed that settles a car GAP_TARGET behind the one ahead."""
+    target = ahead_speed + FOLLOW_GAIN * (gap - GAP_TARGET)
+    return max(top * 0.20, min(top * CATCH_UP, target))
+
+
+def hold_speed(car: "Car", target: float) -> None:
+    """Lift and brake so the car doesn't go faster than target (race control's limit under SC/VSC)."""
+    v = car.speed_fwd
+    if v > target + 4.0:
+        car.throttle = 0.0
+        car.brake = max(car.brake, min(1.0, (v - target) / 90.0))
+    elif v > target - 15.0:
+        car.throttle = min(car.throttle, 0.25)
+    car.straight_mode = False
 
 
 class SafetyCar:
@@ -49,13 +68,20 @@ class SafetyCar:
         self.pit_u: float | None = None     # driving down the pit lane (after the period)
         self.done = False                   # parked in the pit lane: gone
         self.steer_angle = 0.0
+        self.lateral = 0.0
         self._sprite = _road_car_sprite(self.color)
         self._place()
+
+    @property
+    def speed_fwd(self) -> float:
+        """(the AI's sensors see the safety car like a car)"""
+        return self.speed
 
     def _place(self) -> None:
         t = self.track
         i = int(self.s / t.WAYPOINT_SPACING) % t.n
-        self.pos, self.heading = t.pose_at(self.s, t.line_offset[i] if t.line_offset else 0.0)
+        self.lateral = t.line_offset[i] if t.line_offset else 0.0
+        self.pos, self.heading = t.pose_at(self.s, self.lateral)
 
     def update(self, h: float, target_speed: float) -> None:
         if self.pit_u is not None:
@@ -146,6 +172,7 @@ class RaceControl:
         self._order_timer = 0.0
         self._since = 0.0
         self._lead: "Car | None" = None
+        self.director = None                      # race director (spectator): may take over the decisions
 
     @property
     def active(self) -> bool:
@@ -173,19 +200,39 @@ class RaceControl:
         if not self._can_start():
             return
         if severity == "dnf":
-            self.deploy("SC" if random.random() < 0.65 else "VSC", f"{car.short} steht auf der Strecke")
+            self._auto_deploy("SC" if random.random() < 0.65 else "VSC", f"{car.short} steht auf der Strecke")
         elif car.damage.total > 0.5 and random.random() < 0.5:
-            self.deploy("SC", f"schwerer Unfall von {car.short}")
+            self._auto_deploy("SC", f"schwerer Unfall von {car.short}")
         elif car.damage.total > 0.25 and random.random() < 0.3:
-            self.deploy("VSC", f"Trümmer nach Unfall von {car.short}")
+            self._auto_deploy("VSC", f"Trümmer nach Unfall von {car.short}")
+
+    def _auto_deploy(self, mode: str, reason: str) -> None:
+        """Race control's own call - unless a race director decides (or is asked) instead."""
+        if self.director is not None and self.director.intercept_deploy(mode, reason):
+            return
+        self.deploy(mode, reason)
 
     def deploy(self, mode: str, reason: str) -> None:
         s = self.s
         leader = self._leader()
         if leader is None:
             return
+        if self.mode == "RED":
+            self.periods.append(f"Rote Flagge Runde {self._period_start}")
         self.mode = mode
         self._period_start = leader.laps_done + 1
+        if mode == "RED":
+            if self.sc is not None and self.sc.on_track:
+                self.sc = None
+            self.phase = ""
+            s.stewards.announce(f"ROTE FLAGGE - {reason}", "penalty", 10.0)
+            s.message("ROTE FLAGGE - Rennen unterbrochen", (255, 70, 60), 4.0)
+            s.add_feed(f"ROTE FLAGGE: {reason}")
+            self._since = s.time
+            self._ref, self._rank = [], {}
+            self._line_due = {}
+            self._pending = {}
+            return
         if mode == "SC":
             self.sc = SafetyCar(s, leader.s + 380.0)
             self.sc.speed = leader.speed_fwd
@@ -221,9 +268,10 @@ class RaceControl:
         s = self.s
         leader = self._leader()
         lap = leader.laps_done if leader else self._period_start
-        self.periods.append(f"{self.mode} Runde {self._period_start}-{max(self._period_start, lap)}")
+        name = "Rote Flagge" if self.mode == "RED" else self.mode
+        self.periods.append(f"{name} Runde {self._period_start}-{max(self._period_start, lap)}")
         s.stewards.announce("GRÜNE FLAGGE - Rennen freigegeben", "info", 6.0)
-        s.message("GRÜN! RESTART!" if self.mode == "SC" else "VSC ENDE - GRÜN!", (60, 220, 90), 2.5)
+        s.message("GRÜN! RESTART!" if self.mode in ("SC", "RED") else "VSC ENDE - GRÜN!", (60, 220, 90), 2.5)
         self.mode = None
         self.phase = ""
         if self.sc is not None and self.sc.on_track:
@@ -297,7 +345,14 @@ class RaceControl:
         if not self.active and not yielding:
             return
         top = car.top_speed
-        if self.mode == "VSC":
+        if self.mode == "RED":
+            target = self._red_target(car, top)
+            if target < 2.0:
+                # stopped in line, waiting for the restart (no brake at a standstill: that would be reverse)
+                car.throttle, car.brake = 0.0, (1.0 if car.speed_fwd > 1.0 else 0.0)
+                car.straight_mode = False
+                return
+        elif self.mode == "VSC":
             target = top * VSC_SPEED
         elif self.mode == "SC":
             target = self._follow_target(car, top)
@@ -307,13 +362,7 @@ class RaceControl:
             # an AI that has to give a place back: lift until the car it passed is by again
             victim = next(b for a, b in self.give_back if a is car)
             target = min(target, max(top * 0.2, victim.speed_fwd * 0.8))
-        v = car.speed_fwd
-        if v > target + 4.0:
-            car.throttle = 0.0
-            car.brake = max(car.brake, min(1.0, (v - target) / 90.0))
-        elif v > target - 15.0:
-            car.throttle = min(car.throttle, 0.25)
-        car.straight_mode = False
+        hold_speed(car, target)
 
     def _ahead_in_order(self, o: "Car", car: "Car") -> bool:
         """Whether o is ahead of car in the order to be kept (the reference order, race distance otherwise)."""
@@ -345,8 +394,24 @@ class RaceControl:
         if best_gap is None:
             limit = top * SC_SPEED if self.phase == "restart" else top * CATCH_UP
             return limit
+        return follow_speed(best_gap, best_speed, top)
+
+    def _red_target(self, car: "Car", top: float) -> float:
+        """Red flag: slow down and stop in order, GAP_TARGET behind the car ahead (the leader just stops)."""
+        L = self.s.track.length
+        best_gap, best_speed = None, 0.0
+        for o in self.s.cars:
+            if o is car or o.in_pit or o.dnf or o.session_done:
+                continue
+            gap = (o.s - car.s + L / 2) % L - L / 2
+            lower = -60.0 if self._ahead_in_order(o, car) else 5.0
+            if lower < gap < 900.0 and (best_gap is None or gap < best_gap):
+                best_gap, best_speed = gap, o.speed_fwd
+        if best_gap is None:
+            left = max(0.0, 1.0 - (self.s.time - self._since) / RED_STOP_TIME)
+            return top * RED_SPEED * left
         target = best_speed + FOLLOW_GAIN * (best_gap - GAP_TARGET)
-        return max(top * 0.20, min(top * CATCH_UP, target))
+        return max(0.0, min(top * RED_SPEED, target))
 
     @staticmethod
     def _racing(car: "Car") -> bool:

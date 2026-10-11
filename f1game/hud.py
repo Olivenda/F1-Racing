@@ -316,10 +316,16 @@ class HUD:
         f = self.f
         if rc.mode == "SC":
             text = {"out": "SAFETY CAR", "in": "SAFETY CAR IN THIS LAP", "restart": "RESTART AN DER ZIELLINIE"}[rc.phase]
+        elif rc.mode == "RED":
+            text = "ROTE FLAGGE - RENNEN UNTERBROCHEN"
         else:
             text = f"VIRTUAL SAFETY CAR  {max(0.0, rc.until - s.time):.0f}s"
         rect = pygame.Rect(SCREEN_WIDTH // 2 - 165, 48, 330, 30)
         blink = int(pygame.time.get_ticks() / 400) % 2
+        if rc.mode == "RED":
+            pygame.draw.rect(screen, (220, 30, 30) if blink else (150, 20, 20), rect, border_radius=6)
+            draw_text(screen, text, f.small_bold, WHITE, rect.center, anchor="center", shadow=False)
+            return
         pygame.draw.rect(screen, (255, 200, 30) if blink else (200, 150, 0), rect, border_radius=6)
         draw_text(screen, text, f.small_bold, (20, 15, 0), rect.center, anchor="center", shadow=False)
 
@@ -561,6 +567,7 @@ class HUD:
             sector = min(2, int((car.s % s.track.length) / s.track.length * 3)) + 1
             return f"Sektor {sector} · nicht überholen" if flag == "yellow" else f"Sektor {sector} · Gefahr, langsam!"
         return {"sc": "Abstand halten · nicht überholen", "vsc": "Delta einhalten · nicht überholen",
+                "red": "Rennen unterbrochen · anhalten",
                 "green": "Strecke frei", "chequered": "Rennen beendet",
                 "bw": "Track Limits - letzte Warnung"}.get(flag, "")
 
@@ -586,7 +593,7 @@ class HUD:
             detail = self._flag_detail(s, car, flag)
             if detail:
                 draw_text(screen, detail, f.tiny, (200, 200, 208), (x + w // 2, ty + 21), anchor="midtop", shadow=False)
-            if full and flag in ("yellow", "yellow2", "blue", "sc", "vsc") and phase == 0:
+            if full and flag in ("yellow", "yellow2", "blue", "sc", "vsc", "red") and phase == 0:
                 for ex in (0, SCREEN_WIDTH - 8):
                     pygame.draw.rect(screen, col, (ex, 200, 8, 320))
         if not full or not getattr(s, "race_started", True) or car.speed_fwd < 90.0:
@@ -759,6 +766,8 @@ class HUD:
             return "Reifenschaden! Langsam zurück an die Box.", (255, 90, 90)
         rc = getattr(s, "rc", None)
         if rc is not None and rc.active:
+            if rc.mode == "RED":
+                return "Rote Flagge! Langsam, anhalten und auf den Neustart warten.", (255, 80, 70)
             if rc.mode == "SC" and rc.phase == "restart":
                 return "Restart kommt - Reifen warm halten, bereit machen!", YELLOW
             return ("Safety Car! Abstand halten, nicht überholen." if rc.mode == "SC"

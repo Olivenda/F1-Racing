@@ -15,7 +15,7 @@ from f1game.profiles import BrainLibrary
 from f1game.track import TRACK_DEFS, Track
 from f1game.training import REWARD_STYLES, TRAFFIC_STYLES, Trainer
 
-DEFAULT_GENERATIONS = {"base": 60, "clone": 15, **{s: 20 for s in TRAFFIC_STYLES}}
+DEFAULT_GENERATIONS = {"base": 60, "clone": 15, "safetycar": 25, **{s: 20 for s in TRAFFIC_STYLES}}
 
 
 def run(mode: str, generations: int | None, population: int, seed: int | None, warm: bool = False) -> None:
@@ -73,6 +73,8 @@ def main() -> None:
         return
     if args.mode is None:
         parser.error("mode fehlt")
+    if args.c and args.mode in ("clone", "safetycar"):
+        parser.error(f"'{args.mode}' gibt es nur im Python-Trainer (ohne --c)")
     if args.c:
         args.population = args.population or 400
         run_native(args)

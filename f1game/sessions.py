@@ -29,6 +29,7 @@ from .weather import WET_THRESHOLD, Weather, plan_fits
 from .utils import approach
 from .sensors import RADAR_RANGE, lookahead_points
 from .race_control import PUNCTURE_WEAR, RaceControl
+from .race_director import RaceDirector
 from .i18n import tr
 from .stewards import Stewards
 from .settings import (TOP_SPEED, ai_strength, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
@@ -226,6 +227,8 @@ class Session:
 
     def _create_cars(self, order: list[DriverProfile]) -> None:
         ai_setup = recommended(self.track)
+        brains = self.game.brains
+        sc_net = brains.network("safetycar", "final") if brains.has("safetycar") else None
         for prof in order:
             if self.config.player is not None and prof is self.config.player:
                 car: Car = Player_Car(prof, self.track)
@@ -252,6 +255,7 @@ class Session:
                 net = self.game.brains.network(prof.brain, prof.checkpoint)
                 car = AI_Car(prof, self.track, net, engine_factor=prof.pace)
                 car.grip_bonus = driver_grip(prof.pace)
+                car.driver.sc_net = sc_net
                 car.set_skill(self.config.difficulty)
                 car.apply_setup(ai_setup)
             if self.ghost_field:
@@ -1620,6 +1624,8 @@ class RaceSession(Session):
         self._order_timer = 0.0
         self._player_pos = self.cars.index(self.player) + 1 if self.player is not None else 0
         self.rc = RaceControl(self, config.safety_car)
+        # spectator races: the viewer can run race control (X)
+        self.race_director = RaceDirector(self) if self.spectator and not self.online else None
         self.pos_history: dict[Car, list[int]] = {c: [c.grid_slot] for c in self.cars}
         if self.player is not None:
             self.message(f"Startplatz P{self._player_pos} - warte auf die Ampel!", WHITE, 4.0)
@@ -1627,7 +1633,19 @@ class RaceSession(Session):
                 plan = " -> ".join(f"{COMPOUNDS[c].letter} {n}" for c, n in self.player.strategy)
                 self.message(f"Strategie aus dem Training: {plan}", (90, 200, 255), 6.0)
         else:
-            self.message("ZUSCHAUER-RENNEN  ·  C Kamera  ·  A TV-Regie  ·  +/- Zeitraffer", WHITE, 5.0)
+            self.message("ZUSCHAUER-RENNEN  ·  C Kamera  ·  A TV-Regie  ·  +/- Zeitraffer  ·  X Rennleitung",
+                         WHITE, 5.0)
+
+    def handle_event(self, event: pygame.event.Event) -> None:
+        d = self.race_director
+        if d is not None and event.type == pygame.KEYDOWN and not self.paused and d.handle_key(event.key):
+            return
+        super().handle_event(event)
+
+    def draw(self, screen: pygame.Surface) -> None:
+        super().draw(screen)
+        if self.race_director is not None and not self.paused and not self.hide_hud:
+            self.race_director.draw(screen)
 
     def pre_step(self, h: float) -> None:
         if self.race_started:
@@ -2012,6 +2030,8 @@ class RaceSession(Session):
         super().update(frame_dt)
         if self.paused or not self.race_started:
             return
+        if self.race_director is not None:
+            self.race_director.update()
         self._check_reaction()
         if getattr(self, "_failure_at", None):
             self._check_failures()

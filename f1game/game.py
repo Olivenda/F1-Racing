@@ -42,12 +42,12 @@ class Game:
     
     def __init__(self) -> None:
         if sys.platform == "win32":    # own taskbar icon instead of python.exe's; Windows-only API
-            myappid = 'Olivers Gieles F1 Game.1.0.1'
+            myappid = 'Safety Car Not Included.1.0.1'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         
         pygame.mixer.pre_init(22050, -16, 2, 1024)       # 512 underran on slow frames (crackling)
         pygame.init()
-        pygame.display.set_caption("Gulivers Gieles F1 Game")
+        pygame.display.set_caption("Safety Car Not Included")
         try:    # next to the game folder, wherever the game is started from
             pygame.display.set_icon(pygame.image.load(str(DATA_DIR.parent / "image.png")))
         except (pygame.error, FileNotFoundError):

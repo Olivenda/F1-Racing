@@ -9,9 +9,11 @@ from typing import TYPE_CHECKING, Sequence
 from . import ai_pace
 from .car import Car
 from .neural import NeuralNetwork
-from .sensors import compute_inputs
+from .sensors import INPUT_NAMES, compute_inputs
 from .settings import AI_CONTROL_INTERVAL, BRAKE_DECEL, CAR_LENGTH, CAR_WIDTH, brake_decel
 from .utils import wrap_angle
+
+RADAR_FRONT = INPUT_NAMES.index("Radar VL")      # Radar VL, VM, VR
 
 if TYPE_CHECKING:
     from .profiles import DriverProfile
@@ -24,6 +26,7 @@ class NeuralDriver:
     def __init__(self, car: Car, network: NeuralNetwork, marshal: bool = True) -> None:
         self.car = car
         self.net = network
+        self.sc_net: NeuralNetwork | None = None    # trained to follow in line behind the safety car
         self.marshal = marshal
         self.inputs: list[float] = []
         self.outputs: list[float] = [0.0, 0.0]
@@ -32,13 +35,13 @@ class NeuralDriver:
         self.stuck_timer = 0.0
         self.wrong_way_timer = 0.0
 
-    def update(self, dt: float, others: Sequence[Car], track: "Track", race_start: bool = False
-               ) -> tuple[float, float, float]:
+    def update(self, dt: float, others: Sequence[Car], track: "Track", race_start: bool = False,
+               neutral: bool = False, hold: bool = False) -> tuple[float, float, float]:
         car = self.car
         if race_start and self.start_delay > 0:
             self.start_delay -= dt
             return 0.0, 1.0, 0.0
-        if self.marshal and self._marshal_check(dt, track):
+        if self.marshal and not hold and self._marshal_check(dt, track):
             return 0.0, 0.0, 0.0
 
         self.timer -= dt
@@ -51,7 +54,10 @@ class NeuralDriver:
                 g = car.tyres.compound.wet_factor(track.wetness)
                 if g < 0.99:
                     self.inputs[0] /= math.sqrt(max(0.3, g))
-            self.outputs = self.net.forward(self.inputs)
+            net = self.net
+            if neutral and self.sc_net is not None and max(self.inputs[RADAR_FRONT:RADAR_FRONT + 3]) > 0.0:
+                net = self.sc_net       # someone (or the safety car) ahead: follow in line, don't race
+            self.outputs = net.forward(self.inputs)
         steer, pedal = self.outputs
         return max(0.0, pedal), max(0.0, -pedal), steer
 
@@ -107,18 +113,26 @@ class AI_Car(Car):
 
     def control(self, dt: float, session: "Session") -> None:
         others = session.cars if self.sees_others else ()
+        rc = getattr(session, "rc", None)
+        neutral = rc.active if rc is not None else getattr(session, "neutralised", False)
+        seen = others
+        if others:
+            # the safety car is no car of the field, but the nets have to see it
+            extra = [o for o in session.extra_objects() if getattr(o, "on_track", True)]
+            seen = list(others) + extra if extra else others
         self.throttle, self.brake, self.steer_input = self.driver.update(
-            dt, others, self.track, race_start=session.is_race_start_phase)
+            dt, seen, self.track, race_start=session.is_race_start_phase, neutral=neutral,
+            hold=rc is not None and rc.mode == "RED")      # stopped for a red flag: not stuck
         self._corner_limit(dt)
         if self.skill < 1.0 and not self.in_pit and not session.is_race_start_phase:
             self._driver_skill(dt)
-        rc = getattr(session, "rc", None)
-        if not self.in_pit and not session.is_race_start_phase and not (rc is not None and rc.active):
+        if not self.in_pit and not session.is_race_start_phase and not neutral:
             self._mistakes(dt)
         if others and self.collide_cars:
-            # the first lap is the crowded one: more caution until the field has spread out
-            caution = 1.5 if session.kind == "race" and self.laps_done == 0 else 1.0
-            self._racecraft(dt, others, caution)
+            # the first lap is the crowded one: more caution until the field has spread out; behind the safety
+            # car the field is bunched up and nobody may pass
+            caution = 1.8 if neutral else 1.5 if session.kind == "race" and self.laps_done == 0 else 1.0
+            self._racecraft(dt, others, caution, neutral)
 
     def _driver_skill(self, dt: float) -> None:
         """The human side of a weaker driver: careful on the throttle with the wheels turned, a different pace each
@@ -229,11 +243,11 @@ class AI_Car(Car):
     _rc_steer = 0.0
     _rc_side = 0.0                  # +1/-1: a car alongside on that side (don't turn into it), 0: none
 
-    def _racecraft(self, dt: float, others: Sequence[Car], caution: float) -> None:
+    def _racecraft(self, dt: float, others: Sequence[Car], caution: float, neutral: bool = False) -> None:
         self._rc_timer -= dt
         if self._rc_timer <= 0.0:
             self._rc_timer = AI_CONTROL_INTERVAL
-            self._rc_lift, self._rc_brake, self._rc_steer, self._rc_side = self._assess(others, caution)
+            self._rc_lift, self._rc_brake, self._rc_steer, self._rc_side = self._assess(others, caution, neutral)
         if self._rc_lift > 0.0:
             self.throttle = min(self.throttle, max(0.0, 1.0 - self._rc_lift))
         if self._rc_brake > 0.0:
@@ -247,7 +261,8 @@ class AI_Car(Car):
             if not ((self._rc_steer > 0 and lat > hw) or (self._rc_steer < 0 and lat < -hw)):
                 self.steer_input = max(-1.0, min(1.0, self.steer_input + self._rc_steer))
 
-    def _assess(self, others: Sequence[Car], caution: float) -> tuple[float, float, float, float]:
+    def _assess(self, others: Sequence[Car], caution: float, neutral: bool = False
+                ) -> tuple[float, float, float, float]:
         L = self.track.length
         v = max(0.0, self.speed_fwd)
         look = CAR_LENGTH + v * self.LOOK_TIME * caution
@@ -280,6 +295,8 @@ class AI_Car(Car):
                     brake = max(brake, min(1.0, required / (BRAKE_DECEL * 0.55)))
                     if o.brake > 0.2 and gap < closing * limit + 25.0:
                         brake = max(brake, min(1.0, o.brake))       # the car ahead brakes: so do we
+                if neutral:
+                    continue            # no passing under SC/VSC: stay in line behind it
                 # line up the pass on the free side instead of pushing from behind; closing fast (slipstream)
                 # means pulling out properly
                 pull = 0.32 if closing > 30.0 else 0.15

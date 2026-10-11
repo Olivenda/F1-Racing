@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 from dataclasses import dataclass
 from typing import Callable, Sequence
@@ -14,8 +15,9 @@ from .car_setup import recommended
 from .neural import NeuralNetwork
 from .physics import handle_collisions
 from .profiles import RECORDING_DIR, BrainLibrary, DriverProfile
+from .race_control import GAP_TARGET, SC_SPEED, SafetyCar, follow_speed, hold_speed
 from .sensors import INPUT_NAMES, N_INPUTS, N_OUTPUTS
-from .settings import PHYSICS_STEP
+from .settings import CAR_LENGTH, PHYSICS_STEP, TOP_SPEED
 from .stewards import TL_MARGIN, TL_MIN_TIME
 from .track import Track
 
@@ -49,6 +51,9 @@ REWARD_STYLES: dict[str, RewardStyle] = {
                             "Verkehr: Kontakt teuer, dichtes Auffahren bestraft.", 0.7, 3.0, 120.0, -40.0),
     "clone": RewardStyle("clone", "Klon (deine Daten)",
                          "Lernt deinen Fahrstil aus Aufnahmen, danach kurz verfeinert.", 0.6, 0.0, 0.0, 0.0),
+    "safetycar": RewardStyle("safetycar", "Safety Car",
+                             "Hinter dem Safety Car: in einer Reihe folgen, Abstand halten, nie überholen.",
+                             0.6, 1.0, 0.0, 0.0),
 }
 TRAFFIC_STYLES = ("balanced", "aggressive", "cautious")
 
@@ -63,6 +68,7 @@ class Evaluation:
 
     CHECK_INTERVAL = 1.5
     MIN_PROGRESS = 60.0
+    neutralised = False                 # AI_Car: racing as usual (True: behind the safety car, no passing)
 
     def __init__(self, track: Track, nets: Sequence[NeuralNetwork], duration: float, traffic: bool,
                  start_s: float, stop_after_lap: bool = False) -> None:
@@ -117,6 +123,7 @@ class Evaluation:
         for car, alive in zip(self.cars, self.alive):
             if alive:
                 car.control(h, self)
+        self.neutralize()
         for car in self.cars:
             car.physics_step(h)
         handle_collisions(self.cars, self.track)
@@ -145,6 +152,12 @@ class Evaluation:
         if self.time >= self.duration or not any(self.alive):
             self.finished = True
 
+    def extra_objects(self) -> list:
+        return []
+
+    def neutralize(self) -> None:
+        pass
+
     def leader(self) -> AI_Car:
         alive = [c for c, a in zip(self.cars, self.alive) if a] or self.cars
         return max(alive, key=lambda c: c.distance)
@@ -164,11 +177,106 @@ class Evaluation:
         return out
 
 
+class SafetyCarEvaluation(Evaluation):
+    """Behind the safety car: the heat rolls in single file behind a pace car that keeps changing its speed and now
+    and then backs the field up, like before a restart. Holding the gap to the car ahead pays; passing, contact,
+    tailgating and leaving the track cost."""
+
+    neutralised = True
+    PASS_PENALTY = 6.0          # in seconds of good following
+    CRASH_PENALTY = 6.0
+    CLOSE_PENALTY = 2.0         # per second closer than this to the car ahead:
+    CLOSE_GAP = CAR_LENGTH * 1.6
+    OUT_PENALTY = 1.5           # per second taken out for not keeping up (stopping must not dodge the rest)
+
+    def __init__(self, track: Track, nets: Sequence[NeuralNetwork], duration: float, start_s: float,
+                 rng: random.Random) -> None:
+        super().__init__(track, nets, duration, traffic=True, start_s=start_s)
+        self.rng = rng
+        L = track.length
+        v0 = TOP_SPEED * SC_SPEED
+        self.sc = SafetyCar(self, start_s)
+        self.sc.speed = v0
+        self.sc_target = v0
+        self.sc_timer = rng.uniform(3.0, 6.0)
+        self.sc_distance = start_s
+        # rolling start in line behind it instead of from the grid
+        for k, car in enumerate(self.cars):
+            want = start_s - GAP_TARGET * (k + 1)
+            i = int((want % L) / track.WAYPOINT_SPACING) % track.n
+            off = track.line_offset[i] if track.line_offset else 0.0
+            pos, heading = track.pose_at(want, off + rng.uniform(-12.0, 12.0))
+            car.place(pos, heading)
+            car.vel = car.forward * v0
+            car.speed_fwd = v0
+            car.distance = car.s + L * round((want - car.s) / L)    # unwrapped: the line stays in order
+            car.lap_floor = math.floor(car.distance / L)
+        n = len(self.cars)
+        self.start_distance = [c.distance for c in self.cars]
+        self.check_distance = list(self.start_distance)
+        self.good = [0.0] * n
+        self.close = [0.0] * n
+        self.passes = [0] * n
+        self.passed = [False] * n
+        self.out = [0.0] * n
+
+    def extra_objects(self) -> list:
+        return [self.sc]
+
+    def neutralize(self) -> None:
+        """Race control's speed limit, as in a race: each car is held to its place GAP_TARGET behind the one
+        ahead - the net has to learn the rest (keep in line, don't pull out, don't run into anyone)."""
+        ahead_d, ahead_v = self.sc_distance, self.sc.speed
+        for k, car in enumerate(self.cars):
+            if not self.alive[k]:
+                continue
+            hold_speed(car, follow_speed(ahead_d - car.distance, ahead_v, car.top_speed))
+            ahead_d, ahead_v = car.distance, car.speed_fwd
+
+    def step(self, h: float) -> None:
+        self.sc_timer -= h
+        if self.sc_timer <= 0.0:
+            self.sc_timer = self.rng.uniform(3.0, 7.0)
+            slow = self.rng.random() < 0.3          # backs the field up
+            self.sc_target = TOP_SPEED * (self.rng.uniform(0.18, 0.28) if slow else self.rng.uniform(0.32, 0.5))
+        self.sc.update(h, self.sc_target)
+        self.sc_distance += self.sc.speed * h
+        super().step(h)
+        ahead = self.sc_distance
+        for k, car in enumerate(self.cars):         # start order = the order to keep
+            if not self.alive[k]:
+                self.out[k] += h
+                continue
+            gap = ahead - car.distance
+            if gap < 0.0:
+                if not self.passed[k]:
+                    self.passes[k] += 1
+                    self.passed[k] = True
+            else:
+                self.passed[k] = False
+                self.good[k] += h * max(0.0, 1.0 - abs(gap - GAP_TARGET) / GAP_TARGET)
+                if gap < self.CLOSE_GAP:
+                    self.close[k] += h
+            ahead = car.distance
+
+    def fitness(self, style: RewardStyle) -> list[float]:
+        out = []
+        for k, car in enumerate(self.cars):
+            f = self.good[k] - self.CLOSE_PENALTY * self.close[k] - self.PASS_PENALTY * self.passes[k]
+            f -= self.OUT_PENALTY * self.out[k]
+            f -= self.CRASH_PENALTY * car.crashes + 1.5 * car.grass_time + 3.0 * self.tl_violations[k]
+            f -= (style.w_car * car.car_impulse + style.w_wall * car.wall_impulse) / 100.0
+            out.append(f)
+        return out
+
+
 class Trainer:
 
     SOLO_DURATION = 24.0
     SOLO_STARTS = 2
     TRAFFIC_DURATION = 40.0
+    SC_DURATION = 35.0
+    SC_HEAT_SIZE = 8
     HEAT_SIZE = 11
     ELITE = 3
     BENCHMARK_CANDIDATES = 5
@@ -187,6 +295,7 @@ class Trainer:
         self.rng = random.Random(seed)
         self.log = log or (lambda msg: None)
         self.traffic = mode in TRAFFIC_STYLES
+        self.safety_car = mode == "safetycar"
         self.warm_start = warm_start and mode == "base" and library.has("base")
         self.sigma0 = 0.35 if mode == "base" and not self.warm_start else 0.08
         self.generation = 0
@@ -261,7 +370,14 @@ class Trainer:
     def _plan_generation(self) -> None:
         ids = list(range(self.pop_size))
         self.tasks = []
-        if self.traffic:
+        if self.safety_car:
+            for _ in range(3):
+                track = self.rng.choice(self.tracks)
+                self.rng.shuffle(ids)
+                start_s = self.rng.uniform(0.0, track.length)
+                for i in range(0, len(ids), self.SC_HEAT_SIZE):
+                    self.tasks.append((track, ids[i:i + self.SC_HEAT_SIZE], True, start_s))
+        elif self.traffic:
             for _ in range(2):
                 track = self.rng.choice(self.tracks)
                 self.rng.shuffle(ids)
@@ -286,15 +402,20 @@ class Trainer:
                     self._end_generation()
                     continue
                 track, ids, traffic, start_s = self.tasks.pop(0)
-                duration = self.TRAFFIC_DURATION if traffic else self.SOLO_DURATION
-                self.current = Evaluation(track, [self.population[i] for i in ids], duration, traffic, start_s)
+                nets = [self.population[i] for i in ids]
+                if self.safety_car:
+                    self.current = SafetyCarEvaluation(track, nets, self.SC_DURATION, start_s, self.rng)
+                else:
+                    duration = self.TRAFFIC_DURATION if traffic else self.SOLO_DURATION
+                    self.current = Evaluation(track, nets, duration, traffic, start_s)
                 self.current_ids = ids
                 self.view = self.current
             self.current.step(PHYSICS_STEP)
             self.sim_time += PHYSICS_STEP
             if self.current.finished:
                 key = self.current.track.definition.key
-                norm = self.ref_speed[key] * self.current.duration
+                # safety car: seconds of good following per second
+                norm = self.current.duration * (1.0 if self.safety_car else self.ref_speed[key])
                 for k, f in zip(self.current_ids, self.current.fitness(self.style)):
                     self.scores[k].append(f / norm)
                 self.current = None
@@ -303,7 +424,7 @@ class Trainer:
         for k, sc in enumerate(self.scores):
             if not sc:
                 self.fitness[k] = -1e9
-            elif self.traffic:
+            elif self.traffic or self.safety_car:
                 self.fitness[k] = 1000.0 * sum(sc) / len(sc)
             else:
                 self.fitness[k] = 1000.0 * (0.6 * sum(sc) / len(sc) + 0.4 * min(sc))
@@ -355,22 +476,26 @@ class Trainer:
 
     def _add_checkpoint(self, label: str, candidates: list[NeuralNetwork]) -> None:
         best_net, best_bench, best_key = candidates[0], {}, (-1, 0.0)
-        for net in candidates:
+        # a lap time says nothing about following the safety car: there the fittest one is the checkpoint
+        for net in candidates if not self.safety_car else ():
             bench = self.benchmark(net)
             laps = [v for v in bench.values() if v]
             key = (len(laps), -sum(v / self.ref_lap[k] for k, v in bench.items() if v))
             if key > best_key:
                 best_net, best_bench, best_key = net, bench, key
         self.champion = best_net.copy()
-        self.log(f"Checkpoint '{label}' (Gen. {self.generation}) Rundenzeiten: "
-                 + ", ".join(f"{k} {v:.2f}s" if v else f"{k} --" for k, v in best_bench.items()))
+        if self.safety_car:
+            self.log(f"Checkpoint '{label}' (Gen. {self.generation}) Fitness {self.history[-1]['best']:.0f}")
+        else:
+            self.log(f"Checkpoint '{label}' (Gen. {self.generation}) Rundenzeiten: "
+                     + ", ".join(f"{k} {v:.2f}s" if v else f"{k} --" for k, v in best_bench.items()))
         self.checkpoints.append({"label": label, "generation": self.generation,
                                  "fitness": self.history[-1]["best"], "benchmark": best_bench,
                                  "network": self.champion.to_dict()})
 
     def _finish(self) -> None:
         parent = None
-        if self.mode in TRAFFIC_STYLES:
+        if self.mode in TRAFFIC_STYLES or self.safety_car:
             base = self.library.data("base")
             parent = {"style": "base", "generations": base.get("generations") if base else None}
         data = {"style": self.mode, "title": self.style.title, "description": self.style.description,
