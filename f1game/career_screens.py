@@ -13,7 +13,7 @@ from .career import (AREAS, COST_CAP, FACILITIES, FACILITY_COST, FACILITY_UPKEEP
                      slot_summary, team_rank)
 from .career_achievements import ACHIEVEMENTS, available
 from .championship import FORMATS
-from .settings import CYAN, DIFFICULTY_LEVELS, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, \
+from .settings import CYAN, DIFFICULTY_LEVELS, difficulty_label, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, \
     YELLOW
 from .track import TRACK_DEFS
 from .i18n import tr
@@ -186,28 +186,52 @@ class CareerSetupScreen(_Screen):
         self.format = 1
         self.diffs = list(DIFFICULTY_LEVELS.keys())
         self.sel = 0
+        # "Fahrer" row: 0 = your own new driver, k = take over the k-th driver of the pool (best first)
+        self.pool = sorted(load_pool(), key=lambda d: -int(d.get("rating", 0)))
+        self.takeover = 0
+
+    @property
+    def taken(self) -> dict[str, Any] | None:
+        drives = self.kind == "driver" or self.drives
+        return self.pool[self.takeover - 1] if drives and self.takeover else None
 
     @property
     def rows(self) -> list[str]:
         team = ["Teamname", "Teamfarbe", "Selbst fahren"] if self.kind == "team" else []
         if self.kind == "team" and not self.drives:
             ident = ["Dein Name"]
+        elif self.taken:
+            ident = ["Fahrer", "Startnummer"]
         else:
-            ident = ["Fahrername", "Kürzel", "Startnummer", "Nationalität", "Helmfarbe"]
+            ident = ["Fahrer", "Fahrername", "Kürzel", "Startnummer", "Nationalität", "Helmfarbe"]
         return team + ident + ["Format", "Rennrunden", "KI-Stärke", "START", "ZURÜCK"]
 
     @property
     def c(self) -> dict[str, int]:
         return self.game.menu_choice
 
+    def _name(self) -> str:
+        return self.taken["name"] if self.taken else self.driver_name
+
+    def _helmet(self) -> tuple[int, int, int]:
+        if self.taken and self.taken.get("helmet"):
+            return tuple(self.taken["helmet"])
+        return HELMET_COLORS[self.helmet]
+
     def _short_code(self) -> str:
+        if self.taken:
+            return self.taken["short"]
         if self.short:
             return self.short
         letters = "".join(ch for ch in (self.driver_name.split() or [""])[-1].upper() if ch.isalpha())
         return letters[:3] or "YOU"
 
     def _change(self, row: str, delta: int) -> None:
-        if row == "Teamfarbe":
+        if row == "Fahrer":
+            self.takeover = (self.takeover + delta) % (len(self.pool) + 1)
+            if not self.team_name_edited:
+                self.team_name = f"{(self._name().split() or ['Neues'])[-1]} Racing"[:20]
+        elif row == "Teamfarbe":
             self.color = (self.color + delta) % len(TEAM_COLORS)
         elif row == "Selbst fahren":
             self.drives = not self.drives
@@ -270,12 +294,12 @@ class CareerSetupScreen(_Screen):
 
     def _start(self) -> None:
         game = self.game
-        name = self.driver_name.strip()
+        name = self._name().strip()
         taken = {d["name"] for d in load_pool()} | {t.name for t in game.teams}
         if not name:
             self.say("Bitte einen Namen eingeben")
             return
-        if name in taken:
+        if name in taken and not self.taken:
             self.say("Diesen Namen trägt schon ein Fahrer oder Team")
             return
         if self.kind == "team" and not self.team_name.strip():
@@ -288,7 +312,7 @@ class CareerSetupScreen(_Screen):
                                     FORMATS[self.format][0], game.teams, self.team_name.strip(),
                                     TEAM_COLORS[self.color], self.drives, short=self._short_code(),
                                     number=self.number, nationality=NATIONALITIES[self.nation],
-                                    helmet=HELMET_COLORS[self.helmet])
+                                    helmet=HELMET_COLORS[self.helmet], takeover=name if self.taken else "")
         game.career.save()
         game.open_career()
 
@@ -302,6 +326,11 @@ class CareerSetupScreen(_Screen):
         if row == "Kürzel":
             return (self.short or self._short_code()) + (cursor if self.rows[self.sel] == row else "") + \
                 ("   (Timing-Tower)" if not self.short else "")
+        if row == "Fahrer":
+            d = self.taken
+            if d is None:
+                return "Eigener neuer Fahrer"
+            return f"{d['name']} · {d.get('team') or 'ohne Cockpit'} · Wertung {d.get('rating', '?')}"
         if row == "Startnummer":
             return f"#{self.number}"
         if row == "Nationalität":
@@ -315,7 +344,7 @@ class CareerSetupScreen(_Screen):
         if row == "Rennrunden":
             return f"{self.c['laps']} Runde{'n' if self.c['laps'] != 1 else ''} pro Rennen"
         if row == "KI-Stärke":
-            return self.diffs[self.c["diff"]]
+            return difficulty_label(self.diffs[self.c["diff"]])
         return ""
 
     def draw(self, screen: pygame.Surface) -> None:
@@ -378,14 +407,23 @@ class CareerSetupScreen(_Screen):
         body = TEAM_COLORS[self.color] if self.kind == "team" else (150, 150, 158)
         drives = self.kind == "driver" or self.drives
         preview = pygame.Rect(box.x + 20, box.y + 80 + len(lines) * 23, box.w - 40, 230)
-        draw_livery(screen, f, preview, body, HELMET_COLORS[self.helmet] if drives else (60, 60, 66),
+        if self.taken and self.kind == "driver":
+            body = next((t.color for t in self.game.teams if t.name == self.taken.get("team")), body)
+        draw_livery(screen, f, preview, body, self._helmet() if drives else (60, 60, 66),
                     self.number if drives else 0, self._short_code() if drives else "", self.t)
-        who = self.driver_name or "?"
-        sub = f"{who} · {NATIONALITIES[self.nation] or '-'}" if drives else f"Teamchef {who}"
+        who = (self._name() if drives else self.driver_name) or "?"
+        nation = self.taken.get("nationality", "") if self.taken else NATIONALITIES[self.nation]
+        sub = f"{who} · {nation or '-'}" if drives else f"Teamchef {who}"
         if self.kind == "team":
             sub += f" · {self.team_name or '?'}"
         draw_text(screen, _fit(sub, f.medium, box.w - 40), f.medium, WHITE, (box.x + 20, preview.bottom + 12))
-        if self.kind == "driver":
+        if self.taken:
+            seat = self.taken.get("team") or "-"
+            note = (f"Du übernimmst {who}: Cockpit bei {seat}, Helm und Kürzel." if self.kind == "driver"
+                    else f"{who} verlässt {seat} und fährt für dein Team.")
+            draw_text(screen, _fit(note, f.tiny, box.w - 40), f.tiny, GREY, (box.x + 20, preview.bottom + 46),
+                      shadow=False)
+        elif self.kind == "driver":
             draw_text(screen, "Die Autofarbe kommt von deinem Team - Helm und Nummer gehören dir.", f.tiny, GREY,
                       (box.x + 20, preview.bottom + 46), shadow=False)
         draw_text(screen, f"Gespeichert in data/careers/{self.slot}.json · später änderbar im DESIGN-Studio",

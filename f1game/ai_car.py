@@ -123,7 +123,9 @@ class AI_Car(Car):
         self.throttle, self.brake, self.steer_input = self.driver.update(
             dt, seen, self.track, race_start=session.is_race_start_phase, neutral=neutral,
             hold=rc is not None and rc.mode == "RED")      # stopped for a red flag: not stuck
-        self._corner_limit(dt)
+        # the pace reference only learns from racing laps: a formation lap or a neutralised field would pull it
+        # down to their slow speeds - and every weaker AI driver with it
+        self._corner_limit(dt, learn=not neutral and getattr(session, "race_started", True) and not self.session_done)
         if self.skill < 1.0 and not self.in_pit and not session.is_race_start_phase:
             self._driver_skill(dt)
         if not self.in_pit and not session.is_race_start_phase and not neutral:
@@ -184,7 +186,7 @@ class AI_Car(Car):
                 self._err_time = random.uniform(0.25, 0.4) if greedy else random.uniform(0.4, 0.7)
         self._was_braking = braking
 
-    def _corner_limit(self, dt: float) -> None:
+    def _corner_limit(self, dt: float, learn: bool = True) -> None:
         """Weaker drivers: through the corners never faster than corner_factor x the typical speed of a
         full-strength AI there (see ai_pace), braking for it early; on the straights they are just as fast. Cars
         not held back keep the reference up to date."""
@@ -222,7 +224,7 @@ class AI_Car(Car):
             if excess > -5.0:
                 self.throttle = min(self.throttle, 0.7)
                 return
-        if not self.on_grass and not self.is_ghost and self.speed_fwd > 20.0 and ref[self.idx] > 0.0:
+        if learn and not self.on_grass and not self.is_ghost and self.speed_fwd > 20.0 and ref[self.idx] > 0.0:
             # a typical speed, not the fastest ever seen: a slipstream or a lucky moment must not raise the
             # reference for everyone (that made the old one useless in the corners)
             ref[self.idx] += (self.speed_fwd - ref[self.idx]) * 0.01

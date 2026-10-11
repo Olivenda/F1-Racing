@@ -359,6 +359,7 @@ class Game:
                             rival=career.rival if career.kind == "driver" else None, career=True,
                             focus_team=career.team if career.kind == "team" else None,
                             reliability=career.reliability_map(), safety_car=st.safety_car,
+                            formation_lap=st.formation_lap,
                             weather=st.weather, gearbox=st.gearbox,
                             objective=career.weekend_goal.get("text") if career.kind == "driver" else None,
                             player_skills=career.player_skills(), slow_stop=career.slow_stop_chances())
@@ -483,7 +484,8 @@ class Game:
                                     start_compound=ALL_COMPOUNDS[c["tyre"]], assists=st.assists,
                                     view3d=st.view3d, damage=st.damage, tyre_wear_factor=st.tyre_wear_factor,
                                     auto_camera=st.auto_camera, championship=championship,
-                                    safety_car=st.safety_car, weather=st.weather, player2=player2,
+                                    safety_car=st.safety_car, formation_lap=st.formation_lap,
+                                    weather=st.weather, player2=player2,
                                     gearbox=st.gearbox, guests=guests)
         first = {"weekend": "practice", "practice": "practice", "qualifying": "qualifying", "race": "race"}[mode]
         self.start_session(first)

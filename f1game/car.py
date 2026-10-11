@@ -167,6 +167,9 @@ class Car:
         self.pit_u = 0.0
         self.pit_entry_lat = 0.0
         self.pit_box_u = 0.0
+        self.pit_d = 0.0                         # sideways in the lane: 0 fast lane, PitLane.BOX_D in the box
+        self.pit_stop_u = 0.0                    # where along the lane the car came to rest in its box
+        self.pit_braking = False                 # human timing game: the one brake press is in, the car stops
         self.pit_compound = "medium"
         self.pit_stop_timer = 0.0
         self.pit_stopped = False
@@ -193,11 +196,21 @@ class Car:
         self.last_contact_time = -1e9
         self.penalty_unserved = 0.0
         self.penalty_total = 0.0
+        self.drive_penalty: str | None = None   # "DT" drive-through / "SG" stop & go still to be served
+        self.drive_penalty_due = 0              # ...by the end of this lap, black flag otherwise
+        self.pit_serving: str | None = None     # this pit lane visit serves a drive penalty
+        self.tl_wide = 0                        # race: every trip beyond the track limits (advantage or not)
+        self.contacts_caused = 0                # race: collisions the stewards blamed on this car
+        self.warnings = 0                       # race: official warnings (race director / stewards)
+        self.bw_count = 0                       # race: black and white flags shown
+        self.incidents: list[tuple[int, str, str]] = []   # race: (lap, kind, text), newest last
         self.wall_impulse = 0.0
         self.car_impulse = 0.0
         self.grass_time = 0.0
         self.ghost_timer = 0.0
         self.retired_ghost = False
+        self.despawn_at: float | None = None    # disqualified: parked in the box, gone from the track at this time
+        self.despawned = False                  # ...and from then on not drawn any more (still in the results)
         self.collision_flash = 0.0
         self.slipstream = 0.0
         self.slip_target = 0.0
@@ -453,6 +466,8 @@ class Car:
         if self.start_boost > 0.0:
             self.start_boost = max(0.0, self.start_boost - dt)
             engine *= 1.0 + 0.06 * self.skills.get("start", 0)
+        if self.out_of_fuel:
+            engine = 0.0                # tank dry: the engine has died, the car only rolls
         brake_force = brake_decel(vf) * perf.brakes * sf.brake * (self.tyres.braking if self.tyres else 1.0) * \
             self.damage.brake_factor
         if self.on_grass:

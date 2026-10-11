@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import pygame
 from pygame.math import Vector2
 
+from .car import MARKERS_PER_LAP
 from .pitlane import SPEED_LIMIT
 from .settings import CAR_LENGTH, CAR_WIDTH, TOP_SPEED, YELLOW
 
@@ -29,8 +30,11 @@ PUNCTURE_WEAR = 0.88
 GIVE_BACK_TIME = 15.0
 GRACE = 3.0               # a pass already under way when the neutralisation is called may still be completed
 RESTART_LINE_TIME = 25.0  # after the restart: no overtaking until a car has crossed the control line itself
-RED_SPEED = 0.30          # red flag: the field slows to this share of top speed and stops in order
-RED_STOP_TIME = 6.0       # ...the leader is down to a standstill after this many seconds
+RED_HOLD = 10.0           # red flag: the race stands frozen this long before race control restarts it itself
+RED_PIT_SPEED = 0.45      # ...then the field drives into the pit lane at this share of top speed, in order
+RED_PIT_TIMEOUT = 150.0   # a car that still hasn't reached its box by then is put on the grid anyway
+RED_GRID_WAIT = 2.0       # all cars on the grid: the lights start after this long
+LIGHT_INTERVAL = 0.9
 
 
 def follow_speed(gap: float, ahead_speed: float, top: float) -> float:
@@ -172,11 +176,23 @@ class RaceControl:
         self._order_timer = 0.0
         self._since = 0.0
         self._lead: "Car | None" = None
+        self._red_order: list = []                # red flag: the order the field restarts in (grid slots)
+        self._red_laps: dict = {}                 # ...and every car's lap count when the race was stopped
+        self._red_t = 0.0                         # time in the current red flag phase
+        self._red_last_dnf = -1e9
+        self.placed: set = set()                  # cars already back on their restart grid slot
+        self.lights = 0                           # restart lights on the gantry (red flag standing restart)
+        self._lights_out = 0.0
         self.director = None                      # race director (spectator): may take over the decisions
 
     @property
     def active(self) -> bool:
         return self.mode is not None
+
+    @property
+    def frozen(self) -> bool:
+        """Red flag: the race stands still until the restart is called."""
+        return self.mode == "RED" and self.phase == "frozen"
 
     def sector_of(self, car: "Car") -> int:
         return min(2, int((car.s % self.s.track.length) / self.s.track.length * 3))
@@ -200,6 +216,12 @@ class RaceControl:
         if not self._can_start():
             return
         if severity == "dnf":
+            again = s.time - self._red_last_dnf < 20.0
+            self._red_last_dnf = s.time
+            leader = self._leader()
+            if again and random.random() < 0.5 and leader is not None and s.total_laps - leader.laps_done > 3:
+                self._auto_deploy("RED", f"zweiter Unfall in kurzer Zeit ({car.short})")
+                return
             self._auto_deploy("SC" if random.random() < 0.65 else "VSC", f"{car.short} steht auf der Strecke")
         elif car.damage.total > 0.5 and random.random() < 0.5:
             self._auto_deploy("SC", f"schwerer Unfall von {car.short}")
@@ -212,26 +234,16 @@ class RaceControl:
             return
         self.deploy(mode, reason)
 
-    def deploy(self, mode: str, reason: str) -> None:
+    def deploy(self, mode: str, reason: str, duration: float | None = None) -> None:
+        """duration: VSC only - seconds until it ends (inf: until race control calls green), random if None."""
         s = self.s
         leader = self._leader()
         if leader is None:
             return
-        if self.mode == "RED":
-            self.periods.append(f"Rote Flagge Runde {self._period_start}")
         self.mode = mode
         self._period_start = leader.laps_done + 1
         if mode == "RED":
-            if self.sc is not None and self.sc.on_track:
-                self.sc = None
-            self.phase = ""
-            s.stewards.announce(f"ROTE FLAGGE - {reason}", "penalty", 10.0)
-            s.message("ROTE FLAGGE - Rennen unterbrochen", (255, 70, 60), 4.0)
-            s.add_feed(f"ROTE FLAGGE: {reason}")
-            self._since = s.time
-            self._ref, self._rank = [], {}
-            self._line_due = {}
-            self._pending = {}
+            self._red_flag(reason)
             return
         if mode == "SC":
             self.sc = SafetyCar(s, leader.s + 380.0)
@@ -241,7 +253,7 @@ class RaceControl:
             s.stewards.announce(f"SAFETY CAR - {reason}", "investigation", 8.0)
             s.message("SAFETY CAR - nicht überholen!", YELLOW, 3.5)
         else:
-            self.until = s.time + random.uniform(25.0, 40.0)
+            self.until = s.time + (duration if duration is not None else random.uniform(25.0, 40.0))
             s.stewards.announce(f"VIRTUAL SAFETY CAR - {reason}", "investigation", 8.0)
             s.message("VIRTUAL SAFETY CAR - Tempo reduzieren", YELLOW, 3.5)
         s.add_feed(f"{'SAFETY CAR' if mode == 'SC' else 'VSC'}: {reason}")
@@ -250,6 +262,138 @@ class RaceControl:
         self._line_due = {}
         self._pending = {}
         self._cheap_stops()
+
+    # ------------------------------------------------------------------ red flag
+    # frozen: the whole race stands still -> pit_in (after the green flag): every car drives into its box, gets
+    # fresh tyres and is put on its grid slot -> grid: lights, standing restart
+
+    def _red_flag(self, reason: str) -> None:
+        s = self.s
+        if self.sc is not None and self.sc.on_track:
+            self.sc = None
+        self.phase = "frozen"
+        self._red_t = 0.0
+        self._red_order = [c for c in s.standings() if not c.dnf and not c.session_done]
+        self._red_laps = {c: c.laps_done for c in self._red_order}
+        self.placed = set()
+        for car in s.cars:
+            if car.pit_state is None:
+                car.vel.update(0, 0)
+                car.speed_fwd = car.spin = 0.0
+            car.throttle = car.brake = 0.0
+        self.give_back.clear()
+        self._ref, self._rank = [], {}
+        self._line_due = {}
+        self._pending = {}
+        self.yellow.clear()
+        s.stewards.announce(f"ROTE FLAGGE - {reason}", "penalty", 10.0)
+        s.message("ROTE FLAGGE - Rennen unterbrochen", (255, 70, 60), 4.0)
+        s.add_feed(f"ROTE FLAGGE: {reason}")
+        self._since = s.time
+
+    def frozen_step(self, h: float) -> None:
+        """Called instead of the simulation while the race is frozen: race control restarts it by itself unless
+        a race director decides."""
+        self._red_t += h
+        d = self.director
+        if self._red_t >= RED_HOLD and (d is None or d.assist == "auto"):
+            self.restart_red()
+
+    def restart_red(self) -> None:
+        """Green flag after the red: the field drives into the pit lane in order, then lines up on the grid."""
+        if not self.frozen:
+            return
+        s = self.s
+        self.phase = "pit_in"
+        self._red_t = 0.0
+        self._since = s.time
+        s.stewards.announce("Rennen wird fortgesetzt - alle Autos in die Boxengasse", "info", 8.0)
+        s.message("GRÜNE FLAGGE - ab an die Box, dann Startaufstellung", (60, 220, 90), 4.0)
+        s.add_feed("Rennleitung: Neustart aus der Startaufstellung")
+        for car in self._red_order:
+            if car.dnf or car.session_done:
+                continue
+            if s.track.pit is None:
+                self._to_grid(car)
+            elif car.pit_state is None and car.pit_request is None:
+                car.pit_request = s.red_compound(car)
+
+    def _red_step(self, h: float) -> None:
+        s = self.s
+        self._red_t += h
+        cars = [c for c in self._red_order if not c.dnf and not c.session_done]
+        if self.phase == "pit_in":
+            for car in cars:
+                car.lap_invalid = True
+            if self._red_t > RED_PIT_TIMEOUT:
+                for car in cars:
+                    if car not in self.placed:
+                        self._to_grid(car)
+            if all(c in self.placed for c in cars):
+                self.phase = "grid"
+                self._red_t = 0.0
+                self._lights_out = RED_GRID_WAIT + 5 * LIGHT_INTERVAL + random.uniform(0.6, 2.0)
+                s.message("STARTAUFSTELLUNG - stehender Start", (255, 255, 255), 3.0)
+        elif self.phase == "grid":
+            t = self._red_t
+            if t >= self._lights_out:
+                self.lights = 0
+                s.lights_on = 0
+                self._standing_restart(cars)
+            elif t >= RED_GRID_WAIT:
+                self.lights = min(5, 1 + int((t - RED_GRID_WAIT) / LIGHT_INTERVAL))
+                s.lights_on = self.lights
+
+    def red_pit_release(self, car: "Car") -> bool:
+        """A car's red flag stop is done: True when it was put on its grid slot (it has left the pit lane)."""
+        if self.mode != "RED" or self.phase != "pit_in" or car not in self._red_laps:
+            return False
+        self._to_grid(car)
+        return True
+
+    def _to_grid(self, car: "Car") -> None:
+        """Put a car on its slot of the restart grid, standing, with the lap count it had when the race was
+        stopped (a line crossing on the way into the pit lane doesn't count)."""
+        s = self.s
+        t = s.track
+        L = t.length
+        slot = [c for c in self._red_order if not c.dnf].index(car)
+        car.pit_state = None
+        car.pit_wheels_off, car.pit_lift, car.pit_hold = None, 0.0, False
+        car.pit_serving = None
+        car.pit_request = None
+        pos, heading = t.grid_pose(slot)
+        car.place(pos, heading)
+        target = self._red_laps[car]
+        extra = car.laps_done - target
+        if extra > 0:
+            car.laps_done = target
+            del car.lap_times[-extra:]
+            hist = s.pos_history.get(car)
+            if hist is not None:
+                del hist[target + 1:]
+        car.distance += target * L
+        car.lap_floor = target          # crossing the line from the grid starts the lap, it doesn't finish one
+        car.last_marker = math.floor(car.distance / (L / MARKERS_PER_LAP))
+        for m in [m for m in car.marker_times if m > car.last_marker]:
+            del car.marker_times[m]
+        car.frozen = True
+        car.ghost_timer = 0.0
+        car.auto_gear()
+        self.placed.add(car)
+
+    def _standing_restart(self, cars: list) -> None:
+        s = self.s
+        now = s.time
+        for car in cars:
+            car.frozen = False
+            car.lap_start_time = now
+            car.sectors = []
+            car.current_splits = {}
+            car.lap_invalid = False
+        s._judge_launch()
+        s.go_timer = 1.5
+        self._end(standing=True)
 
     def _cheap_stops(self) -> None:
         s = self.s
@@ -264,7 +408,8 @@ class RaceControl:
             if remaining > 2:
                 car.pit_request = s.plan_pit(car, neutralised=True)
 
-    def _end(self) -> None:
+    def _end(self, standing: bool = False) -> None:
+        """standing: after a standing restart (red flag) the order is free at once."""
         s = self.s
         leader = self._leader()
         lap = leader.laps_done if leader else self._period_start
@@ -273,6 +418,7 @@ class RaceControl:
         s.stewards.announce("GRÜNE FLAGGE - Rennen freigegeben", "info", 6.0)
         s.message("GRÜN! RESTART!" if self.mode in ("SC", "RED") else "VSC ENDE - GRÜN!", (60, 220, 90), 2.5)
         self.mode = None
+        self.placed = set()
         self.phase = ""
         if self.sc is not None and self.sc.on_track:
             self.sc = None          # (a safety car still driving down the pit lane finishes parking)
@@ -280,7 +426,7 @@ class RaceControl:
         self.green_until = s.time + 6.0
         self.yellow.clear()
         # the field keeps its order until each car has crossed the control line
-        self._line_due = {c: c.laps_done for c in self._ref if self._racing(c)}
+        self._line_due = {} if standing else {c: c.laps_done for c in self._ref if self._racing(c)}
         self._line_until = s.time + RESTART_LINE_TIME
 
     def step(self, h: float) -> None:
@@ -299,6 +445,8 @@ class RaceControl:
             self._end()
         elif self.mode == "SC":
             self._sc_step(h)
+        elif self.mode == "RED":
+            self._red_step(h)
         elif self.sc is not None:
             self.sc.update(h, 0.0)
             if self.sc.done:
@@ -347,11 +495,6 @@ class RaceControl:
         top = car.top_speed
         if self.mode == "RED":
             target = self._red_target(car, top)
-            if target < 2.0:
-                # stopped in line, waiting for the restart (no brake at a standstill: that would be reverse)
-                car.throttle, car.brake = 0.0, (1.0 if car.speed_fwd > 1.0 else 0.0)
-                car.straight_mode = False
-                return
         elif self.mode == "VSC":
             target = top * VSC_SPEED
         elif self.mode == "SC":
@@ -397,21 +540,20 @@ class RaceControl:
         return follow_speed(best_gap, best_speed, top)
 
     def _red_target(self, car: "Car", top: float) -> float:
-        """Red flag: slow down and stop in order, GAP_TARGET behind the car ahead (the leader just stops)."""
+        """Red flag, on the way into the pit lane: slowly and in order, GAP_TARGET behind the car ahead."""
         L = self.s.track.length
         best_gap, best_speed = None, 0.0
         for o in self.s.cars:
-            if o is car or o.in_pit or o.dnf or o.session_done:
+            if o is car or o.in_pit or o.dnf or o.session_done or o.frozen:
                 continue
             gap = (o.s - car.s + L / 2) % L - L / 2
             lower = -60.0 if self._ahead_in_order(o, car) else 5.0
             if lower < gap < 900.0 and (best_gap is None or gap < best_gap):
                 best_gap, best_speed = gap, o.speed_fwd
         if best_gap is None:
-            left = max(0.0, 1.0 - (self.s.time - self._since) / RED_STOP_TIME)
-            return top * RED_SPEED * left
+            return top * RED_PIT_SPEED
         target = best_speed + FOLLOW_GAIN * (best_gap - GAP_TARGET)
-        return max(0.0, min(top * RED_SPEED, target))
+        return max(top * 0.15, min(top * RED_PIT_SPEED, target))
 
     @staticmethod
     def _racing(car: "Car") -> bool:

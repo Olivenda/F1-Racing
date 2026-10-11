@@ -427,7 +427,7 @@ class SoundSystem:
     def _other_cars(self, session: "Session", focus, vol: float) -> None:
         near = []
         for c in session.cars:
-            if c is focus or c.dnf or c.in_pit:
+            if c is focus or c.dnf or c.in_pit or c.out_of_fuel:
                 continue
             d = c.pos.distance_to(focus.pos)
             if d < self.HEAR_RANGE:
@@ -481,7 +481,7 @@ class SoundSystem:
         vol = self.volume
         speed_frac = max(0.0, min(1.0, car.speed_fwd / max(1.0, car.top_speed)))
 
-        if car.dnf:
+        if car.dnf or car.out_of_fuel:
             self.engine.feed(0.0, 0.0, 0.0)
         else:
             rpm = engine_rpm(car)

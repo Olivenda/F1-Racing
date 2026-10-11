@@ -20,18 +20,20 @@ from .career_plus import START_BOOST_TIME
 from .flags import post_states
 from .render3d import CAMERA_MODES, Renderer3D
 from .pit_menu import PitMenu, crew_choice
+from .user_settings import VIEW_DISTANCES
 from .pitlane import (BOX_APPROACH, BOX_CREEP, BOX_MISS_TIME, BOX_PERFECT, BOX_WINDOW, OVERSHOOT_TIME, PIT_ACCEL,
-                      PIT_BRAKE, PIT_COAST, PIT_DECEL, SPEED_LIMIT)
+                      PIT_BRAKE, PIT_DECEL, SPEED_LIMIT, TURN_IN, smoothstep)
 from .car_setup import CarSetup, recommended
 from .career_events import DEFAULT_RELIABILITY, FAILURES, MINOR_FAILURES, RETIRE_SHARE, failure_chance
 from .tyres import ALL_COMPOUNDS, COMPOUNDS, COMPOUND_ORDER, TyreSet
 from .weather import WET_THRESHOLD, Weather, plan_fits
 from .utils import approach
 from .sensors import RADAR_RANGE, lookahead_points
+from .formation import FormationLap
 from .race_control import PUNCTURE_WEAR, RaceControl
 from .race_director import RaceDirector
 from .i18n import tr
-from .stewards import Stewards
+from .stewards import DRIVE_PENALTY_NAME, DRIVE_PENALTY_TIME, STOP_GO_TIME, Stewards
 from .settings import (TOP_SPEED, ai_strength, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
                        SCREEN_WIDTH, SLIPSTREAM_RANGE, WHITE, YELLOW, GREEN, PX_PER_S_TO_KMH, CAR_LENGTH, CAR_WIDTH, Color)
 from .utils import format_time
@@ -68,6 +70,7 @@ class WeekendConfig:
     reliability: dict[str, float] = field(default_factory=dict)
     objective: str | None = None
     safety_car: bool = True
+    formation_lap: bool = True
     gearbox: str = "auto"
     weather: str = "dry"
     weather_seed: int = field(default_factory=lambda: random.randrange(1 << 30))
@@ -455,6 +458,8 @@ class Session:
             return
         actor, event = self._route(event)
         key = event.key
+        if self.paused and getattr(event, "net_car", None) is None and self._pause_key(key):
+            return
         if actor is not None and self.pit_menus[actor].handle_key(event, actor, self):
             return
         if getattr(event, "net_car", None) is not None:
@@ -492,20 +497,20 @@ class Session:
             self.game.go_to_menu()
             return
         if key == pygame.K_ESCAPE:
-            if self.paused:
-                self.game.go_to_menu()
-            else:
-                self.paused = True
-        elif key == pygame.K_r and self.paused:
-            self.game.sound.stop()
-            self.game.start_session(self.kind)
-            return
+            self.paused = True
+            self.pause_sel = 0
         elif key == pygame.K_p and event.mod & pygame.KMOD_SHIFT:
             rc = getattr(self, "rc", None)
             if rc is not None and self.race_started and not rc.active and rc._leader() is not None:
                 rc.deploy("SC", "Entscheidung der Rennleitung")
+        elif key == pygame.K_o and event.mod & pygame.KMOD_SHIFT:
+            rc = getattr(self, "rc", None)
+            if rc is not None and self.race_started and not rc.active and rc._leader() is not None and \
+                    self.winner_time is None:
+                rc.deploy("RED", "Entscheidung der Rennleitung")
         elif key == pygame.K_p:
-            self.paused = not self.paused
+            self.paused = True
+            self.pause_sel = 0
         elif key in (pygame.K_F1, pygame.K_i):
             self.show_ai_info = not self.show_ai_info
         elif key in (pygame.K_F2, pygame.K_l):
@@ -555,6 +560,30 @@ class Session:
 
     def on_key(self, key: int) -> None:
         pass
+
+    # the pause menu: ESC carries on, P back to the main menu, R restarts; arrows + ENTER pick a button
+    PAUSE_ITEMS = ((pygame.K_ESCAPE, "WEITER", "ESC"), (pygame.K_r, "NEUSTART", "R"),
+                   (pygame.K_p, "HAUPTMENÜ", "P"))
+    pause_sel = 0
+
+    def _pause_key(self, key: int) -> bool:
+        """A key while paused: True when the pause menu used it."""
+        if key in (pygame.K_UP, pygame.K_w, pygame.K_LEFT):
+            self.pause_sel = (self.pause_sel - 1) % len(self.PAUSE_ITEMS)
+        elif key in (pygame.K_DOWN, pygame.K_s, pygame.K_RIGHT):
+            self.pause_sel = (self.pause_sel + 1) % len(self.PAUSE_ITEMS)
+        elif key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            return self._pause_key(self.PAUSE_ITEMS[self.pause_sel][0])
+        elif key == pygame.K_ESCAPE:
+            self.paused = False
+        elif key == pygame.K_p:
+            self.game.go_to_menu()
+        elif key == pygame.K_r:
+            self.game.sound.stop()
+            self.game.start_session(self.kind)
+        else:
+            return False
+        return True
 
     # player 2's keys next to the arrow keys, translated to the actions player 1 has on the left
     P2_KEYS = {pygame.K_RCTRL: pygame.K_SPACE, pygame.K_RSHIFT: pygame.K_b, pygame.K_DELETE: pygame.K_r,
@@ -834,7 +863,7 @@ class Session:
             self._box_of(car)
         for team, u in self._boxes.items():
             p, heading = pit.pose(u)
-            side = Vector2(-math.sin(heading), math.cos(heading)) * (pit.side * (pit.HALF_WIDTH + 30))
+            side = Vector2(-math.sin(heading), math.cos(heading)) * (pit.side * pit.GARAGE_D)
             out.append((p + side, heading, colors.get(team, (200, 200, 200)), team))
         return out
 
@@ -908,13 +937,14 @@ class Session:
 
     def _check_pit_entry(self, car: Car) -> None:
         pit = self.track.pit
-        if pit is None or car.pit_state is not None or car.pit_request is None or car.frozen:
+        serving = self.serves_penalty(car)
+        if pit is None or car.pit_state is not None or (car.pit_request is None and not serving) or car.frozen                 or self.pit_closed():
             return
         ds = (car.s - pit.entry_abs()) % self.track.length
         if ds < 40.0 and car.speed_fwd > 0 and isinstance(car, Player_Car) and car.autopilot is None:
             # a human has to drive into the entry: on the pit side of the track, not just anywhere
             if pit.side * car.lateral < self.track.half_width * 0.3:
-                if car.missed_entry_lap != car.laps_done:
+                if car.missed_entry_lap != car.laps_done and car.pit_request is not None:
                     car.missed_entry_lap = car.laps_done
                     car.radio_msg = ("Box verpasst! Die Crew wartet - nächste Runde rein.", (255, 110, 90),
                                      self.time + 5.0)
@@ -926,21 +956,35 @@ class Session:
             car.pit_service, car.pit_hold, car.pit_wheels_off, car.pit_lift = None, False, None, 0.0
             car.pit_u = ds
             car.pit_entry_lat = car.lateral
+            car.pit_d, car.pit_braking, car._pit_brake_armed = 0.0, False, False
             car.pit_box_u = self._box_of(car)
-            car.pit_compound = car.pit_request
-            car.pit_request = None
-            car.pit_stopped = False
+            # serving a penalty: no work on the car (a tyre call stays for the next lap); a drive-through doesn't
+            # stop at all
+            car.pit_serving = car.drive_penalty if serving else None
+            car.pit_compound = "none" if serving else car.pit_request
+            if not serving:
+                car.pit_request = None
+            car.pit_stopped = serving == "DT"
             car.pit_stop_timer = 0.0
             car.pit_box_error, car.pit_green_t = None, None
             if car is self.player or car is self.player2:
-                if self.manual_pit(car):
-                    self.message("BOXENGASSE - Limiter an, an der Box bremsen", (255, 210, 40), 2.5)
+                if serving:
+                    what = "DRIVE-THROUGH - durchfahren" if serving == "DT" else "STOP & GO - an deiner Box anhalten"
+                    self.message(f"BOXENGASSE - {what}", (255, 160, 40), 2.5)
+                elif self.manual_pit(car):
+                    self.message("BOXENGASSE - im richtigen Moment BREMSE drücken", (255, 210, 40), 2.5)
                 else:
                     self.message("BOXENGASSE - Limiter an", (255, 210, 40), 2.5)
 
     def _lane_tick(self, car: Car, h: float) -> None:
         pit = self.track.pit
         assert pit is not None
+        if car.dsq and car.pit_stopped:
+            # disqualified: parked in the box until it disappears
+            car.vel.update(0, 0)
+            car.speed_fwd = 0.0
+            car.throttle = car.brake = 0.0
+            return
         v = max(0.0, car.speed_fwd)
         service = car.pit_service
         if service is not None and (car.pit_stop_timer > 0 or car.pit_hold):
@@ -953,26 +997,27 @@ class Session:
             car.pit_stop_timer -= h
             if car.pit_stop_timer <= 0:
                 car.pit_hold = True
-                plan = car.pit_plan or {}
-                if car.pit_compound not in COMPOUNDS and car.puncture and car.tyres is not None:
-                    car.pit_compound = car.tyres.compound.key   # a punctured tyre gets replaced regardless
-                if car.pit_compound in COMPOUNDS:
-                    car.tyres = TyreSet(car.pit_compound, self._wear_factor(car))
-                    car.compounds_used = getattr(car, "compounds_used", set()) | {car.pit_compound}
-                    car.stint_log = getattr(car, "stint_log", []) + [(car.pit_compound, car.laps_done)]
-                if plan.get("repair", True):
-                    car.damage.repair()
-                car.puncture = False
-                if plan.get("fuel", 0.0) > 0 and car.fuel_per_lap > 0:
-                    car.fuel += plan["fuel"] * car.fuel_per_lap
-                    car.out_of_fuel = False
-                if plan.get("front_wing", 0) and car.setup is not None:
-                    new = CarSetup(**vars(car.setup))
-                    new.front_wing = max(-5, min(5, new.front_wing + plan["front_wing"]))
-                    car.apply_setup(new)
-                car.pit_plan = None
-                car.pit_stops += 1
-                car.pit_laps.append(car.laps_done + 1)
+                if car.pit_serving is None:      # (a stop & go: the crew may not touch the car)
+                    plan = car.pit_plan or {}
+                    if car.pit_compound not in COMPOUNDS and car.puncture and car.tyres is not None:
+                        car.pit_compound = car.tyres.compound.key   # a punctured tyre gets replaced regardless
+                    if car.pit_compound in COMPOUNDS:
+                        car.tyres = TyreSet(car.pit_compound, self._wear_factor(car))
+                        car.compounds_used = getattr(car, "compounds_used", set()) | {car.pit_compound}
+                        car.stint_log = getattr(car, "stint_log", []) + [(car.pit_compound, car.laps_done)]
+                    if plan.get("repair", True):
+                        car.damage.repair()
+                    car.puncture = False
+                    if plan.get("fuel", 0.0) > 0 and car.fuel_per_lap > 0:
+                        car.fuel += plan["fuel"] * car.fuel_per_lap
+                        car.out_of_fuel = False
+                    if plan.get("front_wing", 0) and car.setup is not None:
+                        new = CarSetup(**vars(car.setup))
+                        new.front_wing = max(-5, min(5, new.front_wing + plan["front_wing"]))
+                        car.apply_setup(new)
+                    car.pit_plan = None
+                    car.pit_stops += 1
+                    car.pit_laps.append(car.laps_done + 1)
             v = 0.0
         elif car.pit_hold:
             # safe release: wait while a car is coming down the lane right behind
@@ -980,6 +1025,8 @@ class Session:
             held = car.pit_service["t"] - car.pit_service["total"] if car.pit_service else 9.0
             if held > 1.5 or self._lane_clear(car):
                 self._release(car)
+                if self.on_pit_release(car):
+                    return
         elif self.manual_pit(car):
             v = self._manual_lane(car, v, h)
         else:
@@ -1002,34 +1049,70 @@ class Session:
                 self._start_service(car)
                 v = 0.0
         car.pit_u += v * h
-        pos, heading = pit.pose(min(car.pit_u, pit.length), car.pit_entry_lat)
+        u = min(car.pit_u, pit.length)
+        if not self.manual_pit(car):
+            car.throttle, car.brake = (0.3 if v > 0 else 0.0), 0.0
+        car.steer_input = 0.0
+        car.pit_d = self._auto_d(car, u)
+        d_next = self._auto_d(car, u + 6.0)
+        pos, heading = pit.pose(u, car.pit_entry_lat, car.pit_d, d_next)
         car.pos, car.heading = pos, heading
         car.vel = car.forward * v
         car.speed_fwd = v
-        if self.manual_pit(car):
-            car.steer_input = 0.0
-        else:
-            car.throttle, car.brake, car.steer_input = (0.3 if v > 0 else 0.0), 0.0, 0.0
         if car.pit_u >= pit.length:
+            if car.pit_serving is not None and car.pit_stopped:
+                self.stewards.drive_penalty_served(car)
+            car.pit_serving = None
+            car.pit_d = 0.0
             car.pit_state = None
             car.pit_wheels_off, car.pit_lift, car.pit_hold = None, 0.0, False
             car.auto_gear()
             car.ghost_timer = 1.2
             car.spin = 0.0
 
+    def _auto_d(self, car: Car, u: float) -> float:
+        """Sideways in the lane: the fast lane, swinging into the box lane before the box (fully in by the earliest
+        point a stop still counts) and back out after the spot the car stopped on."""
+        pit = self.track.pit
+        assert pit is not None
+        if car.pit_serving == "DT":
+            return 0.0
+        if not car.pit_stopped:
+            d = pit.BOX_D * smoothstep(1.0 - (car.pit_box_u - BOX_WINDOW - u) / TURN_IN)
+        else:
+            d = pit.BOX_D * (1.0 - smoothstep((u - car.pit_stop_u) / TURN_IN))
+        return min(d, pit.box_reach(u))
+
+    def serves_penalty(self, car: Car) -> bool:
+        """Whether the car comes into the pit lane now to serve a drive-through / stop & go."""
+        return False
+
+    def pit_closed(self) -> bool:
+        return False
+
+    def on_pit_release(self, car: Car) -> bool:
+        """A stop is done and the car released: True when the session took the car out of the pit lane."""
+        return False
+
     def manual_pit(self, car: Car) -> bool:
-        """Human drivers brake into their box and pull away themselves; the AI and the autopilot are driven."""
+        """Human drivers time the brake into their box and the getaway; the AI and the autopilot are driven."""
         return isinstance(car, Player_Car) and car.autopilot is None and not self.config.instant
 
     def _manual_lane(self, car: Car, v: float, h: float) -> float:
-        """One step of a human car in the pit lane: the steering follows the lane, the driver works the pedals.
-        The limiter brings the car down to the limit by the line and eases it to a crawl just before the box, so
-        the driver only times the brake: the stop counts where the car comes to rest - on the marks the crew
-        starts at once, off them the crew loses time, past them it pushes the car back."""
+        """One step of a human car in the pit lane - a timing game. The car drives itself down the lane and into
+        its box; the limiter eases it to a crawl just before the marks. The driver presses the brake once and the
+        car brakes fully from there: the stop counts where it comes to rest - on the marks the crew starts at
+        once, off them the crew loses time, past them (or no brake at all) it pushes the car back. On the release
+        the clock runs until the driver hits the throttle."""
         pit = self.track.pit
         assert pit is not None and isinstance(car, Player_Car)
         throttle, brake = car.pit_pedals(self)
-        car.throttle, car.brake = throttle, brake
+        if brake < 0.3:
+            car._pit_brake_armed = True               # still on the brake from the pit entry doesn't count
+        elif getattr(car, "_pit_brake_armed", False) and not car.pit_stopped and car.pit_u >= pit.RAMP:
+            car.pit_braking = True
+        car.throttle = 0.0 if car.pit_braking else 0.3
+        car.brake = 1.0 if car.pit_braking and not car.pit_stopped else 0.0
         if car.pit_u < pit.RAMP:
             # the limiter brakes the car down so it crosses the line at the limit
             v = min(v, math.sqrt(SPEED_LIMIT ** 2 + 2.0 * PIT_DECEL * (pit.RAMP - car.pit_u)))
@@ -1047,11 +1130,11 @@ class Session:
             if car is self.player or car is self.player2:
                 col = GREEN if reaction < 0.4 else YELLOW if reaction < 0.9 else ORANGE_CALL
                 self.message(f"REAKTION {reaction:.2f}s", col, 1.8)
-        accel = PIT_ACCEL * (1.0 if limited else 2.2)
-        v += (throttle * accel - brake * PIT_BRAKE - PIT_COAST) * h
-        if v > top:
-            v = max(top, v - PIT_DECEL * h)          # the limiter pulls the car down to the limit
-        v = max(0.0, v)
+        if car.pit_braking and not car.pit_stopped:
+            v = max(0.0, v - PIT_BRAKE * h)
+        else:
+            accel = PIT_ACCEL * (1.0 if limited else 2.2)
+            v = approach(v, top, (PIT_DECEL if v > top else accel) * h)   # the limiter holds the speed
         if car.pit_stopped:
             return v
         if self._box_busy(car):
@@ -1069,6 +1152,12 @@ class Session:
             self._start_service(car, OVERSHOOT_TIME)
             self.message(f"ÜBER DIE MARKIERUNG! Crew schiebt zurück  +{OVERSHOOT_TIME:.1f}s", (255, 110, 90), 2.5)
             return 0.0
+        if v <= 0.0 and off < -BOX_WINDOW:
+            # braked far too early: the car rolls on, another go at the brake
+            car.pit_braking = False
+            if car is self.player or car is self.player2:
+                self.message("ZU FRÜH GEBREMST - nochmal!", (255, 110, 90), 1.8)
+            return v
         if v <= 0.0 and abs(off) <= BOX_WINDOW:
             miss = max(0.0, abs(off) - BOX_PERFECT)
             extra = BOX_MISS_TIME * miss / (BOX_WINDOW - BOX_PERFECT)
@@ -1085,6 +1174,18 @@ class Session:
         """The car is on its marks: the crew starts work. extra: seconds the crew loses first because the driver
         stopped off the marks."""
         car.pit_stopped = True
+        car.pit_stop_u = car.pit_u
+        if car.dsq:
+            if car.despawn_at is None:
+                car.despawn_at = self.time + self.DSQ_DESPAWN
+            return
+        if car.pit_serving == "SG":
+            car._queued = False
+            car.pit_stop_timer = STOP_GO_TIME + extra
+            car.pit_service = {"t": 0.0, "total": car.pit_stop_timer, "wheels": None, "problem": None}
+            if car is self.player or car is self.player2:
+                self.message(f"STOP & GO - {STOP_GO_TIME:.0f} Sekunden stehen", (255, 160, 40), 3.0)
+            return
         plan = car.pit_plan or {}
         repair = car.damage.repair_time() if plan.get("repair", True) else 0.0
         served = car.penalty_unserved
@@ -1101,6 +1202,7 @@ class Session:
         wheels = None
         if tyres:
             normal = base
+            normal += random.uniform(-0.3, 0.3)
             if random.random() < self.config.slow_stop.get(car.profile.team, SLOW_STOP_CHANCE):
                 problem = random.randrange(4)
                 base += random.uniform(1.5, 4.5)
@@ -1134,7 +1236,7 @@ class Session:
         for other in self.cars:
             if other is car or other.profile.team != car.profile.team or other.pit_state != "lane":
                 continue
-            if other.pit_stopped and (other.pit_stop_timer > 0 or other.pit_hold) and \
+            if other.pit_stopped and (other.pit_stop_timer > 0 or other.pit_hold or other.dsq) and \
                     abs(other.pit_u - car.pit_box_u) < 30.0:
                 return True
         return False
@@ -1180,7 +1282,7 @@ class Session:
         colors = {g[3]: g[2] for g in self.garages()}
         out = []
         for team, u in self._boxes.items():
-            p, heading = pit.pose(u)
+            p, heading = pit.pose(u, d=pit.BOX_D)
             car = None
             for c in self.cars:
                 if c.profile.team == team and c.pit_state == "lane" and \
@@ -1362,8 +1464,10 @@ class Session:
         if self.view3d:
             self.r3d.antialias = self.game.settings.antialias
             self.r3d.detail = getattr(self.game.settings, "graphics", "high")
+            self.r3d.view_dist = VIEW_DISTANCES[self.game.settings.view_distance][1]
             positions = {c: k + 1 for k, c in enumerate(self.standings())}
-            self.r3d.draw(screen, self.track, self.cars + self.extra_objects(), self.cars[self.cam_index],
+            shown = [c for c in self.cars if not c.despawned]
+            self.r3d.draw(screen, self.track, shown + self.extra_objects(), self.cars[self.cam_index],
                           self.show_brake_line,
                           self.game.fonts.tiny, self.garages(), rain=self.weather.rain,
                           guide=self.pit_guide(self.cars[self.cam_index]), fx=self.fx,
@@ -1399,7 +1503,8 @@ class Session:
         self._draw_garages_2d(screen, off)
 
         for car in sorted(self.cars, key=lambda c: not c.is_ghost):
-            car.draw(screen, off)
+            if not car.despawned:
+                car.draw(screen, off)
         for obj in self.extra_objects():
             obj.draw(screen, off, self.time)
         self.fx.draw(screen, off)
@@ -1455,7 +1560,7 @@ class Session:
             img = self._label(name, WHITE)
             screen.blit(img, img.get_rect(center=sp - out * 3))
             # the box painted on the lane: team colour frame, white line where the front wheels stop
-            lane = sp - r * (pit.side * (pit.HALF_WIDTH + 30))
+            lane = sp - r * (pit.side * (pit.GARAGE_D - pit.BOX_D))
             fill = [lane + f * 20 - r * 13, lane + f * 20 + r * 13, lane - f * 20 + r * 13, lane - f * 20 - r * 13]
             pygame.draw.polygon(screen, tuple(int(40 + c * 0.18) for c in color), fill)
             pygame.draw.polygon(screen, color, fill, 2)
@@ -1614,6 +1719,10 @@ class RaceSession(Session):
             car.grid_slot = slot + 1
         self.camera.snap(self.focus.pos)
         self.lights_on = 0
+        # a formation lap first (not online, not for a simulated result): the lights come once the field is back
+        self.formation = FormationLap(self) if config.formation_lap and not self.online and not config.instant \
+            else None
+        self._lights_t0 = 0.0
         self.lights_out_at = self.LIGHTS_START + 5 * self.LIGHT_INTERVAL + random.uniform(0.6, 2.2)
         self.race_started = False
         self.race_start_time = 0.0
@@ -1628,7 +1737,9 @@ class RaceSession(Session):
         self.race_director = RaceDirector(self) if self.spectator and not self.online else None
         self.pos_history: dict[Car, list[int]] = {c: [c.grid_slot] for c in self.cars}
         if self.player is not None:
-            self.message(f"Startplatz P{self._player_pos} - warte auf die Ampel!", WHITE, 4.0)
+            self.message(f"Startplatz P{self._player_pos} - " +
+                         ("gleich geht es in die Einführungsrunde" if self.formation else "warte auf die Ampel!"),
+                         WHITE, 4.0)
             if self.player.strategy:
                 plan = " -> ".join(f"{COMPOUNDS[c].letter} {n}" for c, n in self.player.strategy)
                 self.message(f"Strategie aus dem Training: {plan}", (90, 200, 255), 6.0)
@@ -1647,6 +1758,18 @@ class RaceSession(Session):
         if self.race_director is not None and not self.paused and not self.hide_hud:
             self.race_director.draw(screen)
 
+    def _step(self, h: float) -> None:
+        if self.rc.frozen:
+            # red flag: the whole race stands still until the restart
+            self.rc.frozen_step(h)
+            return
+        super()._step(h)
+
+    def gantry_lights(self) -> int | None:
+        if self.race_started and self.rc.mode == "RED":
+            return self.rc.lights if self.rc.phase == "grid" else 0
+        return super().gantry_lights()
+
     def pre_step(self, h: float) -> None:
         if self.race_started:
             self.go_timer = max(0.0, self.go_timer - h)
@@ -1654,8 +1777,18 @@ class RaceSession(Session):
                 self.is_race_start_phase = False    # launch over: the drivers' skill and mistakes count again
             self.rc.step(h)
             return
-        if self.time >= self.LIGHTS_START:
-            self.lights_on = min(5, 1 + int((self.time - self.LIGHTS_START) / self.LIGHT_INTERVAL))
+        f = self.formation
+        if f is not None and not f.done:
+            f.step(h)
+            if f.done:
+                # the field is back on the grid: now the start sequence
+                self._lights_t0 = self.time
+                self.lights_out_at = self.time + self.LIGHTS_START + 5 * self.LIGHT_INTERVAL + \
+                    random.uniform(0.6, 2.2)
+            return
+        t = self.time - self._lights_t0
+        if t >= self.LIGHTS_START:
+            self.lights_on = min(5, 1 + int((t - self.LIGHTS_START) / self.LIGHT_INTERVAL))
         if self.time >= self.lights_out_at:
             self._judge_launch()
             self._plan_failures()
@@ -1689,8 +1822,90 @@ class RaceSession(Session):
                 self._await_reaction = True
 
     def neutralize(self, car: Car) -> None:
+        if not self.race_started:
+            if self.formation is not None:
+                self.formation.control(car)
+            return
         self.rc.governor(car)
         self._yield_to_blue(car, PHYSICS_STEP)
+
+    # ------------------------------------------------------------------ penalties served in the pit lane
+    def serves_penalty(self, car: Car) -> bool:
+        # not under SC/VSC/red flag and not once the car has taken the flag
+        return car.drive_penalty is not None and self.race_started and not self.rc.active and \
+            car.finish_time is None and not car.session_done
+
+    def pit_closed(self) -> bool:
+        return not self.race_started
+
+    def on_pit_release(self, car: Car) -> bool:
+        return self.rc.red_pit_release(car)
+
+    def red_compound(self, car: Car) -> str:
+        """Red flag: every car gets a fresh set - a still missing second compound, the player's current one, else
+        what suits the rest of the race."""
+        wet = Weather.best_compound(self.weather.wetness)
+        if wet:
+            return wet
+        if car.tyres is not None and self.compound_rule and not self.compound_rule_met(car):
+            used = getattr(car, "compounds_used", set())
+            fresh = next((k for k in COMPOUND_ORDER if k not in used and k != car.tyres.compound.key), None)
+            if fresh:
+                return fresh
+        if car.tyres is not None and car.is_player:
+            return car.tyres.compound.key
+        return self._compound_for_laps(max(1, self.total_laps - car.laps_done))
+
+    DSQ_DESPAWN = 10.0      # a disqualified car stands in its box this long, then it is gone
+
+    def disqualify(self, car: Car, reason: str) -> None:
+        """Black flag: the car is out of the race, drives (as a ghost) into its box and disappears there."""
+        car.dsq = car.dnf = True
+        car.dsq_reason = reason
+        car.session_done = car.retired_ghost = True
+        car.penalty_unserved = 0.0
+        car.drive_penalty = None
+        if car.frozen or self.track.pit is None:
+            # standing somewhere (grid, red flag) or no pit lane: it simply goes after a while
+            car.pit_request = None
+            car.despawn_at = self.time + self.DSQ_DESPAWN
+        elif not car.in_pit:
+            car.pit_request = "none"
+        if isinstance(car, Player_Car) and car.autopilot is None:
+            self.enable_player_autopilot(car)       # the autopilot brings the car in
+        self.stewards.announce(f"SCHWARZE FLAGGE: {car.short} disqualifiziert - {reason}", "penalty", 10.0)
+        self.add_feed(f"DISQUALIFIZIERT: {car.name}")
+        if car is self.player or car is self.player2:
+            self.message(f"SCHWARZE FLAGGE - {reason}", (255, 80, 80), 5.0)
+        if all(c.session_done for c in self.cars) and self.end_timer is None:
+            self.end_timer = 3.0
+
+    def _despawn(self) -> None:
+        for car in self.cars:
+            if car.despawn_at is not None and not car.despawned and self.time >= car.despawn_at:
+                car.despawned = car.frozen = True
+                car.pit_state = None
+                car.pit_wheels_off, car.pit_lift, car.pit_hold = None, 0.0, False
+                car.vel.update(0, 0)
+                car.speed_fwd = 0.0
+                if self.spectator and self.cars[self.cam_index] is car:
+                    leader = next((c for c in self.standings() if not c.despawned), None)
+                    if leader is not None:
+                        self.focus_car(leader, manual=False)
+
+    def _check_drive_penalty(self, car: Car) -> None:
+        """At the line: a lap under SC/VSC/red doesn't count towards serving; past the deadline: black flag."""
+        if car.drive_penalty is None or car.in_pit:
+            return
+        if self.rc.active:
+            car.drive_penalty_due += 1
+        elif car.laps_done > car.drive_penalty_due:
+            name = DRIVE_PENALTY_NAME[car.drive_penalty]
+            self.disqualify(car, f"{name} nicht abgesessen")
+        elif car is self.player or car is self.player2:
+            left = car.drive_penalty_due - car.laps_done + 1
+            self.message(f"{DRIVE_PENALTY_NAME[car.drive_penalty].upper()} offen - noch {left} Rd. Zeit",
+                         (255, 160, 40), 2.5)
 
     def extra_objects(self) -> list:
         return [self.rc.sc] if self.rc.sc is not None else []
@@ -2002,6 +2217,14 @@ class RaceSession(Session):
             super().on_lap_completed(car, lap_time)
             return
         if car.laps_done >= self.total_laps or self.winner_time is not None:
+            if car.drive_penalty is not None:
+                # no chance left to serve it: the time instead
+                extra = DRIVE_PENALTY_TIME[car.drive_penalty]
+                self.stewards.announce(f"{car.short}: {DRIVE_PENALTY_NAME[car.drive_penalty]} nicht abgesessen - "
+                                       f"+{extra:.0f}s", "penalty")
+                car.penalty_unserved += extra
+                car.penalty_total += extra
+                car.drive_penalty = None
             car.session_done = True
             car.finished_at = self.time
             car.finish_time = self.time - self.race_start_time + car.penalty_unserved
@@ -2020,8 +2243,12 @@ class RaceSession(Session):
                 self.message(f"ZIEL! {who} P{place}", YELLOW if place > 3 else (255, 215, 0), 5.0)
             if all(c.session_done for c in self.cars):
                 self.end_timer = 3.0
-        elif car is self.player and car.laps_done == self.total_laps - 1:
-            self.message("LETZTE RUNDE!", (255, 255, 255), 3.0)
+        else:
+            self._check_drive_penalty(car)
+            if car.dsq:
+                return
+            if car is self.player and car.laps_done == self.total_laps - 1:
+                self.message("LETZTE RUNDE!", (255, 255, 255), 3.0)
         if car in self.pos_history and len(self.pos_history[car]) <= car.laps_done:
             self.pos_history[car].append(self.standings().index(car) + 1)
         super().on_lap_completed(car, lap_time)
@@ -2032,6 +2259,7 @@ class RaceSession(Session):
             return
         if self.race_director is not None:
             self.race_director.update()
+        self._despawn()
         self._check_reaction()
         if getattr(self, "_failure_at", None):
             self._check_failures()

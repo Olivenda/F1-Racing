@@ -12,7 +12,8 @@ import pygame
 from .settings import (CYAN, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PURPLE, PX_PER_S_TO_KMH,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .car import PLANK_LIMIT_MM
-from .pitlane import BOX_PERFECT, BOX_WINDOW, PIT_BRAKE, PIT_COAST
+from .pitlane import BOX_PERFECT, BOX_WINDOW, PIT_BRAKE
+from .race_director import PANEL_X
 from .flags import FLAG_COLORS, FLAG_NAMES, car_flag, hazard_ahead, led_board
 from .tyres import COMPOUNDS
 from .weather import WET_THRESHOLD, plan_fits
@@ -77,17 +78,22 @@ class HUD:
         assist = getattr(s.game.settings, "hud_assist", "full")
         standings = s.standings()
         cockpit = s.view3d and s.r3d.cockpit
+        # race director (spectator race control): no engineer, no telemetry - a panel of the infringements
+        director = getattr(s, "race_director", None) is not None
         self._info_panel(screen, s, standings)
         self._timing_tower(screen, s, standings)
         self._minimap(screen, s)
-        if not cockpit:     # in the cockpit the steering wheel display shows speed, gear and revs
+        if not cockpit and not director:    # in the cockpit the steering wheel shows speed, gear and revs
             if self.style == "modern":
                 self._dashboard(screen, s.focus)
             else:
                 self._speedo(screen, s.focus)
-        if assist == "full" and s.view3d and s.r3d.cam.kind in ("onboard", "chase"):
+        if assist == "full" and s.view3d and s.r3d.cam.kind in ("onboard", "chase") and not director:
             self._spotter(screen, s)
-        self._engineer(screen, s)
+        if director:
+            self._infringements(screen, s, standings)
+        else:
+            self._engineer(screen, s)
         self._pit_overlay(screen, s.focus, s)
         if s.kind == "race":
             self._race_gaps(screen, s, standings)
@@ -179,7 +185,9 @@ class HUD:
                     lt = f.tiny.render(comp.letter, True, comp.color)
                     screen.blit(lt, lt.get_rect(center=(x + 98, cy)))
             pen = car.penalty_unserved if car.finish_time is None else 0.0
-            if pen > 0:
+            if car.drive_penalty is not None:
+                draw_text(screen, car.drive_penalty, f.tiny, (255, 90, 80), (x + 108, ry + ty + 1), shadow=False)
+            elif pen > 0:
                 draw_text(screen, f"+{pen:.0f}", f.tiny, ORANGE, (x + 108, ry + ty + 1), shadow=False)
             if car.dnf:
                 draw_text(screen, "DSQ" if car.dsq else "DNF", val_font, (255, 80, 80), (x + 200, ry + ty), anchor="topright", shadow=False)
@@ -310,17 +318,38 @@ class HUD:
                   anchor="midtop", shadow=False)
 
     def _neutralization(self, screen: pygame.Surface, s: "Session") -> None:
+        f = self.f
+        form = getattr(s, "formation", None)
+        if form is not None and form.running:
+            rect = pygame.Rect(SCREEN_WIDTH // 2 - 165, 132, 330, 30)
+            pygame.draw.rect(screen, (40, 150, 70), rect, border_radius=6)
+            draw_text(screen, "EINFÜHRUNGSRUNDE", f.small_bold, WHITE, rect.center, anchor="center", shadow=False)
+            return
         rc = getattr(s, "rc", None)
         if rc is None or not rc.active:
             return
-        f = self.f
         if rc.mode == "SC":
             text = {"out": "SAFETY CAR", "in": "SAFETY CAR IN THIS LAP", "restart": "RESTART AN DER ZIELLINIE"}[rc.phase]
         elif rc.mode == "RED":
-            text = "ROTE FLAGGE - RENNEN UNTERBROCHEN"
+            text = {"frozen": "ROTE FLAGGE - RENNEN UNTERBROCHEN", "pit_in": "ROTE FLAGGE - ALLE AN DIE BOX",
+                    "grid": "STARTAUFSTELLUNG - STEHENDER START"}.get(rc.phase, "ROTE FLAGGE")
+        elif rc.until == float("inf"):
+            text = "VIRTUAL SAFETY CAR"
         else:
             text = f"VIRTUAL SAFETY CAR  {max(0.0, rc.until - s.time):.0f}s"
         rect = pygame.Rect(SCREEN_WIDTH // 2 - 165, 48, 330, 30)
+        if rc.mode == "RED" and rc.phase == "frozen":
+            # the race stands still: say so big, and how it goes on
+            d = getattr(s, "race_director", None)
+            if d is not None and d.assist != "auto":
+                sub = "Rennleitung: X -> Rote Flagge / Grüne Flagge für den Neustart"
+            else:
+                sub = "Neustart in Kürze - danach alle Autos in die Box, Start aus der Startaufstellung"
+            panel = pygame.Rect(SCREEN_WIDTH // 2 - 330, SCREEN_HEIGHT - 200, 660, 92)
+            draw_panel(screen, panel, (60, 8, 8), 225)
+            draw_text(screen, "ROTE FLAGGE", f.big, (255, 80, 70), (panel.centerx, panel.y + 30), anchor="center",
+                      shadow=False)
+            draw_text(screen, sub, f.tiny, WHITE, (panel.centerx, panel.y + 68), anchor="center", shadow=False)
         blink = int(pygame.time.get_ticks() / 400) % 2
         if rc.mode == "RED":
             pygame.draw.rect(screen, (220, 30, 30) if blink else (150, 20, 20), rect, border_radius=6)
@@ -341,6 +370,8 @@ class HUD:
         screen.blit(base, box)
         scale, off = s.track.minimap_transform(pygame.Rect(0, 0, box.w, box.h))
         for car in sorted(s.cars, key=lambda c: c.is_player):
+            if car.despawned:
+                continue
             px = box.x + car.pos.x * scale + off.x
             py = box.y + car.pos.y * scale + off.y
             r = 5 if car.is_player else 4
@@ -683,21 +714,23 @@ class HUD:
                          border_radius=4)
         pygame.draw.rect(screen, (40, 210, 90), (gx(-BOX_PERFECT), bar.y - 3, gx(BOX_PERFECT) - gx(-BOX_PERFECT),
                                                  bar.h + 6), border_radius=2)
-        stop = v * v / (2.0 * (PIT_BRAKE + PIT_COAST))
+        stop = v * v / (2.0 * PIT_BRAKE)
         pred = -dist + stop                      # where full braking from here would leave the car
         late = pred > BOX_PERFECT
         tick = gx(pred)
         pygame.draw.line(screen, (90, 220, 255), (tick, bar.y - 6), (tick, bar.bottom + 5), 3)
         me = gx(-dist)
         pygame.draw.polygon(screen, WHITE, [(me, bar.bottom + 2), (me - 7, bar.bottom + 12), (me + 7, bar.bottom + 12)])
-        if v < 1.0:
-            msg, col = "STEHEN - Gas zum Weiterrollen", GREY
+        if car.pit_braking:
+            msg, col = "BREMST ...", (170, 200, 220)
+        elif v < 1.0:
+            msg, col = "ZU FRÜH - rollt weiter", GREY
         elif late:
             msg, col = ("JETZT BREMSEN!" if blink else ""), (255, 90, 80)
         elif pred > -12.0:
             msg, col = "BREMSEN!", (255, 210, 40)
         else:
-            msg, col = "Blaue Marke = Haltepunkt bei Vollbremsung", (170, 200, 220)
+            msg, col = "1x BREMSE drücken, wenn Blau im Grünen ist", (170, 200, 220)
         if msg:
             draw_text(screen, msg, f.small_bold, col, (cx, py + 72), anchor="center", shadow=False)
 
@@ -772,6 +805,10 @@ class HUD:
                 return "Restart kommt - Reifen warm halten, bereit machen!", YELLOW
             return ("Safety Car! Abstand halten, nicht überholen." if rc.mode == "SC"
                     else "VSC - Tempo halten, Delta beachten."), YELLOW
+        if car.drive_penalty is not None and s.kind == "race":
+            name = "Drive-Through" if car.drive_penalty == "DT" else "Stop & Go"
+            left = car.drive_penalty_due - car.laps_done + 1
+            return f"{name}-Strafe! In die Box zum Absitzen - noch {left} Rd. Zeit.", ORANGE
         if car.penalty_unserved > 0 and s.kind == "race":
             return f"{car.penalty_unserved:.0f}s Strafe offen - beim Stopp abgesessen.", ORANGE
         if getattr(s, "compound_rule", False) and not s.compound_rule_met(car) and remaining is not None \
@@ -985,6 +1022,102 @@ class HUD:
         for k, ln in enumerate(lines[:2]):
             draw_text(screen, ln, f.tiny, col, (x + 66, ry + 5 + k * 16), shadow=False)
 
+    INFR_W = 392            # race director's Verstöße list
+    INFR_ROW_H = 20
+    INFR_HISTORY = 4        # incidents of the selected driver shown under the list
+
+    def infringements_rect(self, s: "Session") -> pygame.Rect:
+        """Where the Verstöße list goes: down the right side, or beside the race control panel while it is open
+        (then below the centre messages and above the gap boxes)."""
+        d = s.race_director
+        w = self.INFR_W
+        if d is not None and d.open:
+            return pygame.Rect(PANEL_X - 8 - w, 314, w, SCREEN_HEIGHT - 84 - 314)
+        return pygame.Rect(SCREEN_WIDTH - 16 - w, 196, w, SCREEN_HEIGHT - 30 - 196)
+
+    def _infringements(self, screen: pygame.Surface, s: "Session", standings: list["Car"]) -> None:
+        """Race director: per driver track limits (every trip off), corner cuts (off with a gain), collisions
+        caused, warnings, black and white flags, penalties - most infringements first (or race order) - and the
+        history of the selected driver underneath."""
+        f = self.f
+        d = s.race_director
+        rows = []
+        for pos, car in enumerate(standings, 1):
+            open_ = car.drive_penalty or (f"{car.penalty_unserved:.0f}s" if car.penalty_unserved > 0 else "")
+            score = car.tl_wide + 3 * car.tl_count + 4 * car.contacts_caused + 3 * car.warnings + 2 * car.bw_count \
+                + car.penalty_total / 5 + (5 if car.drive_penalty else 0)
+            rows.append((score, pos, car, open_))
+        if d.sort == "infr":
+            rows.sort(key=lambda r: (-r[0], r[1]))
+        area = self.infringements_rect(s)
+        x, y, w = area.x, area.y, area.w
+        rh = self.INFR_ROW_H
+        history_h = 26 + self.INFR_HISTORY * 17
+        fit = max(3, (area.h - 50 - history_h) // rh)
+        n = min(len(rows), fit)
+        target = d.target if d.target is not None else s.focus
+        # keep the selected driver in view: scroll the list around it
+        k_target = next((k for k, r in enumerate(rows) if r[2] is target), 0)
+        first = 0 if k_target < n else min(len(rows) - n, k_target - n // 2)
+        h = 50 + n * rh + history_h
+        draw_panel(screen, (x, y, w, h))
+        pygame.draw.rect(screen, (220, 40, 40), (x, y, w, 4), border_radius=3)
+        draw_text(screen, "VERSTÖSSE", f.small_bold, WHITE, (x + 12, y + 8), shadow=False)
+        total = sum(c.tl_wide for c in standings)
+        warns = sum(c.warnings for c in standings)
+        draw_text(screen, f"Track Limits gesamt {total}", f.tiny, GREY, (x + w - 12, y + 11), anchor="topright",
+                  shadow=False)
+        sort = "nach Verstößen" if d.sort == "infr" else "nach Position"
+        draw_text(screen, sort, f.tiny, (110, 110, 120), (x + 12, y + 32), shadow=False)
+        cols = ((x + 168, "TL"), (x + 202, "CUT"), (x + 236, "KOL"), (x + 270, "VW"), (x + 298, "SW"),
+                (x + 334, "STR"), (x + w - 10, "OFFEN"))
+        for cx, label in cols:
+            draw_text(screen, label, f.tiny, (130, 130, 140), (cx, y + 32), anchor="topright", shadow=False)
+        blink = pygame.time.get_ticks() // 400 % 2 == 0
+        for k, (score, pos, car, open_) in enumerate(rows[first:first + n]):
+            ry = y + 50 + k * rh
+            if car is target:
+                pygame.draw.rect(screen, PANEL_LIGHT, (x + 4, ry - 2, w - 8, rh), border_radius=3)
+                pygame.draw.rect(screen, (220, 40, 40), (x + 4, ry - 2, 3, rh), border_radius=2)
+            elif open_:
+                pygame.draw.rect(screen, (70, 26, 26), (x + 4, ry - 2, w - 8, rh), border_radius=3)
+            pygame.draw.rect(screen, car.color, (x + 10, ry + 2, 4, 13))
+            name_col = (255, 110, 100) if car.dsq else GREY if car.dnf else WHITE
+            tag = " DSQ" if car.dsq else " DNF" if car.dnf else ""
+            draw_text(screen, f"P{pos:<2} {car.short}{tag}", f.tiny, name_col, (x + 20, ry + 1), shadow=False)
+            if s.time < getattr(car, "bw_until", 0.0) and blink:
+                # black and white flag out for this driver right now
+                fx = x + 122
+                pygame.draw.polygon(screen, (240, 240, 240), [(fx, ry + 2), (fx + 14, ry + 2), (fx, ry + 15)])
+                pygame.draw.polygon(screen, (10, 10, 10), [(fx + 14, ry + 2), (fx + 14, ry + 15), (fx, ry + 15)])
+            vals = (car.tl_wide, car.tl_count, car.contacts_caused, car.warnings, car.bw_count)
+            # yellow from the first one, red where the next one costs (or already cost) something
+            for (cx, _), v, warn in zip(cols, vals, (10, 5, 2, 2, 1)):
+                col = (90, 90, 100) if v == 0 else (255, 110, 90) if v >= warn else YELLOW
+                draw_text(screen, str(v), f.tiny, col, (cx, ry + 1), anchor="topright", shadow=False)
+            pen = car.penalty_total
+            draw_text(screen, f"{pen:.0f}s" if pen else "-", f.tiny, ORANGE if pen else (90, 90, 100),
+                      (cols[5][0], ry + 1), anchor="topright", shadow=False)
+            if open_:
+                draw_text(screen, open_, f.tiny, (255, 90, 80), (cols[6][0], ry + 1), anchor="topright",
+                          shadow=False)
+        # the selected driver's history
+        hy = y + 50 + n * rh + 8
+        pygame.draw.line(screen, (70, 72, 82), (x + 10, hy - 2), (x + w - 10, hy - 2))
+        draw_text(screen, f"VERLAUF  {target.short}", f.tiny, (90, 230, 255), (x + 12, hy + 2), shadow=False)
+        if len(rows) > n:
+            more = f"{first + 1}-{first + n} von {len(rows)} · BILD auf/ab"
+            draw_text(screen, more, f.tiny, (110, 110, 120), (x + w - 12, hy + 2), anchor="topright", shadow=False)
+        colors = {"cut": YELLOW, "col": (255, 150, 90), "warn": YELLOW, "bw": (235, 235, 235), "pen": ORANGE,
+                  "info": GREY}
+        history = target.incidents[-self.INFR_HISTORY:][::-1]
+        if not history:
+            draw_text(screen, "keine Vorfälle", f.tiny, (110, 110, 120), (x + 12, hy + 21), shadow=False)
+        for k, (lap, kind, text) in enumerate(history):
+            ty = hy + 21 + k * 17
+            draw_text(screen, f"R{lap}", f.tiny, (130, 130, 140), (x + 12, ty), shadow=False)
+            draw_text(screen, tr(text)[:48], f.tiny, colors.get(kind, WHITE), (x + 46, ty), shadow=False)
+
     def _race_control(self, screen: pygame.Surface, s: "Session") -> None:
         log = s.stewards.log
         if not log:
@@ -1042,10 +1175,14 @@ class HUD:
         draw_text(screen, format_gap(d), f.mono_big, col, (x + 110, y + 36), anchor="center", shadow=False)
 
     def _lights(self, screen: pygame.Surface, s: "RaceSession") -> None:
-        if s.race_started and s.go_timer <= 0:
+        restart = s.race_started and s.rc.mode == "RED" and s.rc.phase == "grid"
+        if s.race_started and s.go_timer <= 0 and not restart:
             return
+        form = getattr(s, "formation", None)
+        if not s.race_started and form is not None and not form.done:
+            return      # formation lap: the lights come once the field is back on the grid
         cx = SCREEN_WIDTH // 2
-        if not s.race_started:
+        if not s.race_started or restart:
             w = 5 * 52 + 16
             draw_panel(screen, (cx - w // 2, 20, w, 104), (8, 8, 10), 230)
             for i in range(5):
@@ -1079,6 +1216,12 @@ class HUD:
 
     def _feed(self, screen: pygame.Surface, s: "Session") -> None:
         x, y = SCREEN_WIDTH - 256, 196
+        d = getattr(s, "race_director", None)
+        if d is not None:
+            # the Verstöße list holds the right side: the feed goes beside it (not while race control is open)
+            if d.open:
+                return
+            x, y = self.infringements_rect(s).x - 248, 314
         for text, ttl in s.feed:
             img = self.f.tiny.render(tr(text), True, WHITE)
             img.set_alpha(int(255 * min(1.0, ttl)))
@@ -1189,24 +1332,40 @@ class HUD:
             draw_text(screen, hint, f.tiny, WHITE, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 132), anchor="center")
 
     def draw_pause(self, screen: pygame.Surface, s: "Session") -> None:
+        f = self.f
         shade = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        shade.fill((0, 0, 0, 160))
+        shade.fill((0, 0, 0, 170))
         screen.blit(shade, (0, 0))
-        draw_text(screen, "PAUSE", self.f.huge, WHITE, (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 40), anchor="center")
-        # clickable buttons (keys P / R / ESC still work)
+        w, h = 420, 336
+        x, y = SCREEN_WIDTH // 2 - w // 2, SCREEN_HEIGHT // 2 - h // 2
+        draw_panel(screen, (x, y, w, h), PANEL, 240)
+        pygame.draw.rect(screen, F1_RED, (x, y, w, 5), border_top_left_radius=8, border_top_right_radius=8)
+        draw_text(screen, "PAUSE", f.big, WHITE, (x + 28, y + 22), shadow=False)
+        info = f"{s.title}  ·  {s.track.name}"
+        if s.kind == "race" and getattr(s, "race_started", False):
+            p = s.focus
+            order = s.standings()
+            info += f"  ·  P{order.index(p) + 1}  ·  Runde {min(p.laps_done + 1, s.total_laps)}/{s.total_laps}"
+        draw_text(screen, info[:60], f.tiny, GREY, (x + 30, y + 72), shadow=False)
+        # buttons: mouse, arrows + ENTER, or their own keys
         mouse = pygame.mouse.get_pos()
         self.pause_buttons = []
-        for k, (label, key) in enumerate((("WEITER (P)", pygame.K_p), ("NEUSTART (R)", pygame.K_r),
-                                          ("HAUPTMENÜ (ESC)", pygame.K_ESCAPE))):
-            rect = pygame.Rect(SCREEN_WIDTH // 2 - 330 + k * 225, SCREEN_HEIGHT // 2 + 12, 210, 40)
-            hover = rect.collidepoint(mouse)
-            pygame.draw.rect(screen, F1_RED if hover else (44, 46, 56), rect, border_radius=8)
-            draw_text(screen, label, self.f.small_bold, WHITE, rect.center, anchor="center", shadow=False)
+        sel = getattr(s, "pause_sel", 0)
+        by = y + 104
+        for k, (key, label, hint) in enumerate(s.PAUSE_ITEMS):
+            rect = pygame.Rect(x + 28, by + k * 58, w - 56, 46)
+            active = k == sel or rect.collidepoint(mouse)
+            pygame.draw.rect(screen, F1_RED if active else (44, 46, 56), rect, border_radius=8)
+            draw_text(screen, label, f.small_bold, WHITE, (rect.x + 18, rect.centery), anchor="midleft", shadow=False)
+            chip = pygame.Rect(0, 0, 50, 26)
+            chip.midright = (rect.right - 12, rect.centery)
+            pygame.draw.rect(screen, (24, 26, 32) if active else (30, 32, 40), chip, border_radius=6)
+            draw_text(screen, hint, f.tiny, WHITE if active else GREY, chip.center, anchor="center", shadow=False)
             self.pause_buttons.append((rect, key))
-        draw_text(screen, f"{s.title}  ·  {s.track.name}  ·  F12: Screenshot", self.f.small, (150, 150, 160),
-                  (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 90), anchor="center", shadow=False)
         pulse = 0.5 + 0.5 * math.sin(pygame.time.get_ticks() / 300)
-        pygame.draw.rect(screen, F1_RED, (SCREEN_WIDTH // 2 - 60, SCREEN_HEIGHT // 2 + 60, 120 * pulse, 4))
+        pygame.draw.rect(screen, F1_RED, (x + w // 2 - 60, y + h - 34, 120 * pulse, 3))
+        draw_text(screen, "Pfeile + ENTER wählen  ·  F12 Screenshot", f.tiny, (150, 150, 160),
+                  (x + w // 2, y + h - 22), anchor="center", shadow=False)
 
 
 def _activation_color(v: float) -> tuple[int, int, int]:
