@@ -134,12 +134,20 @@ def merge_legacy_drivers() -> None:
     LEGACY_DRIVERS_FILE.unlink()
 
 
+def _keep_names(pool: list[dict[str, Any]]) -> None:
+    from .i18n import keep
+    keep(*(str(d.get(k, "")) for d in pool for k in ("name", "short")))
+
+
 def load_pool() -> list[dict[str, Any]]:
     merge_legacy_drivers()
     try:
-        return json.loads(POOL_FILE.read_text(encoding="utf-8"))
+        pool = json.loads(POOL_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
+    if isinstance(pool, list):
+        _keep_names(pool)
+    return pool
 
 
 def load_drivers(library: "BrainLibrary", teams: list[Team] | None = None) -> list[DriverProfile]:

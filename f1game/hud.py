@@ -318,7 +318,7 @@ class HUD:
         if car.manual_gearbox:
             draw_text(screen, "SEQ", f.tiny, GREY, (x + 235, y + 28), anchor="center", shadow=False)
         bx = x + 18
-        for i, (val, col, label) in enumerate(((car.throttle, GREEN, "GAS"), (car.brake, F1_RED, "BRK"))):
+        for i, (val, col, label) in enumerate(((car.throttle, GREEN, "THR"), (car.brake, F1_RED, "BRK"))):
             by = y + 92 + i * 14
             draw_text(screen, label, f.tiny, GREY, (bx, by - 2), shadow=False)
             pygame.draw.rect(screen, (50, 50, 55), (bx + 34, by, 140, 8), border_radius=3)

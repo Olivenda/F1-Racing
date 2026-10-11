@@ -149,9 +149,16 @@ def draw_panel(surface: pygame.Surface, rect: pygame.Rect | tuple[int, int, int,
 
     def build() -> pygame.Surface:
         panel = pygame.Surface(rect.size, pygame.SRCALPHA)
-        pygame.draw.rect(panel, (*color, alpha), panel.get_rect(), border_radius=radius)
+        r = panel.get_rect()
+        pygame.draw.rect(panel, (*color, alpha), r, border_radius=radius)
         if border:
-            pygame.draw.rect(panel, (*border, 255), panel.get_rect(), width=2, border_radius=radius)
+            pygame.draw.rect(panel, (*border, 255), r, width=2, border_radius=radius)
+        elif r.w > 24 and r.h > 16:
+            # depth: a faint light edge and a brighter line along the top
+            edge = tuple(min(255, c + 34) for c in color)
+            pygame.draw.rect(panel, (*edge, min(255, alpha // 2 + 20)), r, width=1, border_radius=radius)
+            top = tuple(min(255, c + 60) for c in color)
+            pygame.draw.line(panel, (*top, min(255, alpha // 2)), (radius, 1), (r.w - radius - 1, 1))
         return panel
     key = (rect.w, rect.h, tuple(color), int(alpha) // 8 * 8, radius, border)
     surface.blit(_PANEL_CACHE.fetch(key, build), rect)

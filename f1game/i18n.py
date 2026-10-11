@@ -96,8 +96,17 @@ def _translate(text: str) -> str:
     return text
 
 
+_KEEP: set[str] = set()
+
+
+def keep(*texts: str) -> None:
+    """Names that must never be translated (driver names and codes: "GAS" is a driver, not the throttle)."""
+    _KEEP.update(t for t in texts if t)
+    _cache.clear()
+
+
 def tr(text: str) -> str:
-    if LANG == "de" or not text:
+    if LANG == "de" or not text or text in _KEEP:
         return text
     out = _cache.get(text)
     if out is None:

@@ -974,7 +974,8 @@ class CareerHub(_Screen):
                 [(k, a) for k, a in enumerate(acts) if a[0] in self.SECOND_ROW]]
         for r, (items, y, h) in enumerate(zip(rows, (612, 664), (44, 32))):
             total_w = SCREEN_WIDTH - 120
-            widths = [2.2 if a[0] in ("race", "watch", "review", "sponsor") else 1.0 for _, a in items]
+            big = 2.2 if len(items) <= 5 else 1.4      # the main action is wide unless the row is full
+            widths = [big if a[0] in ("race", "watch", "review", "sponsor") else 1.0 for _, a in items]
             unit = (total_w - 8 * (len(items) - 1)) / max(1.0, sum(widths))
             x = 60
             for (k, (act, label)), w in zip(items, widths):

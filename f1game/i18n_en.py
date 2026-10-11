@@ -1559,3 +1559,7 @@ TEMPLATES += [("Grand Prix von {} · {#} Runden", "{} Grand Prix · {} laps"), (
 EXACT.update({"Pflicht: 2. Mischung": "Mandatory: 2nd compound"})
 EXACT.update({"höher = schneller · Farbe = Reifen · lila = Bestzeit · Ring = Box · Balken = Verschleiß":
               "higher = faster · colour = tyre · purple = best · ring = pit · bars = wear"})
+EXACT.update({"STRECKEN-SHOWCASE": "TRACK SHOWCASE", "Stadtkurs": "Street circuit", "Rennstrecke": "Race circuit",
+              "TEAMS · FAHRZEUG-WERTUNG": "TEAMS · CAR RATINGS"})
+TEMPLATES += [("Fahrer: {}", "Driver: {}"), ("Fahrhilfen: {}", "Assists: {}"), ("Ansicht: {}", "View: {}"),
+              ("Aufnahmen: {#} Samples", "Recordings: {} samples")]

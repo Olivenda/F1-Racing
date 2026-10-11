@@ -72,10 +72,31 @@ def _fit(text: str, font: pygame.font.Font, width: int) -> str:
 
 class _Background:
 
+    _base_cache: pygame.Surface | None = None
+
     def __init__(self) -> None:
-        self.base = vertical_gradient((SCREEN_WIDTH, SCREEN_HEIGHT), (24, 26, 34), (8, 8, 12))
+        if _Background._base_cache is None:
+            _Background._base_cache = self._build_base()
+        self.base = _Background._base_cache
         self.lines = [[random.uniform(0, SCREEN_WIDTH), random.uniform(0, SCREEN_HEIGHT),
                        random.uniform(200, 700), random.uniform(60, 220)] for _ in range(26)]
+
+    @staticmethod
+    def _build_base() -> pygame.Surface:
+        """Dark gradient, a faint red speed stripe and a soft glow top left - drawn once, shared by all menus."""
+        base = vertical_gradient((SCREEN_WIDTH, SCREEN_HEIGHT), (26, 28, 38), (7, 7, 11))
+        glow = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        for r in range(520, 0, -40):
+            a = int(10 * (1 - r / 520) + 2)
+            pygame.draw.circle(glow, (180, 20, 20, a), (160, 40), r)
+        stripe = [(SCREEN_WIDTH * 0.52, SCREEN_HEIGHT), (SCREEN_WIDTH * 0.70, SCREEN_HEIGHT),
+                  (SCREEN_WIDTH * 1.02, 0), (SCREEN_WIDTH * 0.84, 0)]
+        pygame.draw.polygon(glow, (225, 20, 20, 10), stripe)
+        thin = [(SCREEN_WIDTH * 0.73, SCREEN_HEIGHT), (SCREEN_WIDTH * 0.745, SCREEN_HEIGHT),
+                (SCREEN_WIDTH * 1.065, 0), (SCREEN_WIDTH * 1.05, 0)]
+        pygame.draw.polygon(glow, (255, 255, 255, 8), thin)
+        base.blit(glow, (0, 0))
+        return base.convert() if pygame.display.get_surface() is not None else base
 
     def update(self, dt: float) -> None:
         for ln in self.lines:
@@ -150,68 +171,161 @@ class MainMenu:
     def draw(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
         self.bg.draw(screen)
-        for k in range(3):
-            pygame.draw.polygon(screen, (min(255, 160 + k * 40), 0, 0),
-                                [(40 + k * 18, 60), (70 + k * 18, 60), (40 + k * 18, 150), (10 + k * 18, 150)])
-        draw_text(screen, "F1", f.huge, WHITE, (110, 52))
-        draw_text(screen, "GRAND PRIX", f.huge, WHITE, (110, 120))
-        draw_text(screen, "Neuronale KI · Karriere · WM · Aktive Aero · Setup · Sound · 2D/3D", f.small, GREY,
-                  (114, 205))
-
+        mouse = pygame.mouse.get_pos()
+        # logo
+        badge = pygame.Rect(60, 34, 96, 70)
+        pygame.draw.polygon(screen, F1_RED, [(badge.x + 18, badge.y), (badge.right, badge.y),
+                                            (badge.right - 18, badge.bottom), (badge.x, badge.bottom)])
+        draw_text(screen, "F1", f.huge, WHITE, (badge.centerx, badge.centery + 2), anchor="center", shadow=False)
+        draw_text(screen, "GRAND PRIX", f.big, WHITE, (174, 30))
+        draw_text(screen, _fit(tr("Neuronale KI · Karriere · WM · Aktive Aero · Setup · Sound · 2D/3D"), f.small, 400),
+                  f.small, GREY, (176, 80))
+        # menu cards
         for i, (label, sub) in enumerate(self.ITEMS):
-            y = 236 + i * 56
+            quit_row = label == "BEENDEN"
+            y = 134 + i * 64 + (8 if quit_row else 0)
+            h = 46 if quit_row else 58
             selected = i == self.sel
-            slide = 18 if selected else 0
-            mouse_item((40, y, 490, 51), self, i)
-            w = 470 if selected else 430
-            col = F1_RED if selected else PANEL_LIGHT
-            pygame.draw.polygon(screen, col, [(60 + slide, y), (60 + slide + w, y), (40 + slide + w, y + 51),
-                                              (40 + slide, y + 51)])
-            draw_text(screen, label, f.large, WHITE, (80 + slide, y + 2))
+            slide = 12 if selected else 0
+            r = pygame.Rect(60 + slide, y, 500, h)
+            mouse_item((60, y, 512, h), self, i)
+            hover = r.collidepoint(mouse)
+            if selected:
+                pygame.draw.rect(screen, F1_RED, r, border_radius=10)
+                pygame.draw.rect(screen, (255, 90, 80), (r.x, r.y, r.w, 2), border_radius=2)
+            else:
+                draw_panel(screen, r, (30, 32, 42) if hover else (22, 24, 32), 225, radius=10)
+            icon = pygame.Rect(r.x + 10, r.y + (h - 38) // 2, 38, 38)
+            pygame.draw.rect(screen, (150, 0, 0) if selected else (40, 42, 54), icon, border_radius=8)
+            _menu_icon(screen, label, icon.center, WHITE if selected else (200, 202, 212))
+            tx = icon.right + 14
             if sub:
-                draw_text(screen, sub, f.tiny, (235, 235, 235) if selected else GREY, (82 + slide, y + 34),
-                          shadow=False)
-
+                draw_text(screen, label, f.medium, WHITE, (tx, r.y + 7), shadow=False)
+                draw_text(screen, _fit(tr(sub), f.tiny, r.right - tx - 40), f.tiny,
+                          (255, 225, 225) if selected else GREY, (tx, r.y + 34), shadow=False)
+            else:
+                draw_text(screen, label, f.medium, WHITE if selected else (200, 202, 212), (tx, r.centery),
+                          anchor="midleft", shadow=False)
+            if selected:
+                cx, cy = r.right - 24, r.centery
+                pygame.draw.polygon(screen, WHITE, [(cx - 6, cy - 9), (cx + 4, cy), (cx - 6, cy + 9)])
         self._draw_showcase(screen)
+        # status bar
         st = self.game.settings
-        info = (f"Fahrer: {st.player_name}  ·  Fahrhilfen: {['Aus', 'Mittel', 'Voll'][st.assists]}  ·  "
-                f"Ansicht: {'3D' if st.view3d else '2D'}  ·  Aufnahmen: {self.rec_samples} Samples")
-        draw_text(screen, info, f.tiny, (150, 150, 160), (60, SCREEN_HEIGHT - 28), shadow=False)
+        chips = [f"Fahrer: {st.player_name}", f"Fahrhilfen: {['Aus', 'Mittel', 'Voll'][st.assists]}",
+                 f"Ansicht: {'3D' if st.view3d else '2D'}", f"Aufnahmen: {self.rec_samples} Samples"]
+        x = 60
+        for chip in chips:
+            w = f.tiny.size(tr(chip))[0] + 20
+            cr = pygame.Rect(x, 682, w, 24)
+            draw_panel(screen, cr, (26, 28, 36), 220, radius=12)
+            draw_text(screen, chip, f.tiny, (175, 177, 188), cr.center, anchor="center", shadow=False)
+            x += w + 8
         draw_text(screen, "Pfeile wählen · ENTER bestätigen · ESC beenden", f.tiny, (150, 150, 160),
-                  (SCREEN_WIDTH - 40, SCREEN_HEIGHT - 28), anchor="topright", shadow=False)
+                  (SCREEN_WIDTH - 60, 688), anchor="topright", shadow=False)
 
     def _draw_showcase(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
         td = TRACK_DEFS[self.showcase_track]
         track = self.game.tracks[td.key]
-        box = pygame.Rect(640, 60, 600, 330)
-        draw_panel(screen, box, PANEL, 200)
-        track.draw_outline(screen, box.inflate(-40, -60).move(0, 14), (225, 225, 230), 5)
-        scale, off = track.minimap_transform(box.inflate(-40, -60).move(0, 14))
+        box = pygame.Rect(600, 34, 620, 390)
+        draw_panel(screen, box, PANEL, 215, radius=12)
+        pygame.draw.rect(screen, F1_RED, (box.x, box.y, box.w, 4), border_radius=2)
+        draw_text(screen, "STRECKEN-SHOWCASE", f.tiny, GREY, (box.x + 20, box.y + 16), shadow=False)
+        draw_text(screen, td.name.upper(), f.large, WHITE, (box.x + 20, box.y + 34))
+        draw_text(screen, td.country, f.small, GREY, (box.x + 22, box.y + 70))
+        chips = [f"{track.length * 0.45 / 1000:.2f} km", "Stadtkurs" if td.scenery == "city" else "Rennstrecke"]
+        rec = self.game.records.tracks.get(td.key)
+        if rec:
+            chips.append(f"Rekord {format_time(rec['time'])}")
+        x = box.x + 20
+        for k, chip in enumerate(chips):
+            w = f.tiny.size(tr(chip))[0] + 20
+            cr = pygame.Rect(x, box.y + 98, w, 22)
+            pygame.draw.rect(screen, (175, 80, 255) if k == 2 else (46, 48, 60), cr, border_radius=11)
+            draw_text(screen, chip, f.tiny, WHITE, cr.center, anchor="center", shadow=False)
+            x += w + 8
+        area = pygame.Rect(box.x + 30, box.y + 132, box.w - 60, box.h - 170)
+        track.draw_outline(screen, area, (225, 225, 232), 5)
+        scale, off = track.minimap_transform(area)
         for color, speed, phase in self.dots:
             i = int(((self.t * speed + phase) % 1.0) * track.n)
             p = track.center[i] * scale + off
             pygame.draw.circle(screen, (10, 10, 12), p, 7)
             pygame.draw.circle(screen, color, p, 5)
-        draw_text(screen, f"{td.name.upper()}  ·  {td.country}", f.medium, WHITE, (box.x + 18, box.y + 12))
+        # time until the next track
+        frac = (self.t % 8.0) / 8.0
+        pygame.draw.rect(screen, (40, 42, 52), (box.x + 20, box.bottom - 18, box.w - 40, 4), border_radius=2)
+        pygame.draw.rect(screen, F1_RED, (box.x + 20, box.bottom - 18, int((box.w - 40) * frac), 4), border_radius=2)
+        for k in range(len(TRACK_DEFS)):
+            pygame.draw.circle(screen, WHITE if k == self.showcase_track else (70, 72, 84),
+                               (box.right - 30 - (len(TRACK_DEFS) - 1 - k) * 14, box.y + 20), 4)
 
-        tb = pygame.Rect(640, 404, 600, 270)
-        draw_panel(screen, tb, PANEL, 200)
-        draw_text(screen, "TEAMS  ·  FAHRZEUG-WERTUNG  (data/teams.json)", f.tiny, GREY, (tb.x + 16, tb.y + 10),
-                  shadow=False)
+        tb = pygame.Rect(600, 436, 620, 232)
+        draw_panel(screen, tb, PANEL, 215, radius=12)
+        draw_text(screen, "TEAMS · FAHRZEUG-WERTUNG", f.tiny, GREY, (tb.x + 20, tb.y + 14), shadow=False)
         teams = sorted(self.game.teams, key=lambda t: -t.rating)
         cols = 2
         per_col = (len(teams) + cols - 1) // cols
+        row_h = min(32, (tb.h - 44) // max(1, per_col))
         for k, team in enumerate(teams):
-            cx = tb.x + 16 + (k // per_col) * 292
-            cy = tb.y + 34 + (k % per_col) * 38
-            pygame.draw.rect(screen, team.color, (cx, cy + 2, 6, 28))
-            draw_text(screen, f"{k + 1}. {_fit(team.name, f.small_bold, 150)}", f.small_bold, WHITE, (cx + 14, cy),
-                      shadow=False)
+            cx = tb.x + 20 + (k // per_col) * 300
+            cy = tb.y + 38 + (k % per_col) * row_h
+            col = team.color if sum(team.color) > 120 else (90, 100, 200)
+            draw_text(screen, f"{k + 1}", f.tiny, GREY, (cx, cy + 2), shadow=False)
+            pygame.draw.rect(screen, col, (cx + 22, cy + 2, 4, row_h - 8), border_radius=2)
+            draw_text(screen, _fit(team.name, f.small_bold, 150), f.small_bold, WHITE, (cx + 34, cy), shadow=False)
             bar = max(0.05, min(1.0, (team.rating - 0.96) / 0.08))
-            pygame.draw.rect(screen, (45, 45, 52), (cx + 14, cy + 22, 250, 6), border_radius=3)
-            pygame.draw.rect(screen, team.color if sum(team.color) > 120 else (90, 100, 200),
-                             (cx + 14, cy + 22, 250 * bar, 6), border_radius=3)
+            pygame.draw.rect(screen, (45, 45, 52), (cx + 180, cy + 7, 90, 6), border_radius=3)
+            pygame.draw.rect(screen, col, (cx + 180, cy + 7, 90 * bar, 6), border_radius=3)
+
+
+def _menu_icon(screen: pygame.Surface, label: str, center: tuple[int, int], col: tuple[int, int, int]) -> None:
+    """Small line icons for the main menu entries."""
+    x, y = center
+    if label == "EINZELSPIELER":            # helmet
+        pygame.draw.circle(screen, col, (x, y), 11, 3)
+        pygame.draw.rect(screen, col, (x - 2, y - 5, 12, 6), border_radius=2)
+    elif label == "KARRIERE":               # star
+        pts = []
+        for k in range(10):
+            a = math.radians(-90 + k * 36)
+            r = 12 if k % 2 == 0 else 5
+            pts.append((x + r * math.cos(a), y + r * math.sin(a)))
+        pygame.draw.polygon(screen, col, pts, 2)
+    elif label == "WELTMEISTERSCHAFT":      # trophy
+        pygame.draw.rect(screen, col, (x - 8, y - 10, 16, 11), 0, border_bottom_left_radius=8,
+                         border_bottom_right_radius=8)
+        pygame.draw.circle(screen, col, (x - 9, y - 5), 4, 2)
+        pygame.draw.circle(screen, col, (x + 9, y - 5), 4, 2)
+        pygame.draw.line(screen, col, (x, y + 1), (x, y + 7), 3)
+        pygame.draw.rect(screen, col, (x - 7, y + 7, 14, 4), border_radius=1)
+    elif label == "ONLINE-MEHRSPIELER":     # globe
+        pygame.draw.circle(screen, col, (x, y), 12, 2)
+        pygame.draw.ellipse(screen, col, (x - 5, y - 12, 10, 24), 2)
+        pygame.draw.line(screen, col, (x - 12, y), (x + 12, y), 2)
+    elif label == "ZUSCHAUER-RENNEN":       # tv
+        pygame.draw.rect(screen, col, (x - 12, y - 8, 24, 16), 2, border_radius=3)
+        pygame.draw.line(screen, col, (x - 5, y + 11), (x + 5, y + 11), 2)
+        pygame.draw.polygon(screen, col, [(x - 3, y - 4), (x + 5, y), (x - 3, y + 4)])
+    elif label == "KI-TRAINING":            # network
+        nodes = [(x - 10, y - 7), (x - 10, y + 7), (x + 1, y - 10), (x + 1, y), (x + 1, y + 10), (x + 11, y)]
+        for a in nodes[:2]:
+            for b in nodes[2:5]:
+                pygame.draw.line(screen, col, a, b, 1)
+        for b in nodes[2:5]:
+            pygame.draw.line(screen, col, b, nodes[5], 1)
+        for n in nodes:
+            pygame.draw.circle(screen, col, n, 3)
+    elif label == "EINSTELLUNGEN":          # gear
+        for k in range(8):
+            a = k * math.pi / 4
+            pygame.draw.line(screen, col, (x + 8 * math.cos(a), y + 8 * math.sin(a)),
+                             (x + 13 * math.cos(a), y + 13 * math.sin(a)), 4)
+        pygame.draw.circle(screen, col, (x, y), 9, 3)
+    else:                                   # power
+        pygame.draw.arc(screen, col, (x - 11, y - 10, 22, 22), math.radians(120), math.radians(420), 3)
+        pygame.draw.line(screen, col, (x, y - 13), (x, y - 1), 3)
 
 
 class SetupScreen:

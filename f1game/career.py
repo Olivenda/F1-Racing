@@ -1251,6 +1251,8 @@ class Career:
             return None
         for d in career.drivers.values():
             d["short"] = d["short"].strip(" :")
+        from .i18n import keep
+        keep(*career.drivers, *(d["short"] for d in career.drivers.values()))   # names, not words
         career._fill_seats()
         career._ensure_reliability()
         if career.kind == "team" and not career.sponsor and not career.sponsor_offers:
