@@ -1,10 +1,10 @@
 # Copyright Olivenda (Oliver Petz) 2026
 """How fast the AI really drives at every point of a track - the reference for easier difficulty levels.
 
-The trained nets corner at the limit whatever their engine power, so less engine alone hardly slows them down.
-Easier levels cap the AI at a share of this reference speed instead. It ships pre-recorded in
-data/ai_pace.json (full-strength AI races) and keeps learning in memory: every AI car that is not being held
-back adds its speed, so retrained (faster) brains raise the reference on their own."""
+Weaker AI drivers are held to a share of this reference speed in the corners (their cars keep full performance).
+It ships pre-recorded in data/ai_pace.json - the median speed of full-strength AI cars on clean laps - and keeps
+learning in memory: every AI car that is not being held back pulls it slowly towards its own speed, so
+retrained (faster) brains move the reference on their own."""
 
 from __future__ import annotations
 

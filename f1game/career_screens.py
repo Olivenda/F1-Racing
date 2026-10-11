@@ -222,7 +222,7 @@ class CareerSetupScreen(_Screen):
         elif row == "Rennrunden":
             self.c["laps"] = max(1, min(30, self.c["laps"] + delta))
         elif row == "KI-Stärke":
-            self.c["diff"] = (self.c["diff"] + delta) % len(self.diffs)
+            self.c["diff"] = max(0, min(len(self.diffs) - 1, self.c["diff"] + delta))
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type != pygame.KEYDOWN:

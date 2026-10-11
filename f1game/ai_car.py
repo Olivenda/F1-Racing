@@ -76,53 +76,99 @@ class AI_Car(Car):
         self.engine_factor = engine_factor
         self.driver = NeuralDriver(self, network, marshal)
         self.sees_others = True
-        self.corner_factor = 1.0        # < 1: difficulty caps the speed at a share of the full-strength AI's
+        self.corner_factor = 1.0        # < 1: a weaker driver is held to a share of the full-strength AI's speed
         self._corner_timer = 0.0
         self._corner_cap = 1e9
         self._pace_ref: list[float] | None = None
+        self.skill = 1.0                # AI strength 0.3 .. 1.0, see set_skill
+        self._brake_skill = 0.8
+        self._lap_seen = -1
+        self._lap_factor = 1.0
+        self._hesitate = 0.0
+
+    def set_skill(self, strength: float) -> None:
+        """How well this AI drives. Never touches the car: a weaker driver is slower through the corners, brakes
+        earlier and more gently, feeds the throttle in carefully, varies from lap to lap and now and then
+        hesitates. 0.3 is a beginner, 1.0 the full-strength trained net."""
+        self.skill = max(0.3, min(1.0, strength))
+        k = (self.skill - 0.3) / 0.7                    # 0 beginner .. 1 full strength
+        # relative to the median full-strength driver: near 100% the cap sits above even the fastest ones
+        self.corner_factor = 1.0 if k >= 0.999 else 0.75 + 0.31 * k ** 0.5
+        self._brake_skill = 0.6 + 0.4 * k              # share of the car's real braking a driver dares to use
 
     def control(self, dt: float, session: "Session") -> None:
         others = session.cars if self.sees_others else ()
         self.throttle, self.brake, self.steer_input = self.driver.update(
             dt, others, self.track, race_start=session.is_race_start_phase)
         self._corner_limit(dt)
+        if self.skill < 1.0 and not self.in_pit and not session.is_race_start_phase:
+            self._driver_skill(dt)
         if others and self.collide_cars:
             # the first lap is the crowded one: more caution until the field has spread out
             caution = 1.5 if session.kind == "race" and self.laps_done == 0 else 1.0
             self._racecraft(dt, others, caution)
 
+    def _driver_skill(self, dt: float) -> None:
+        """The human side of a weaker driver: careful on the throttle with the wheels turned, a different pace each
+        lap and a moment of hesitation now and then."""
+        k = (self.skill - 0.3) / 0.7
+        if self.laps_done != self._lap_seen:
+            self._lap_seen = self.laps_done
+            spread = 0.035 * (1.0 - k)
+            self._lap_factor = 1.0 - random.uniform(0.0, spread)
+        # only out of the corners: on a straight a weaker driver is flat out like everyone else
+        exiting = self.speed_fwd < self.top_speed * 0.75
+        if self._hesitate > 0.0:
+            self._hesitate -= dt
+            self.throttle = min(self.throttle, 0.25)
+        elif exiting and self.speed_fwd > 120.0 and random.random() < (1.0 - k) * 0.08 * dt:
+            self._hesitate = random.uniform(0.25, 0.6)      # a beginner: now and then late on the throttle
+        steer = abs(self.steer_input)
+        if self.brake <= 0.0 and exiting and steer > 0.2:
+            careful = (1.0 - k) * 0.55 * min(1.0, (steer - 0.2) * 2.0)
+            self.throttle = min(self.throttle, 1.0 - careful)
+
     def _corner_limit(self, dt: float) -> None:
-        """Easier difficulty: never faster than corner_factor x the reference speed of a full-strength AI at this
-        point of the track (see ai_pace), braking for it in time. Cars not held back teach the reference."""
+        """Weaker drivers: through the corners never faster than corner_factor x the typical speed of a
+        full-strength AI there (see ai_pace), braking for it early; on the straights they are just as fast. Cars
+        not held back keep the reference up to date."""
         track = self.track
         if self.in_pit or self.frozen:
             return
         ref = self._pace_ref
         if ref is None or len(ref) != track.n:
             ref = self._pace_ref = ai_pace.profile(track.definition.key, track.n)
-        f = self.corner_factor
-        if f < 1.0:
+        f = self.corner_factor * self._lap_factor
+        if self.skill < 1.0:
             self._corner_timer -= dt
             if self._corner_timer <= 0.0:
                 self._corner_timer = AI_CONTROL_INTERVAL
                 n, step = track.n, track.WAYPOINT_SPACING
-                brake_k = self.performance()["brake"] * 0.8
+                brake_k = self.performance()["brake"] * self._brake_skill
+                top = self.top_speed
                 allowed = 1e9
                 for k in range(0, 40, 2):
-                    v = ref[(self.idx + k) % n] * f
-                    if v > 0.0:
-                        allowed = min(allowed, (v * v + 2.0 * brake_decel(v) * brake_k * k * step) ** 0.5)
+                    r = ref[(self.idx + k) % n]
+                    t = (r / top - 0.55) / 0.3
+                    if r <= 0.0 or t >= 1.0:
+                        continue                # unknown, or flat out: the weaker driver is just as fast there
+                    # all of the reduction in slow corners, fading out towards the fast ones
+                    t = max(0.0, t)
+                    v = r * (f + (1.0 - f) * t * t * (3.0 - 2.0 * t))
+                    allowed = min(allowed, (v * v + 2.0 * brake_decel(v) * brake_k * k * step) ** 0.5)
                 self._corner_cap = allowed
             excess = self.speed_fwd - self._corner_cap
             if excess > 3.0:
                 self.throttle = 0.0
                 self.brake = max(self.brake, min(1.0, max(0.3, excess / 50.0)))
                 return
-            if excess > -12.0:
-                self.throttle = min(self.throttle, 0.4)
+            if excess > -5.0:
+                self.throttle = min(self.throttle, 0.7)
                 return
-        if not self.on_grass and self.speed_fwd > ref[self.idx]:
-            ref[self.idx] = self.speed_fwd
+        if not self.on_grass and not self.is_ghost and self.speed_fwd > 20.0 and ref[self.idx] > 0.0:
+            # a typical speed, not the fastest ever seen: a slipstream or a lucky moment must not raise the
+            # reference for everyone (that made the old one useless in the corners)
+            ref[self.idx] += (self.speed_fwd - ref[self.idx]) * 0.01
 
     # ------------------------------------------------------------------ racecraft
     # The nets only learned to be fast; this layer makes them fair: they lift (and only then brake) instead of

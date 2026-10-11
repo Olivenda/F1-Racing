@@ -16,7 +16,7 @@ from .tyres import ALL_COMPOUNDS, COMPOUND_ORDER, COMPOUNDS
 from .user_settings import (ANTIALIAS_LEVELS, ASSIST_NAMES, DAMAGE_MODES, EFFECT_LEVELS, FPS_OPTIONS, GEARBOX_MODES,
                             GRAPHICS_LEVELS, GRAPHICS_PRESETS, HUD_ASSIST, HUD_STYLES, TYRE_WEAR_MODES, UNITS,
                             speed_in)
-from .settings import (CYAN, DIFFICULTY_CORNERING, DIFFICULTY_LEVELS, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
+from .settings import (CYAN, DIFFICULTY_LEVELS, LEGACY_DIFFICULTY, ai_skill_name, ai_strength, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PX_PER_S_TO_KMH,
                        TOP_SPEED,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .track import TRACK_DEFS
@@ -59,6 +59,19 @@ def _wrap(text: str, font: pygame.font.Font, width: int) -> list[str]:
 
 def session_dnf(car) -> bool:
     return car is not None and getattr(car, "dnf", False)
+
+
+def ai_skill_hint(strength: float) -> str:
+    """What an AI strength means on track: the cars stay as fast, the drivers get worse."""
+    if strength >= 0.999:
+        return "Volle Stärke: die KI fährt am Limit"
+    k = (strength - 0.3) / 0.7
+    corner = min(100, 75 + 31 * k ** 0.5)
+    return f"Gleiche Autos, schwächere Fahrer: {corner:.0f}% Kurventempo, bremst früher"
+
+
+def _strength_color(strength: float) -> tuple[int, int, int]:
+    return GREEN if strength < 0.45 else YELLOW if strength < 0.65 else ORANGE if strength < 0.85 else F1_RED
 
 
 def _fit(text: str, font: pygame.font.Font, width: int) -> str:
@@ -389,7 +402,7 @@ class SetupScreen:
         elif row == "Rennrunden":
             self.c["laps"] = max(1, min(30, self.c["laps"] + delta))
         elif row == "KI-Stärke":
-            self.c["diff"] = (self.c["diff"] + delta) % len(self.diffs)
+            self.c["diff"] = max(0, min(len(self.diffs) - 1, self.c["diff"] + delta))
         elif row in ("Gegner", "Fahrerfeld"):
             low = 2 if self.spectator else 1
             self.c["opponents"] = max(low, min(self.max_opponents, self.c["opponents"] + delta))
@@ -471,9 +484,8 @@ class SetupScreen:
         if row == "Rennrunden":
             return f"{self.c['laps']} Runden"
         if row == "KI-Stärke":
-            factor = DIFFICULTY_LEVELS[self.diffs[self.c["diff"]]]
-            corner = DIFFICULTY_CORNERING[self.diffs[self.c["diff"]]]
-            return f"{self.diffs[self.c['diff']]}  ({factor * 100:.0f}% Motor · {corner * 100:.0f}% Kurventempo)"
+            name = self.diffs[self.c["diff"]]
+            return f"{name}  ·  {ai_skill_name(ai_strength(name))}"
         if row in ("Gegner", "Fahrerfeld"):
             return f"{self.c['opponents']} KI-Fahrer"
         if row == "Dein Team":
@@ -646,8 +658,7 @@ class SetupScreen:
             mins = self.c["laps"] * track.length / (TOP_SPEED * 0.8) / 60
             return f"Renndauer ca. {max(1, round(mins))} min"
         if row == "KI-Stärke":
-            name = self.diffs[self.c["diff"]]
-            return f"{DIFFICULTY_LEVELS[name] * 100:.0f}% Motor · {DIFFICULTY_CORNERING[name] * 100:.0f}% Kurventempo"
+            return ai_skill_hint(ai_strength(self.diffs[self.c["diff"]]))
         if row in ("Gegner", "Fahrerfeld"):
             return f"Starterfeld {self.c['opponents'] + (0 if self.spectator else 1)} Autos"
         if row == "Dein Team":
@@ -719,8 +730,7 @@ class SetupScreen:
             self._pills(screen, area, row, "mode", [(k, short.get(m[0], m[1]), None) for k, m in enumerate(self.modes)],
                         c["mode"], mouse, accent)
         elif row == "KI-Stärke":
-            self._pills(screen, area, row, "diff", [(k, d, None) for k, d in enumerate(self.diffs)], c["diff"],
-                        mouse, accent)
+            self._stepper(screen, area, row, self._value(row), mouse, _strength_color(ai_strength(self.diffs[c["diff"]])))
         elif row == "Spieler":
             self._pills(screen, area, row, "players", [(1, "1 Spieler", None), (2, "2 Spieler", None)],
                         c.get("players", 1), mouse, accent)
@@ -1506,7 +1516,7 @@ class ChampionshipScreen:
         elif row == "Rennrunden":
             self.c["laps"] = max(1, min(30, self.c["laps"] + delta))
         elif row == "KI-Stärke":
-            self.c["diff"] = (self.c["diff"] + delta) % len(self.diffs)
+            self.c["diff"] = max(0, min(len(self.diffs) - 1, self.c["diff"] + delta))
         elif row == "Fahrerfeld":
             self.c["opponents"] = max(2, min(len(self.game.drivers), self.c["opponents"] + delta))
         elif row == "Dein Team":
@@ -1578,7 +1588,7 @@ class ChampionshipScreen:
             self._draw_calendar(screen, pygame.Rect(600, 128, 640, 300), None)
             return
         sub = (f"Runde {min(champ.round + 1, len(champ.rounds))}/{len(champ.rounds)} · "
-               f"{dict(FORMATS)[champ.format]} · {champ.laps} Rd. · KI {champ.difficulty}"
+               f"{dict(FORMATS)[champ.format]} · {champ.laps} Rd. · KI {LEGACY_DIFFICULTY.get(champ.difficulty, champ.difficulty)}"
                + (" · Zuschauer" if champ.spectator else f" · {champ.player_name} ({champ.team})"))
         draw_text(screen, sub, f.small, GREY, (86, 86))
         self._draw_driver_table(screen, champ)

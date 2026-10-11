@@ -1562,3 +1562,24 @@ EXACT.update({"STRECKEN-SHOWCASE": "TRACK SHOWCASE", "Stadtkurs": "Street circui
               "TEAMS · FAHRZEUG-WERTUNG": "TEAMS · CAR RATINGS"})
 TEMPLATES += [("Fahrer: {}", "Driver: {}"), ("Fahrhilfen: {}", "Assists: {}"), ("Ansicht: {}", "View: {}"),
               ("Aufnahmen: {#} Samples", "Recordings: {} samples")]
+# AI strength in percent, the driven pit stop, the pit menu's tyre choice
+EXACT.update({"Anfänger": "Beginner", "Amateur": "Amateur", "Profi": "Pro", "Weltklasse": "World class",
+              "Volle Stärke: die KI fährt am Limit": "Full strength: the AI drives at the limit",
+              "REIFEN": "TYRES", "CREW": "CREW", "STEHZEIT": "STANDING", "VERLUST": "LOSS", "RAUS ALS": "REJOIN",
+              "ANGEFORDERT": "REQUESTED", "NICHT ANGEFORDERT": "NOT REQUESTED", "DEINE BOX": "YOUR BOX",
+              "LIMITER AKTIV - bremst automatisch": "LIMITER ON - slowing down automatically",
+              "BOXENGASSE - Limiter an, an der Box bremsen": "PIT LANE - limiter on, brake at your box",
+              "PERFEKT AUF DER MARKIERUNG": "PERFECT ON THE MARKS", "JETZT BREMSEN!": "BRAKE NOW!",
+              "BREMSEN!": "BRAKE!", "STEHEN - Gas zum Weiterrollen": "STOPPED - throttle to roll on",
+              "Blaue Marke = Haltepunkt bei Vollbremsung": "Blue mark = where full braking stops you",
+              "GO GO GO!  -  GAS!": "GO GO GO!  -  THROTTLE!", "Fahrer": "Driver"})
+TEMPLATES += [
+    ("{}  ·  {}", "{}  ·  {}"),
+    ("Gleiche Autos, schwächere Fahrer: {#}% Kurventempo, bremst früher",
+     "Same cars, weaker drivers: {}% corner speed, brakes earlier"),
+    ("BOX ANFAHREN  ·  LIMITER {#} {}", "APPROACH BOX  ·  LIMITER {} {}"),
+    ("REAKTION {#}s", "REACTION {}s"), ("Reaktion {#}s", "Reaction {}s"),
+    ("{#} m zu kurz  +{#}s", "{} m short  +{}s"), ("{#} m zu weit  +{#}s", "{} m long  +{}s"),
+    ("ÜBER DIE MARKIERUNG! Crew schiebt zurück  +{#}s", "PAST THE MARKS! Crew pushes you back  +{}s"),
+    ("{}-Reifen · Wahl: {}", "{} tyres · choice: {}"),
+]

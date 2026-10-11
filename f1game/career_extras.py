@@ -11,7 +11,7 @@ from .career import NATIONALITIES, PERSONAL, PERSONAL_COST, REBRAND_COST
 from .career_achievements import ACHIEVEMENTS, available
 from .career_screens import GOLD, MEDAL, RED, _fit, _Screen, _wrap, draw_form, draw_livery
 from .championship import FORMATS
-from .settings import CYAN, DIFFICULTY_LEVELS, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, \
+from .settings import CYAN, DIFFICULTY_LEVELS, difficulty_index, GREEN, GREY, PANEL, PANEL_LIGHT, SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, \
     YELLOW
 from .utils import draw_panel, draw_text, mouse_item
 
@@ -518,7 +518,7 @@ class CareerOptionsScreen(_RowScreen):
         c = self.career
         self.diffs = list(DIFFICULTY_LEVELS.keys())
         self.laps = c.laps
-        self.diff = self.diffs.index(c.difficulty) if c.difficulty in self.diffs else 1
+        self.diff = difficulty_index(c.difficulty)
         self.fmt = next((k for k, (key, _) in enumerate(FORMATS) if key == c.format), 0)
 
     def rows(self) -> list[str]:
@@ -533,7 +533,7 @@ class CareerOptionsScreen(_RowScreen):
             if row == "Rennrunden":
                 self.laps = max(1, min(30, self.laps + d))
             elif row == "KI-Stärke":
-                self.diff = (self.diff + d) % len(self.diffs)
+                self.diff = max(0, min(len(self.diffs) - 1, self.diff + d))
             elif row == "Format":
                 self.fmt = (self.fmt + d) % len(FORMATS)
         elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):

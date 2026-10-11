@@ -31,7 +31,7 @@ from .sensors import RADAR_RANGE, lookahead_points
 from .race_control import PUNCTURE_WEAR, RaceControl
 from .i18n import tr
 from .stewards import Stewards
-from .settings import (TOP_SPEED, DIFFICULTY_CORNERING, DIFFICULTY_LEVELS, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
+from .settings import (TOP_SPEED, ai_strength, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
                        SCREEN_WIDTH, SLIPSTREAM_RANGE, WHITE, YELLOW, GREEN, PX_PER_S_TO_KMH, CAR_LENGTH, Color)
 from .utils import format_time
 
@@ -86,7 +86,8 @@ class WeekendConfig:
 
     @property
     def difficulty(self) -> float:
-        return DIFFICULTY_LEVELS[self.difficulty_name]
+        """AI strength 0.3 .. 1.0: how well the AI drives (its cars keep their full performance)."""
+        return ai_strength(self.difficulty_name)
 
 
 def time_gap(front: Car, back: Car) -> float | None:
@@ -232,9 +233,9 @@ class Session:
                 self.guest_cars.append(car)
             else:
                 net = self.game.brains.network(prof.brain, prof.checkpoint)
-                car = AI_Car(prof, self.track, net, engine_factor=self.config.difficulty * prof.pace)
+                car = AI_Car(prof, self.track, net, engine_factor=prof.pace)
                 car.grip_bonus = driver_grip(prof.pace)
-                car.corner_factor = DIFFICULTY_CORNERING.get(self.config.difficulty_name, 1.0)
+                car.set_skill(self.config.difficulty)
                 car.apply_setup(ai_setup)
             if self.ghost_field:
                 car.collide_cars = False

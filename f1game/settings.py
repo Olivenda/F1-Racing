@@ -53,9 +53,28 @@ SPIN_TRANSFER: float = 0.55
 
 GEAR_THRESHOLDS: tuple[float, ...] = (85.0, 153.0, 220.0, 288.0, 355.0, 423.0, 456.0)
 
-DIFFICULTY_LEVELS: dict[str, float] = {"Leicht": 0.86, "Mittel": 0.94, "Schwer": 1.0}
-# the trained nets corner at the limit whatever their engine power: easier levels also cap their corner speed
-DIFFICULTY_CORNERING: dict[str, float] = {"Leicht": 0.91, "Mittel": 0.97, "Schwer": 1.0}
+# AI strength in percent: how well the AI drives - never how fast its car is (30% beginner .. 100% full strength)
+DIFFICULTY_LEVELS: dict[str, float] = {f"{p}%": p / 100 for p in range(30, 101, 5)}
+DEFAULT_DIFFICULTY: str = "70%"
+LEGACY_DIFFICULTY: dict[str, str] = {"Leicht": "50%", "Mittel": "75%", "Schwer": "100%"}   # older saves
+
+
+def ai_strength(name: str) -> float:
+    """0.3 .. 1.0 for a difficulty name ("65%", or a level name from older saves)."""
+    name = LEGACY_DIFFICULTY.get(name, name)
+    return DIFFICULTY_LEVELS.get(name, DIFFICULTY_LEVELS[DEFAULT_DIFFICULTY])
+
+
+def difficulty_index(name: str) -> int:
+    """Position of a difficulty in DIFFICULTY_LEVELS (older level names map to their percentage)."""
+    keys = list(DIFFICULTY_LEVELS)
+    name = LEGACY_DIFFICULTY.get(name, name)
+    return keys.index(name) if name in keys else keys.index(DEFAULT_DIFFICULTY)
+
+
+def ai_skill_name(strength: float) -> str:
+    return "Anfänger" if strength < 0.45 else "Amateur" if strength < 0.65 else "Profi" if strength < 0.85 \
+        else "Weltklasse"
 AI_CONTROL_INTERVAL: float = 1.0 / 30.0
 
 Color = tuple[int, int, int]
