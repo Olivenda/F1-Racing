@@ -31,16 +31,15 @@ EXACT: dict[str, str] = {
     "ZUSCHAUEN": "SPECTATE", "EINSTELLUNGEN": "SETTINGS", "ZUSCHAUER-RENNEN": "SPECTATOR RACE",
     "KI-TRAINING": "AI TRAINING", "GRAND PRIX": "GRAND PRIX",
     "Fahre selbst ein Rennwochenende gegen die KI": "Drive a race weekend yourself against the AI",
-    "Fahrer-Karriere mit Verträgen & Rivalen oder eigenes Team als Teamchef":
-        "Driver career with contracts & rivals, or run your own team as team principal",
-    "Saison über alle Strecken mit WM-Punkten, Fahrer- und Teamwertung":
-        "A season across all tracks with championship points, driver and team standings",
+    "Fahrer-Karriere mit Verträgen & Rivalen oder eigenes Team":
+        "Driver career with contracts & rivals, or your own team",
+    "Saison über alle Strecken mit Fahrer- und Teamwertung":
+        "A season across all tracks with driver and team standings",
     "Nur KI-Fahrer - lehn dich zurück, TV-Regie inklusive": "AI drivers only - sit back, TV director included",
     "Neuronale Netze live trainieren oder deinen Klon erzeugen": "Train neural networks live or create your clone",
     "Name, Fahrhilfen, Ansicht, Schaden, Reifen, Sound, Vollbild":
         "Name, assists, view, damage, tyres, sound, fullscreen",
-    "Neuronale KI · Karriere · WM · Aktive Aero · Setup · Sound · 2D/3D":
-        "Neural AI · Career · Championship · Aero · Setup · Sound · 2D/3D",
+    "Neuronale KI · Karriere · WM · Setup · 2D/3D": "Neural AI · Career · Championship · Setup · 2D/3D",
     "Pfeile wählen · ENTER bestätigen · ESC beenden": "Arrows select · ENTER confirm · ESC quit",
     "TEAMS  ·  FAHRZEUG-WERTUNG  (data/teams.json)": "TEAMS  ·  CAR RATINGS  (data/teams.json)",
     "Rennwochenende": "Race weekend", "Freies Training": "Free practice", "Qualifying": "Qualifying",

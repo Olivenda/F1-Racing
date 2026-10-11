@@ -12,6 +12,7 @@ import pygame
 from .settings import (CYAN, F1_RED, GREEN, GREY, ORANGE, PANEL, PANEL_LIGHT, PURPLE, PX_PER_S_TO_KMH,
                        SCREEN_HEIGHT, SCREEN_WIDTH, WHITE, YELLOW)
 from .car import PLANK_LIMIT_MM
+from .pitlane import BOX_PERFECT, BOX_WINDOW, PIT_BRAKE, PIT_COAST
 from .flags import FLAG_COLORS, FLAG_NAMES, car_flag, hazard_ahead, led_board
 from .tyres import COMPOUNDS
 from .i18n import tr
@@ -86,7 +87,7 @@ class HUD:
         if assist == "full" and s.view3d and s.r3d.cam.kind in ("onboard", "chase"):
             self._spotter(screen, s)
         self._engineer(screen, s)
-        self._pit_overlay(screen, s.focus)
+        self._pit_overlay(screen, s.focus, s)
         if s.kind == "race":
             self._race_gaps(screen, s, standings)
             self._lights(screen, s)
@@ -557,9 +558,12 @@ class HUD:
         draw_text(screen, f"LANGSAMES AUTO VORAUS · {dist * PX_PER_S_TO_KMH / 3.6:.0f} m · {where}", f.small_bold, WHITE,
                   (rect.x + 58, rect.centery), anchor="midleft", shadow=False)
 
-    def _pit_overlay(self, screen: pygame.Surface, car: "Car") -> None:
+    def _pit_overlay(self, screen: pygame.Surface, car: "Car", s: "Session | None" = None) -> None:
         f = self.f
-        if car.in_pit:
+        manual = s is not None and car.in_pit and hasattr(s, "manual_pit") and s.manual_pit(car)
+        if manual and (not car.pit_stopped or car.pit_green_t is not None):
+            self._pit_approach(screen, car, s)
+        elif car.in_pit:
             cx = SCREEN_WIDTH // 2
             py = SCREEN_HEIGHT - 190
             draw_panel(screen, (cx - 150, py, 300, 70), (60, 45, 0), 220)
@@ -576,6 +580,68 @@ class HUD:
         if getattr(car, "brake_assist_active", False):
             draw_text(screen, "BREMSHILFE", f.small_bold, (255, 90, 90), (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 110),
                       anchor="center")
+
+    def _pit_approach(self, screen: pygame.Surface, car: "Car", s: "Session") -> None:
+        """Human drivers in the pit lane: the limiter line, then a gauge of the way to the box marks with the
+        point the car would stop at under full braking - brake when that tick reaches the green zone."""
+        f = self.f
+        pit = car.track.pit
+        cx, w = SCREEN_WIDTH // 2, 420
+        x, py = cx - w // 2, SCREEN_HEIGHT - 200
+        draw_panel(screen, (x, py, w, 86), (20, 18, 10), 228, border=(255, 210, 40))
+        v = max(0.0, car.speed_fwd)
+        kmh, unit = speed_in(v * PX_PER_S_TO_KMH, self.units)
+        limit, _ = speed_in(100.0, self.units)
+        blink = pygame.time.get_ticks() // 160 % 2 == 0
+        if car.pit_stopped:
+            # released: the clock runs until the driver is on the throttle
+            wait = s.time - car.pit_green_t
+            col = (60, 255, 110)
+            draw_text(screen, "GO GO GO!  -  GAS!", f.large, col, (cx, py + 30), anchor="center", shadow=False)
+            draw_text(screen, f"Reaktion {wait:4.2f}s", f.small_bold, WHITE, (cx, py + 64), anchor="center",
+                      shadow=False)
+            return
+        if car.pit_u < pit.RAMP:
+            draw_text(screen, "LIMITER AKTIV - bremst automatisch", f.medium, (255, 210, 40), (x + 16, py + 10),
+                      shadow=False)
+            draw_text(screen, f"{kmh:3.0f} -> {limit:.0f} {unit}", f.medium, WHITE, (cx, py + 54), anchor="center",
+                      shadow=False)
+            return
+        draw_text(screen, f"BOX ANFAHREN  ·  LIMITER {limit:.0f} {unit}", f.small_bold, (255, 210, 40),
+                  (x + 16, py + 8), shadow=False)
+        dist = car.pit_box_u - car.pit_u
+        meters = dist * PX_PER_S_TO_KMH / 3.6
+        draw_text(screen, f"{meters:5.1f} m", f.small_bold, WHITE, (x + w - 16, py + 8), anchor="topright",
+                  shadow=False)
+        # the gauge: 160 px of lane before the marks, the window after them
+        bar = pygame.Rect(x + 16, py + 36, w - 32, 16)
+        lo, hi = -160.0, BOX_WINDOW + 12.0
+
+        def gx(off: float) -> int:
+            return bar.x + round((min(hi, max(lo, off)) - lo) / (hi - lo) * bar.w)
+
+        pygame.draw.rect(screen, (44, 44, 50), bar, border_radius=4)
+        pygame.draw.rect(screen, (150, 120, 20), (gx(-BOX_WINDOW), bar.y, gx(BOX_WINDOW) - gx(-BOX_WINDOW), bar.h),
+                         border_radius=4)
+        pygame.draw.rect(screen, (40, 210, 90), (gx(-BOX_PERFECT), bar.y - 3, gx(BOX_PERFECT) - gx(-BOX_PERFECT),
+                                                 bar.h + 6), border_radius=2)
+        stop = v * v / (2.0 * (PIT_BRAKE + PIT_COAST))
+        pred = -dist + stop                      # where full braking from here would leave the car
+        late = pred > BOX_PERFECT
+        tick = gx(pred)
+        pygame.draw.line(screen, (90, 220, 255), (tick, bar.y - 6), (tick, bar.bottom + 5), 3)
+        me = gx(-dist)
+        pygame.draw.polygon(screen, WHITE, [(me, bar.bottom + 2), (me - 7, bar.bottom + 12), (me + 7, bar.bottom + 12)])
+        if v < 1.0:
+            msg, col = "STEHEN - Gas zum Weiterrollen", GREY
+        elif late:
+            msg, col = ("JETZT BREMSEN!" if blink else ""), (255, 90, 80)
+        elif pred > -12.0:
+            msg, col = "BREMSEN!", (255, 210, 40)
+        else:
+            msg, col = "Blaue Marke = Haltepunkt bei Vollbremsung", (170, 200, 220)
+        if msg:
+            draw_text(screen, msg, f.small_bold, col, (cx, py + 72), anchor="center", shadow=False)
 
     def _pit_service(self, screen: pygame.Surface, car: "Car", service: dict, cx: int, py: int) -> None:
         """Stationary clock counting up (like the TV graphic) and the four wheels: grey waiting, red off, green on."""
@@ -803,15 +869,15 @@ class HUD:
             cy += 17
         elif s.kind == "race" and gap is not None:
             draw_text(screen, "VORDERMANN", f.tiny, GREY, (x + 12, cy), shadow=False)
-            draw_text(screen, f"{gap:.2f}s", f.small_bold, WHITE, (x + 120, cy - 3), anchor="topright", shadow=False)
+            draw_text(screen, f"{gap:.2f}s", f.small_bold, WHITE, (x + 150, cy - 3), anchor="topright", shadow=False)
             if trend is not None and abs(trend) >= 0.05:
                 closing = trend < 0
                 tcol = GREEN if closing else (255, 110, 90)
-                ax, ay = x + 132, cy + 7
+                ax, ay = x + 158, cy + 7
                 tri = [(ax, ay + 5), (ax + 10, ay + 5), (ax + 5, ay - 5)] if closing else \
                     [(ax, ay - 5), (ax + 10, ay - 5), (ax + 5, ay + 5)]
                 pygame.draw.polygon(screen, tcol, tri)
-                draw_text(screen, f"{abs(trend):.1f}s/Rd.", f.tiny, tcol, (x + 148, cy), shadow=False)
+                draw_text(screen, f"{abs(trend):.1f}s/Rd.", f.tiny, tcol, (x + 172, cy), shadow=False)
             cy += 17
         info = []
         if car.pit_stops:

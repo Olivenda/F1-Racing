@@ -20,7 +20,8 @@ from .career_plus import START_BOOST_TIME
 from .flags import post_states
 from .render3d import CAMERA_MODES, Renderer3D
 from .pit_menu import PitMenu, crew_choice
-from .pitlane import PIT_ACCEL, PIT_DECEL, SPEED_LIMIT
+from .pitlane import (BOX_APPROACH, BOX_CREEP, BOX_MISS_TIME, BOX_PERFECT, BOX_WINDOW, OVERSHOOT_TIME, PIT_ACCEL,
+                      PIT_BRAKE, PIT_COAST, PIT_DECEL, SPEED_LIMIT)
 from .car_setup import CarSetup, recommended
 from .career_events import DEFAULT_RELIABILITY, FAILURES, MINOR_FAILURES, RETIRE_SHARE, failure_chance
 from .tyres import ALL_COMPOUNDS, COMPOUNDS, COMPOUND_ORDER, TyreSet
@@ -31,7 +32,7 @@ from .race_control import PUNCTURE_WEAR, RaceControl
 from .i18n import tr
 from .stewards import Stewards
 from .settings import (TOP_SPEED, DIFFICULTY_CORNERING, DIFFICULTY_LEVELS, PHYSICS_STEP, PURPLE, SCREEN_HEIGHT,
-                       SCREEN_WIDTH, SLIPSTREAM_RANGE, WHITE, YELLOW, GREEN, Color)
+                       SCREEN_WIDTH, SLIPSTREAM_RANGE, WHITE, YELLOW, GREEN, PX_PER_S_TO_KMH, CAR_LENGTH, Color)
 from .utils import format_time
 
 if TYPE_CHECKING:
@@ -906,8 +907,12 @@ class Session:
             car.pit_request = None
             car.pit_stopped = False
             car.pit_stop_timer = 0.0
-            if car is self.player:
-                self.message("BOXENGASSE - Limiter an", (255, 210, 40), 2.5)
+            car.pit_box_error, car.pit_green_t = None, None
+            if car is self.player or car is self.player2:
+                if self.manual_pit(car):
+                    self.message("BOXENGASSE - Limiter an, an der Box bremsen", (255, 210, 40), 2.5)
+                else:
+                    self.message("BOXENGASSE - Limiter an", (255, 210, 40), 2.5)
 
     def _lane_tick(self, car: Car, h: float) -> None:
         pit = self.track.pit
@@ -951,6 +956,8 @@ class Session:
             held = car.pit_service["t"] - car.pit_service["total"] if car.pit_service else 9.0
             if held > 1.5 or self._lane_clear(car):
                 self._release(car)
+        elif self.manual_pit(car):
+            v = self._manual_lane(car, v, h)
         else:
             if not car.pit_stopped:
                 busy = self._box_busy(car)
@@ -968,63 +975,135 @@ class Session:
                 target = SPEED_LIMIT * 1.8
             v = approach(v, target, (PIT_DECEL if v > target else PIT_ACCEL) * h)
             if not car.pit_stopped and car.pit_u >= car.pit_box_u - 1.0:
-                car.pit_stopped = True
-                plan = car.pit_plan or {}
-                repair = car.damage.repair_time() if plan.get("repair", True) else 0.0
-                served = car.penalty_unserved
-                car.penalty_unserved = 0.0
-                if served > 0:
-                    self.stewards.announce(f"{car.short} sitzt {served:.0f}s Strafe in der Box ab", "info")
-                fuel_time = plan.get("fuel", 0.0) * car.fuel_per_lap / REFUEL_KG_PER_S
-                wing_time = 0.8 if plan.get("front_wing", 0) else 0.0
-                tyres = car.pit_compound in COMPOUNDS
-                car._queued = False
-                # the crew is good but not a machine: every stop varies a little, now and then one goes wrong
-                base = self.stop_time(car) * random.uniform(0.93, 1.10) if tyres else 0.0
-                problem = None
-                wheels = None
-                if tyres:
-                    normal = base
-                    if random.random() < self.config.slow_stop.get(car.profile.team, SLOW_STOP_CHANCE):
-                        problem = random.randrange(4)
-                        base += random.uniform(1.5, 4.5)
-                    wheels = []
-                    for k in range(4):
-                        off = random.uniform(0.35, 0.55)
-                        on = base - 0.2 if k == problem else normal - random.uniform(0.25, 0.45)
-                        wheels.append((off, max(off + 0.6, on)))
-                # tyres, fuel and the wing adjustment happen in parallel; repairs come on top
-                car.pit_stop_timer = max(base, fuel_time, wing_time, 0.8) + repair + served
-                car.pit_service = {"t": 0.0, "total": car.pit_stop_timer, "wheels": wheels, "problem": problem}
-                if problem is not None:
-                    where = WHEEL_NAMES[problem]
-                    if car is self.player or car is self.player2:
-                        self.message(f"PROBLEM AM RAD {where.upper()}!", (255, 110, 90), 3.0)
-                    else:
-                        self.add_feed(f"{car.short}: langsamer Stopp - Rad {where}")
+                self._start_service(car)
                 v = 0.0
-                if car is self.player:
-                    parts = [f"Reifen: {COMPOUNDS[car.pit_compound].name}" if tyres else "Reifen bleiben drauf"]
-                    if fuel_time > 0:
-                        parts.append(f"Tanken +{plan['fuel']:.1f} Rd.")
-                    if wing_time:
-                        parts.append(f"Frontflügel {plan['front_wing']:+d}")
-                    if repair > 0:
-                        parts.append(f"Reparatur ({repair:.0f}s)")
-                    self.message("  ·  ".join(parts),
-                                 COMPOUNDS[car.pit_compound].color if tyres else WHITE, 3.0)
         car.pit_u += v * h
         pos, heading = pit.pose(min(car.pit_u, pit.length), car.pit_entry_lat)
         car.pos, car.heading = pos, heading
         car.vel = car.forward * v
         car.speed_fwd = v
-        car.throttle, car.brake, car.steer_input = (0.3 if v > 0 else 0.0), 0.0, 0.0
+        if self.manual_pit(car):
+            car.steer_input = 0.0
+        else:
+            car.throttle, car.brake, car.steer_input = (0.3 if v > 0 else 0.0), 0.0, 0.0
         if car.pit_u >= pit.length:
             car.pit_state = None
             car.pit_wheels_off, car.pit_lift, car.pit_hold = None, 0.0, False
             car.auto_gear()
             car.ghost_timer = 1.2
             car.spin = 0.0
+
+    def manual_pit(self, car: Car) -> bool:
+        """Human drivers brake into their box and pull away themselves; the AI and the autopilot are driven."""
+        return isinstance(car, Player_Car) and car.autopilot is None and not self.config.instant
+
+    def _manual_lane(self, car: Car, v: float, h: float) -> float:
+        """One step of a human car in the pit lane: the steering follows the lane, the driver works the pedals.
+        The limiter brings the car down to the limit by the line and eases it to a crawl just before the box, so
+        the driver only times the brake: the stop counts where the car comes to rest - on the marks the crew
+        starts at once, off them the crew loses time, past them it pushes the car back."""
+        pit = self.track.pit
+        assert pit is not None and isinstance(car, Player_Car)
+        throttle, brake = car.pit_pedals(self)
+        car.throttle, car.brake = throttle, brake
+        if car.pit_u < pit.RAMP:
+            # the limiter brakes the car down so it crosses the line at the limit
+            v = min(v, math.sqrt(SPEED_LIMIT ** 2 + 2.0 * PIT_DECEL * (pit.RAMP - car.pit_u)))
+        limited = pit.RAMP <= car.pit_u < pit.length - pit.RAMP
+        top = SPEED_LIMIT if limited else car.top_speed * 0.8
+        to_box = car.pit_box_u - car.pit_u
+        if not car.pit_stopped and to_box < BOX_APPROACH:
+            top = BOX_CREEP + (SPEED_LIMIT - BOX_CREEP) * max(0.0, to_box) / BOX_APPROACH
+        if car.pit_stopped and car.pit_green_t is not None:
+            # released: the clock runs until the driver gets going
+            if throttle < 0.3:
+                return 0.0
+            reaction = self.time - car.pit_green_t
+            car.pit_green_t = None
+            if car is self.player or car is self.player2:
+                col = GREEN if reaction < 0.4 else YELLOW if reaction < 0.9 else ORANGE_CALL
+                self.message(f"REAKTION {reaction:.2f}s", col, 1.8)
+        accel = PIT_ACCEL * (1.0 if limited else 2.2)
+        v += (throttle * accel - brake * PIT_BRAKE - PIT_COAST) * h
+        if v > top:
+            v = max(top, v - PIT_DECEL * h)          # the limiter pulls the car down to the limit
+        v = max(0.0, v)
+        if car.pit_stopped:
+            return v
+        if self._box_busy(car):
+            # double stack: the crew waves the car to a stop behind the box
+            stop_u = car.pit_box_u - QUEUE_GAP
+            v = min(v, math.sqrt(2.0 * PIT_DECEL * max(0.0, stop_u - car.pit_u)))
+            if not getattr(car, "_queued", False) and car.pit_u > stop_u - 60:
+                car._queued = True
+                self.message("DOPPELSTOPP - hinter dem Teamkollegen warten", (255, 210, 40), 2.5)
+            return v
+        off = car.pit_u + v * h - car.pit_box_u
+        if off > BOX_WINDOW:
+            # sailed past the marks: the crew pushes the car back into the box
+            car.pit_u, car.pit_box_error = car.pit_box_u, off
+            self._start_service(car, OVERSHOOT_TIME)
+            self.message(f"ÜBER DIE MARKIERUNG! Crew schiebt zurück  +{OVERSHOOT_TIME:.1f}s", (255, 110, 90), 2.5)
+            return 0.0
+        if v <= 0.0 and abs(off) <= BOX_WINDOW:
+            miss = max(0.0, abs(off) - BOX_PERFECT)
+            extra = BOX_MISS_TIME * miss / (BOX_WINDOW - BOX_PERFECT)
+            car.pit_box_error = off
+            self._start_service(car, extra)
+            if extra < 0.05:
+                self.message("PERFEKT AUF DER MARKIERUNG", GREEN, 2.0)
+            else:
+                where = "zu kurz" if off < 0 else "zu weit"
+                self.message(f"{abs(off) * PX_PER_S_TO_KMH / 3.6:.1f} m {where}  +{extra:.1f}s", YELLOW, 2.0)
+        return v
+
+    def _start_service(self, car: Car, extra: float = 0.0) -> None:
+        """The car is on its marks: the crew starts work. extra: seconds the crew loses first because the driver
+        stopped off the marks."""
+        car.pit_stopped = True
+        plan = car.pit_plan or {}
+        repair = car.damage.repair_time() if plan.get("repair", True) else 0.0
+        served = car.penalty_unserved
+        car.penalty_unserved = 0.0
+        if served > 0:
+            self.stewards.announce(f"{car.short} sitzt {served:.0f}s Strafe in der Box ab", "info")
+        fuel_time = plan.get("fuel", 0.0) * car.fuel_per_lap / REFUEL_KG_PER_S
+        wing_time = 0.8 if plan.get("front_wing", 0) else 0.0
+        tyres = car.pit_compound in COMPOUNDS
+        car._queued = False
+        # the crew is good but not a machine: every stop varies a little, now and then one goes wrong
+        base = self.stop_time(car) * random.uniform(0.93, 1.10) if tyres else 0.0
+        problem = None
+        wheels = None
+        if tyres:
+            normal = base
+            if random.random() < self.config.slow_stop.get(car.profile.team, SLOW_STOP_CHANCE):
+                problem = random.randrange(4)
+                base += random.uniform(1.5, 4.5)
+            wheels = []
+            for k in range(4):
+                off = random.uniform(0.35, 0.55)
+                on = base - 0.2 if k == problem else normal - random.uniform(0.25, 0.45)
+                wheels.append((off + extra, max(off + 0.6, on) + extra))
+        # tyres, fuel and the wing adjustment happen in parallel; repairs come on top
+        car.pit_stop_timer = max(base, fuel_time, wing_time, 0.8) + extra + repair + served
+        car.pit_service = {"t": 0.0, "total": car.pit_stop_timer, "wheels": wheels, "problem": problem}
+        if problem is not None:
+            where = WHEEL_NAMES[problem]
+            if car is self.player or car is self.player2:
+                self.message(f"PROBLEM AM RAD {where.upper()}!", (255, 110, 90), 3.0)
+            else:
+                self.add_feed(f"{car.short}: langsamer Stopp - Rad {where}")
+        if car is self.player:
+            parts = [f"Reifen: {COMPOUNDS[car.pit_compound].name}" if tyres else "Reifen bleiben drauf"]
+            if fuel_time > 0:
+                parts.append(f"Tanken +{plan['fuel']:.1f} Rd.")
+            if wing_time:
+                parts.append(f"Frontflügel {plan['front_wing']:+d}")
+            if repair > 0:
+                parts.append(f"Reparatur ({repair:.0f}s)")
+            self.message("  ·  ".join(parts),
+                         COMPOUNDS[car.pit_compound].color if tyres else WHITE, 3.0)
 
     def _box_busy(self, car: Car) -> bool:
         """Double stack: a team-mate is still being serviced (or held) in the shared box."""
@@ -1053,6 +1132,7 @@ class Session:
             return
         stationary = service["t"]
         car.pit_last_stop = stationary
+        car.pit_green_t = self.time
         tyres = service.get("wheels") is not None
         best = getattr(self, "fastest_stop", None)
         if tyres and (best is None or stationary < best[0]):
@@ -1067,8 +1147,9 @@ class Session:
             name = COMPOUNDS[car.pit_compound].name if car.pit_compound in COMPOUNDS else "-"
             self.add_feed(f"{car.short} Boxenstopp {stationary:.1f}s -> {name}")
 
-    def pit_crews(self) -> list[tuple[Vector2, float, Color, "Car | None"]]:
-        """Every team's box in the pit lane: (position, heading, team colour, car on its way in / being serviced)."""
+    def pit_crews(self) -> list[tuple[Vector2, float, Color, "Car | None", str]]:
+        """Every team's box in the pit lane: (position, heading, team colour, car on its way in / being serviced,
+        team)."""
         pit = self.track.pit
         if pit is None:
             return []
@@ -1082,7 +1163,7 @@ class Session:
                         (not c.pit_stopped or c.pit_stop_timer > 0 or c.pit_hold or c.pit_u < c.pit_box_u + 70):
                     if car is None or c.pit_stopped:
                         car = c
-            out.append((p, heading, colors.get(team, (200, 200, 200)), car))
+            out.append((p, heading, colors.get(team, (200, 200, 200)), car, team))
         return out
 
     def note_sector(self, car: Car, k: int, t: float) -> None:
@@ -1327,20 +1408,41 @@ class Session:
         pit = self.track.pit
         if pit is None:
             return
+        focus = self.cars[self.cam_index]
+        mine = focus.profile.team if focus.pit_request is not None or focus.in_pit else None
+        pulse = 0.5 + 0.5 * math.sin(pygame.time.get_ticks() * 0.008)
         for pos, heading, color, team in self.garages():
             sp = pos - off
-            if not (-80 < sp.x < SCREEN_WIDTH + 80 and -80 < sp.y < SCREEN_HEIGHT + 80):
+            if not (-90 < sp.x < SCREEN_WIDTH + 90 and -90 < sp.y < SCREEN_HEIGHT + 90):
                 continue
             f = Vector2(math.cos(heading), math.sin(heading))
             r = Vector2(-f.y, f.x)
-            pts = [sp + f * 24 + r * 16, sp + f * 24 - r * 16, sp - f * 24 - r * 16, sp - f * 24 + r * 16]
-            pygame.draw.polygon(screen, (70, 72, 80), pts)
-            pygame.draw.polygon(screen, color, pts, 3)
-            img = self._label(team[:12], WHITE)
-            screen.blit(img, img.get_rect(center=sp))
+            out = r * pit.side                      # from the lane towards the back of the garage
+            # garage: open front towards the lane, team colour along the back wall
+            body = [sp + f * 26 - out * 16, sp - f * 26 - out * 16, sp - f * 26 + out * 16, sp + f * 26 + out * 16]
+            pygame.draw.polygon(screen, (34, 36, 42), body)
+            back = [sp + f * 26 + out * 9, sp - f * 26 + out * 9, sp - f * 26 + out * 16, sp + f * 26 + out * 16]
+            pygame.draw.polygon(screen, color, back)
+            for side in (-1, 1):
+                pygame.draw.line(screen, (150, 152, 158), sp + f * 26 * side - out * 16, sp + f * 26 * side + out * 16,
+                                 3)
+            name = team if self.game.fonts.tiny.size(team)[0] <= 64 else \
+                "".join(w[0] for w in team.split())[:3].upper() if " " in team else team[:6]
+            img = self._label(name, WHITE)
+            screen.blit(img, img.get_rect(center=sp - out * 3))
+            # the box painted on the lane: team colour frame, white line where the front wheels stop
             lane = sp - r * (pit.side * (pit.HALF_WIDTH + 30))
-            pygame.draw.line(screen, color, lane + f * 18 - r * 14, lane + f * 18 + r * 14, 3)
-            pygame.draw.line(screen, color, lane - f * 18 - r * 14, lane - f * 18 + r * 14, 3)
+            fill = [lane + f * 20 - r * 13, lane + f * 20 + r * 13, lane - f * 20 + r * 13, lane - f * 20 - r * 13]
+            pygame.draw.polygon(screen, tuple(int(40 + c * 0.18) for c in color), fill)
+            pygame.draw.polygon(screen, color, fill, 2)
+            stop = lane + f * (CAR_LENGTH * 0.5 - 6)
+            pygame.draw.line(screen, (240, 240, 240), stop - r * 11, stop + r * 11, 2)
+            if team == mine:
+                glow = (int(90 + 165 * pulse), 230, 255)
+                big = [lane + f * 24 - r * 16, lane + f * 24 + r * 16, lane - f * 24 + r * 16, lane - f * 24 - r * 16]
+                pygame.draw.polygon(screen, glow, big, 3)
+                tag = self._label("DEINE BOX", (90, 230, 255))
+                screen.blit(tag, tag.get_rect(center=sp + out * 27))
 
     def _draw_overlays(self, screen: pygame.Surface) -> None:
         if self.hide_hud and not self.paused:

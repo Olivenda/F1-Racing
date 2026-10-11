@@ -2,10 +2,11 @@
 """In-race pit stop menu (B). The crew prepares the tyres - from the race strategy, the weather or the race
 engineer's call - and the menu shows exactly what the stop will bring: the tyres, the time standing and lost, the
 position on rejoin and how long the new set lasts. The driver adjusts fuel, the front wing and repairs, and
-orders or cancels the stop. Entering the pit lane is up to the driver: follow the guide line to the pit entry.
+orders or cancels the stop. The tyres can be overridden: "Crew" keeps the crew's pick. Entering the pit lane is up
+to the driver: follow the guide line to the pit entry (the limiter takes care of the speed) and stop on the box marks.
 
 Keys: the pit-menu keybinds (default I/K up/down, J/L less/more, U confirm; rebindable in the controls menu),
-or 1-3 change a row directly (Shift = backwards) and 4/5/ENTER confirm. Controller: D-pad, or the bound buttons.
+or 1-4 change a row directly (Shift = backwards) and 5/ENTER confirm. Controller: D-pad, or the bound buttons.
 """
 
 from __future__ import annotations
@@ -17,14 +18,15 @@ import pygame
 from .car import PLANK_LIMIT_MM
 from .pitlane import SPEED_LIMIT
 from .settings import CYAN, GREEN, GREY, ORANGE, PANEL_LIGHT, SCREEN_WIDTH, WHITE, YELLOW
-from .tyres import COMPOUND_ORDER, COMPOUNDS
+from .tyres import ALL_COMPOUNDS, COMPOUND_ORDER, COMPOUNDS
 from .utils import draw_panel, draw_text
 
 if TYPE_CHECKING:
     from .player_car import Player_Car
     from .sessions import Session
 
-ROWS = ["Tanken", "Frontflügel", "Reparatur", "BOX"]
+ROWS = ["Reifen", "Tanken", "Frontflügel", "Reparatur", "BOX"]
+TYRE_CHOICES: list[str | None] = [None] + ALL_COMPOUNDS     # None: the crew picks
 RED = (255, 90, 90)
 NAV_UP, NAV_DOWN, NAV_LESS, NAV_MORE, NAV_OK = pygame.K_F5, pygame.K_F6, pygame.K_F7, pygame.K_F8, pygame.K_F9
 
@@ -90,6 +92,7 @@ class PitMenu:
         self.fuel = 0.0
         self.front_wing = 0
         self.repair = True
+        self.compound: str | None = None        # the driver's tyre choice, None = the crew's
         self._rejoin: tuple[float, int, str] | None = None
 
     def toggle(self, car: "Player_Car") -> None:
@@ -104,29 +107,37 @@ class PitMenu:
             self.fuel = car.pit_plan.get("fuel", 0.0)
             self.front_wing = car.pit_plan.get("front_wing", 0)
             self.repair = car.pit_plan.get("repair", True)
+            self.compound = car.pit_plan.get("compound")
         else:
-            self.fuel, self.front_wing, self.repair = 0.0, 0, True
+            self.fuel, self.front_wing, self.repair, self.compound = 0.0, 0, True, None
 
     def tyre(self, car: "Player_Car", session: "Session") -> tuple[str, str]:
-        """The tyres this stop brings: what is ordered, else what the crew has ready."""
+        """The tyres this stop brings: the driver's choice, what is ordered, else what the crew has ready."""
+        if self.compound in COMPOUNDS:
+            return self.compound, "Fahrer"
         if car.pit_request in COMPOUNDS:
             return car.pit_request, getattr(car, "pit_reason", "") or "Crew"
         return crew_choice(car, session)
 
     def _change(self, row: int, delta: int, car: "Player_Car", session: "Session") -> None:
-        if row == 0 and car.fuel_per_lap > 0:
+        if row == 0:
+            k = TYRE_CHOICES.index(self.compound) if self.compound in TYRE_CHOICES else 0
+            self.compound = TYRE_CHOICES[(k + delta) % len(TYRE_CHOICES)]
+        elif row == 1 and car.fuel_per_lap > 0:
             self.fuel = max(0.0, min(self._max_fuel(car, session), self.fuel + 0.5 * delta))
-        elif row == 1 and car.setup is not None:
+        elif row == 2 and car.setup is not None:
             fw = car.setup.front_wing
             self.front_wing = max(-5 - fw, min(5 - fw, self.front_wing + delta))
-        elif row == 2:
+        elif row == 3:
             self.repair = not self.repair
         self._rejoin = None
         if car.pit_request is not None:
             car.pit_plan = self._plan()             # an ordered stop follows the changes right away
+            if row == 0:
+                car.pit_request, car.pit_reason = self.tyre(car, session)
 
     def _plan(self) -> dict:
-        return {"fuel": self.fuel, "front_wing": self.front_wing, "repair": self.repair}
+        return {"fuel": self.fuel, "front_wing": self.front_wing, "repair": self.repair, "compound": self.compound}
 
     @staticmethod
     def _max_fuel(car: "Player_Car", session: "Session") -> float:
@@ -164,7 +175,7 @@ class PitMenu:
         joy = getattr(event, "from_joystick", False)
         back = -1 if event.mod & pygame.KMOD_SHIFT else 1
         last = len(ROWS) - 1
-        if pygame.K_1 <= key <= pygame.K_3:
+        if pygame.K_1 <= key <= pygame.K_4:
             self.sel = key - pygame.K_1
             self._change(self.sel, back, car, session)
         elif key == NAV_UP or (joy and key == pygame.K_UP):
@@ -173,7 +184,7 @@ class PitMenu:
             self.sel = (self.sel + 1) % len(ROWS)
         elif key in (NAV_LESS, NAV_MORE) or (joy and key in (pygame.K_LEFT, pygame.K_RIGHT)):
             self._change(self.sel, -1 if key in (NAV_LESS, pygame.K_LEFT) else 1, car, session)
-        elif key in (NAV_OK, pygame.K_4, pygame.K_5, pygame.K_RETURN, pygame.K_KP_ENTER):
+        elif key in (NAV_OK, pygame.K_5, pygame.K_RETURN, pygame.K_KP_ENTER):
             if joy and key in (pygame.K_RETURN, pygame.K_KP_ENTER) and self.sel != last:
                 self._change(self.sel, 1, car, session)
             else:
@@ -234,59 +245,55 @@ class PitMenu:
         if not self.open:
             return
         f = fonts
-        w = 430
-        x, y = center_x - w // 2, 112
+        w = 460
+        x, y = center_x - w // 2, 104
         ordered = car.pit_request is not None
         comp, why = self.tyre(car, session)
         c = COMPOUNDS[comp]
         need = getattr(session, "total_laps", 0) - car.laps_done
-
-        # ---- estimates, condensed into a few lines
         stand = self.stand_time(car, session)
         loss = lane_loss(car) + stand
-        lines: list[tuple[str, tuple[int, int, int]]] = []
+        back = self.rejoin(car, session, loss)
         life = self.tyre_life(car, comp)
+        plan = car.next_planned_stop() if session.kind == "race" else None
+
+        rh = 30
+        rows_y = y + 54
+        stats_y = rows_y + len(ROWS) * rh + 8
+        cur = car.tyres
+        notes: list[tuple[str, tuple[int, int, int]]] = [
+            (f"{c.name}-Reifen · Wahl: {why}" + (f" · jetzt {cur.compound.letter} {cur.wear * 100:.0f}% Abnutzung"
+                                                 if cur else ""), c.color)]
         if life is not None:
             ok = need <= 0 or life >= need - 0.5
-            lines.append((f"Neue Reifen ~{life:.0f} Rd." + (" · bis ins Ziel" if ok and need > 0 else
-                                                           f" · Ziel in {need}" if need > 0 else ""),
+            notes.append((f"Neue Reifen halten ~{life:.0f} Rd." + (" · bis ins Ziel" if ok and need > 0 else
+                                                                 f" · Ziel in {need} Rd." if need > 0 else ""),
                           GREEN if ok else YELLOW))
-        back = self.rejoin(car, session, loss)
-        stop = f"Stopp ~{stand:.1f}s · Verlust ~{loss:.0f}s"
-        if back is not None:
-            pos, ahead = back
-            stop += f" · P{pos}" + (f" hinter {ahead}" if ahead else "")
-        lines.append((stop, WHITE))
-        plan = car.next_planned_stop() if session.kind == "race" else None
         if plan is not None:
             lap, pcomp = plan
             to_go = lap - (car.laps_done + 1)
             when = "diese Runde" if to_go <= 0 else f"in {to_go} Rd."
-            lines.append((f"Strategie: Stopp {car.pit_stops + 1} {when} -> {COMPOUNDS[pcomp].name}",
+            notes.append((f"Strategie: Stopp {car.pit_stops + 1} {when} -> {COMPOUNDS[pcomp].name}",
                           ORANGE if to_go <= 0 else CYAN))
-
-        rh = 26
-        h = 72 + len(ROWS) * rh + 8 + len(lines) * 19 + 26
-        draw_panel(screen, (x, y, w, h), (16, 18, 24), 235, border=ORANGE)
-        draw_text(screen, "BOXENSTOPP", f.small_bold, ORANGE, (x + 12, y + 8), shadow=False)
-        draw_text(screen, "angefordert" if ordered else "nicht angefordert", f.tiny, GREEN if ordered else GREY,
-                  (x + w - 12, y + 10), anchor="topright", shadow=False)
-
-        # the tyres the crew has ready
-        ty = y + 32
-        pygame.draw.circle(screen, (15, 15, 18), (x + 26, ty + 16), 13)
-        pygame.draw.circle(screen, c.color, (x + 26, ty + 16), 13, 3)
-        draw_text(screen, c.letter, f.small_bold, c.color, (x + 26, ty + 16), anchor="center", shadow=False)
-        draw_text(screen, f"{c.name}-Reifen", f.small_bold, c.color, (x + 46, ty + 2), shadow=False)
-        cur = car.tyres
-        sub = f"Reifenwahl: {why}" + (f" · jetzt {cur.compound.letter} {cur.wear * 100:.0f}%" if cur else "")
-        draw_text(screen, sub, f.tiny, GREY, (x + 46, ty + 20), shadow=False)
+        h = stats_y - y + 52 + len(notes) * 19 + 30
+        draw_panel(screen, (x, y, w, h), (14, 16, 22), 238, radius=10, border=(70, 60, 40))
+        # header band
+        pygame.draw.rect(screen, ORANGE, (x, y, w, 40), border_top_left_radius=10, border_top_right_radius=10)
+        pygame.draw.rect(screen, (255, 190, 90), (x + 10, y + 1, w - 20, 2), border_radius=1)
+        draw_text(screen, "BOXENSTOPP", f.medium, (25, 18, 8), (x + 16, y + 20), anchor="midleft", shadow=False)
+        state = "ANGEFORDERT" if ordered else "NICHT ANGEFORDERT"
+        sw = f.tiny.size(state)[0] + 18
+        pill = pygame.Rect(x + w - 14 - sw, y + 10, sw, 20)
+        pygame.draw.rect(screen, (20, 120, 50) if ordered else (60, 40, 10), pill, border_radius=10)
+        draw_text(screen, state, f.tiny, WHITE if ordered else (255, 220, 170), pill.center, anchor="center",
+                  shadow=False)
 
         fuel_txt = f"+{self.fuel:.1f} Rd. ({self.fuel * car.fuel_per_lap:.0f} kg)" if car.fuel_per_lap > 0 else "-"
         if car.fuel_per_lap > 0 and need > 0:
             fuel_txt += f" · Res. {car.fuel_laps + self.fuel - need:+.1f}"
         fw_now = car.setup.front_wing if car.setup is not None else 0
         values = [
+            "",
             fuel_txt,
             f"{fw_now:+d} -> {fw_now + self.front_wing:+d}" if self.front_wing else f"unverändert ({fw_now:+d})",
             ("Ja" if self.repair else "Nein") + (f"  ({car.damage.repair_time():.0f}s)" if car.damage.total > 0.05
@@ -294,23 +301,68 @@ class PitMenu:
             "BOXENSTOPP ABSAGEN" if ordered else "BOX ANFORDERN",
         ]
         for k, (row, val) in enumerate(zip(ROWS, values)):
-            ry = y + 72 + k * rh
-            if k == self.sel:
-                pygame.draw.rect(screen, PANEL_LIGHT, (x + 6, ry - 2, w - 12, rh - 2), border_radius=5)
-                pygame.draw.rect(screen, ORANGE, (x + 6, ry - 2, 3, rh - 2), border_radius=2)
-            mid = ry + rh // 2 - 2
+            ry = rows_y + k * rh
+            r = pygame.Rect(x + 8, ry, w - 16, rh - 4)
             if row == "BOX":
-                draw_text(screen, val, f.small_bold, ORANGE if not ordered else (255, 120, 100),
-                          (x + w // 2, mid), anchor="center", shadow=False)
+                r = pygame.Rect(x + 8, ry + 2, w - 16, rh - 2)
+                base = (120, 40, 34) if ordered else (150, 85, 10)
+                pygame.draw.rect(screen, base if k != self.sel else tuple(min(255, v + 45) for v in base), r,
+                                 border_radius=6)
+                if k == self.sel:
+                    pygame.draw.rect(screen, WHITE, r, 2, border_radius=6)
+                draw_text(screen, val, f.small_bold, WHITE, r.center, anchor="center", shadow=False)
                 continue
-            draw_text(screen, str(k + 1), f.tiny, ORANGE, (x + 16, mid), anchor="midleft", shadow=False)
-            draw_text(screen, row.upper(), f.tiny, GREY, (x + 30, mid), anchor="midleft", shadow=False)
-            draw_text(screen, val, f.tiny, WHITE, (x + 132, mid), anchor="midleft", shadow=False)
+            if k == self.sel:
+                pygame.draw.rect(screen, PANEL_LIGHT, r, border_radius=6)
+                pygame.draw.rect(screen, ORANGE, (r.x, r.y + 4, 3, r.h - 8), border_radius=2)
+            mid = r.centery
+            draw_text(screen, str(k + 1), f.tiny, ORANGE, (x + 22, mid), anchor="center", shadow=False)
+            draw_text(screen, row.upper(), f.tiny, GREY, (x + 36, mid), anchor="midleft", shadow=False)
+            if row == "Reifen":
+                self._draw_tyre_choice(screen, f, car, session, comp, why, x + 136, mid, k == self.sel)
+            else:
+                draw_text(screen, val, f.tiny, WHITE, (x + 136, mid), anchor="midleft", shadow=False)
+                if k == self.sel:
+                    draw_text(screen, "<  >", f.tiny, ORANGE, (r.right - 10, mid), anchor="midright", shadow=False)
 
-        ly = y + 72 + len(ROWS) * rh + 6
-        for text, col in lines:
+        # the stop at a glance: standing, lost, rejoin
+        cards = [("STEHZEIT", f"{stand:.1f}s", WHITE), ("VERLUST", f"~{loss:.0f}s", WHITE)]
+        if back is not None:
+            pos, ahead = back
+            cards.append(("RAUS ALS", f"P{pos}", CYAN))
+        cw = (w - 16 - 8 * (len(cards) - 1)) // len(cards)
+        for k, (label, value, col) in enumerate(cards):
+            r = pygame.Rect(x + 8 + k * (cw + 8), stats_y, cw, 44)
+            pygame.draw.rect(screen, (26, 28, 36), r, border_radius=6)
+            draw_text(screen, label, f.tiny, GREY, (r.x + 10, r.y + 6), shadow=False)
+            draw_text(screen, value, f.small_bold, col, (r.x + 10, r.y + 22), shadow=False)
+        if back is not None and back[1]:
+            draw_text(screen, f"hinter {back[1]}", f.tiny, GREY, (x + 8 + 2 * (cw + 8) + cw - 8, stats_y + 26),
+                      anchor="topright", shadow=False)
+        ly = stats_y + 52
+        for text, col in notes:
             draw_text(screen, text, f.tiny, col, (x + 12, ly), shadow=False)
             ly += 19
-        note = f"Planke {car.plank_wear:.2f}/{PLANK_LIMIT_MM:.1f} mm · 1-3 ändern · 4/ENTER · B zu"
+        note = f"Planke {car.plank_wear:.2f}/{PLANK_LIMIT_MM:.1f} mm · 1-4 ändern · 5/ENTER · B zu"
         draw_text(screen, note, f.tiny, YELLOW if car.plank_wear > 0.8 * PLANK_LIMIT_MM else (120, 120, 130),
-                  (x + 12, y + h - 20), shadow=False)
+                  (x + 12, y + h - 22), shadow=False)
+
+    def _draw_tyre_choice(self, screen: pygame.Surface, f, car: "Player_Car", session: "Session", comp: str,
+                          why: str, x: int, mid: int, selected: bool) -> None:
+        """Every compound as a tyre badge; the one fitted at this stop is lit, "Crew" stands for the crew's pick."""
+        auto = self.compound is None
+        r = pygame.Rect(x, mid - 10, 46, 20)
+        pygame.draw.rect(screen, ORANGE if auto else (40, 42, 52), r, border_radius=10)
+        draw_text(screen, "CREW", f.tiny, (25, 18, 8) if auto else GREY, r.center, anchor="center", shadow=False)
+        cx = r.right + 20
+        for key in ALL_COMPOUNDS:
+            cc = COMPOUNDS[key]
+            on = key == comp
+            pygame.draw.circle(screen, (12, 12, 15), (cx, mid), 12 if on else 10)
+            pygame.draw.circle(screen, cc.color if on else tuple(v // 2 for v in cc.color), (cx, mid),
+                               12 if on else 10, 3 if on else 2)
+            draw_text(screen, cc.letter, f.tiny, cc.color if on else (110, 110, 118), (cx, mid + 1), anchor="center",
+                      shadow=False)
+            if on and not auto:
+                pygame.draw.circle(screen, WHITE, (cx, mid), 15, 1)
+            cx += 30

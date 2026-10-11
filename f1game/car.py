@@ -176,6 +176,8 @@ class Car:
         self.pit_wheels_off: list[bool] | None = None
         self.pit_lift = 0.0                      # how far the jacks have lifted the car (3D view)
         self.pit_last_stop: float | None = None  # stationary time of the last stop
+        self.pit_box_error: float | None = None  # human drivers: how far off the box marks they stopped (px)
+        self.pit_green_t: float | None = None    # human drivers: session time the release light went green
         self.damage = Damage()
         self.damage.multiplier = 0.0
         self.dnf = False

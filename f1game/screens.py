@@ -116,8 +116,8 @@ class MainMenu:
 
     ITEMS: list[tuple[str, str]] = [
         ("EINZELSPIELER", "Fahre selbst ein Rennwochenende gegen die KI"),
-        ("KARRIERE", "Fahrer-Karriere mit Verträgen & Rivalen oder eigenes Team als Teamchef"),
-        ("WELTMEISTERSCHAFT", "Saison über alle Strecken mit WM-Punkten, Fahrer- und Teamwertung"),
+        ("KARRIERE", "Fahrer-Karriere mit Verträgen & Rivalen oder eigenes Team"),
+        ("WELTMEISTERSCHAFT", "Saison über alle Strecken mit Fahrer- und Teamwertung"),
         ("ONLINE-MEHRSPIELER", "Über das Internet: Spiel hosten (Port-Forwarding) oder beitreten"),
         ("ZUSCHAUER-RENNEN", "Nur KI-Fahrer - lehn dich zurück, TV-Regie inklusive"),
         ("KI-TRAINING", "Neuronale Netze live trainieren oder deinen Klon erzeugen"),
@@ -131,6 +131,7 @@ class MainMenu:
         self.bg = _Background()
         self.t = 0.0
         self.showcase_track = 0
+        self.hl_y: float | None = None
         self.rec_files, self.rec_samples = recording_stats()
         self.dots = [(t.color, 0.06 + (t.rating - 0.97) * 0.9 + k * 0.0013, k * 0.035)
                      for k, t in enumerate(game.teams)] or [((200, 200, 200), 0.06, 0.0)]
@@ -167,47 +168,63 @@ class MainMenu:
         self.t += dt
         self.bg.update(dt)
         self.showcase_track = int(self.t / 8.0) % len(TRACK_DEFS)
+        # the red highlight glides to the selected card instead of jumping
+        target = self._card_rect(self.sel).y
+        self.hl_y = target if self.hl_y is None else self.hl_y + (target - self.hl_y) * min(1.0, dt * 16.0)
+
+    def _card_rect(self, i: int) -> pygame.Rect:
+        quit_row = self.ITEMS[i][0] == "BEENDEN"
+        return pygame.Rect(60, 126 + i * 64 + (8 if quit_row else 0), 500, 46 if quit_row else 58)
 
     def draw(self, screen: pygame.Surface) -> None:
         f = self.game.fonts
         self.bg.draw(screen)
         mouse = pygame.mouse.get_pos()
-        # logo
-        badge = pygame.Rect(60, 34, 96, 70)
-        pygame.draw.polygon(screen, F1_RED, [(badge.x + 18, badge.y), (badge.right, badge.y),
-                                            (badge.right - 18, badge.bottom), (badge.x, badge.bottom)])
-        draw_text(screen, "F1", f.huge, WHITE, (badge.centerx, badge.centery + 2), anchor="center", shadow=False)
-        draw_text(screen, "GRAND PRIX", f.big, WHITE, (174, 30))
-        draw_text(screen, _fit(tr("Neuronale KI · Karriere · WM · Aktive Aero · Setup · Sound · 2D/3D"), f.small, 400),
-                  f.small, GREY, (176, 80))
+        # logo: a compact slanted F1 badge sized to its text, the title beside it
+        logo = f.big.render("F1", True, WHITE)
+        badge = pygame.Rect(60, 32, logo.get_width() + 40, 58)
+        skew = 14
+        pygame.draw.polygon(screen, F1_RED, [(badge.x + skew, badge.y), (badge.right, badge.y),
+                                            (badge.right - skew, badge.bottom), (badge.x, badge.bottom)])
+        pygame.draw.polygon(screen, (255, 70, 60), [(badge.x + skew, badge.y), (badge.right, badge.y),
+                                                   (badge.right - 1, badge.y + 3), (badge.x + skew - 1, badge.y + 3)])
+        screen.blit(logo, logo.get_rect(center=(badge.centerx, badge.centery + 1)))
+        title_x = badge.right + 14
+        draw_text(screen, "GRAND PRIX", f.big, WHITE, (title_x, badge.y - 4))
+        draw_text(screen, _fit("Neuronale KI · Karriere · WM · Setup · 2D/3D", f.small, 560 - title_x), f.small,
+                  GREY, (title_x + 2, badge.bottom - 14), shadow=False)
         # menu cards
+        sel_rect = self._card_rect(self.sel)
+        hl = sel_rect.move(0, round((self.hl_y if self.hl_y is not None else sel_rect.y) - sel_rect.y))
         for i, (label, sub) in enumerate(self.ITEMS):
-            quit_row = label == "BEENDEN"
-            y = 134 + i * 64 + (8 if quit_row else 0)
-            h = 46 if quit_row else 58
+            r = self._card_rect(i)
+            mouse_item(r, self, i)
+            if i != self.sel:
+                hover = r.collidepoint(mouse)
+                draw_panel(screen, r, (32, 34, 46) if hover else (22, 24, 32), 225, radius=10)
+        # the highlight slides between cards, clipped so its rounded corners never poke out
+        hl.h = sel_rect.h
+        pygame.draw.rect(screen, (150, 8, 8), hl.move(0, 3), border_radius=10)
+        pygame.draw.rect(screen, F1_RED, hl, border_radius=10)
+        pygame.draw.rect(screen, (255, 82, 72), (hl.x + 10, hl.y + 1, hl.w - 20, 2), border_radius=1)
+        pygame.draw.rect(screen, WHITE, (hl.x, hl.y + 12, 4, hl.h - 24), border_radius=2)
+        for i, (label, sub) in enumerate(self.ITEMS):
+            r = self._card_rect(i)
             selected = i == self.sel
-            slide = 12 if selected else 0
-            r = pygame.Rect(60 + slide, y, 500, h)
-            mouse_item((60, y, 512, h), self, i)
-            hover = r.collidepoint(mouse)
-            if selected:
-                pygame.draw.rect(screen, F1_RED, r, border_radius=10)
-                pygame.draw.rect(screen, (255, 90, 80), (r.x, r.y, r.w, 2), border_radius=2)
-            else:
-                draw_panel(screen, r, (30, 32, 42) if hover else (22, 24, 32), 225, radius=10)
-            icon = pygame.Rect(r.x + 10, r.y + (h - 38) // 2, 38, 38)
+            icon = pygame.Rect(r.x + 12, r.y + (r.h - 38) // 2, 38, 38)
             pygame.draw.rect(screen, (150, 0, 0) if selected else (40, 42, 54), icon, border_radius=8)
             _menu_icon(screen, label, icon.center, WHITE if selected else (200, 202, 212))
             tx = icon.right + 14
+            text_w = r.right - tx - (44 if selected else 16)
             if sub:
-                draw_text(screen, label, f.medium, WHITE, (tx, r.y + 7), shadow=False)
-                draw_text(screen, _fit(tr(sub), f.tiny, r.right - tx - 40), f.tiny,
-                          (255, 225, 225) if selected else GREY, (tx, r.y + 34), shadow=False)
+                draw_text(screen, _fit(label, f.medium, text_w), f.medium, WHITE, (tx, r.y + 7), shadow=False)
+                draw_text(screen, _fit(sub, f.tiny, text_w), f.tiny,
+                          (255, 225, 225) if selected else GREY, (tx, r.y + 35), shadow=False)
             else:
                 draw_text(screen, label, f.medium, WHITE if selected else (200, 202, 212), (tx, r.centery),
                           anchor="midleft", shadow=False)
             if selected:
-                cx, cy = r.right - 24, r.centery
+                cx, cy = r.right - 22 + round(2 * math.sin(self.t * 5)), r.centery
                 pygame.draw.polygon(screen, WHITE, [(cx - 6, cy - 9), (cx + 4, cy), (cx - 6, cy + 9)])
         self._draw_showcase(screen)
         # status bar
@@ -230,7 +247,7 @@ class MainMenu:
         track = self.game.tracks[td.key]
         box = pygame.Rect(600, 34, 620, 390)
         draw_panel(screen, box, PANEL, 215, radius=12)
-        pygame.draw.rect(screen, F1_RED, (box.x, box.y, box.w, 4), border_radius=2)
+        pygame.draw.rect(screen, F1_RED, (box.x + 12, box.y, box.w - 24, 3), border_radius=1)
         draw_text(screen, "STRECKEN-SHOWCASE", f.tiny, GREY, (box.x + 20, box.y + 16), shadow=False)
         draw_text(screen, td.name.upper(), f.large, WHITE, (box.x + 20, box.y + 34))
         draw_text(screen, td.country, f.small, GREY, (box.x + 22, box.y + 70))
@@ -284,8 +301,10 @@ def _menu_icon(screen: pygame.Surface, label: str, center: tuple[int, int], col:
     """Small line icons for the main menu entries."""
     x, y = center
     if label == "EINZELSPIELER":            # helmet
-        pygame.draw.circle(screen, col, (x, y), 11, 3)
-        pygame.draw.rect(screen, col, (x - 2, y - 5, 12, 6), border_radius=2)
+        pygame.draw.circle(screen, col, (x, y + 1), 11, 3, draw_top_left=True, draw_top_right=True,
+                           draw_bottom_left=True)
+        pygame.draw.line(screen, col, (x, y + 10), (x + 11, y + 10), 3)
+        pygame.draw.rect(screen, col, (x, y - 4, 12, 7), border_top_right_radius=4)
     elif label == "KARRIERE":               # star
         pts = []
         for k in range(10):
@@ -730,7 +749,7 @@ class SetupScreen:
         track = self.game.tracks[td.key]
         box = pygame.Rect(716, 194, 504, 244)
         draw_panel(screen, box, PANEL, 220)
-        pygame.draw.rect(screen, F1_RED, (box.x, box.y, box.w, 4), border_radius=2)
+        pygame.draw.rect(screen, F1_RED, (box.x + 12, box.y, box.w - 24, 3), border_radius=1)
         area = pygame.Rect(box.x + 250, box.y + 14, box.w - 262, box.h - 28)
         track.draw_outline(screen, area, (232, 232, 238), 4)
         scale, off = track.minimap_transform(area)

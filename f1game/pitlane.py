@@ -15,6 +15,15 @@ if TYPE_CHECKING:
 SPEED_LIMIT: float = 165.0
 PIT_DECEL: float = 650.0
 PIT_ACCEL: float = 260.0
+# human drivers brake into their box themselves; the limiter does the rest
+PIT_BRAKE: float = 320.0            # full brake in the lane (px/s^2), soft so the stop is easy to judge
+PIT_COAST: float = 45.0             # rolling resistance off the throttle
+BOX_APPROACH: float = 110.0         # px before the box where the limiter eases the car down ...
+BOX_CREEP: float = 95.0             # ... to this speed (px/s, ~58 km/h)
+BOX_PERFECT: float = 10.0           # px off the marks that still count as a perfect stop
+BOX_WINDOW: float = 48.0            # further off than this the crew can't reach the car
+BOX_MISS_TIME: float = 1.2          # crew time lost at the edge of the window (scales from BOX_PERFECT)
+OVERSHOOT_TIME: float = 2.8         # overshot the box: the crew pushes the car back
 
 
 def smoothstep(t: float) -> float:

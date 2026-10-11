@@ -451,19 +451,49 @@ class Track:
         pit = self.pit
         if pit is None:
             return
+
+        def at(u: float, d: float) -> Vector2:
+            """Point u along the lane, d px from its centre line towards the garages."""
+            return self.pose_at(pit.entry_s + u, pit.lateral(u) + pit.side * d)[0]
+
+        def band(u0: float, u1: float, d0: float, d1: float, color, step: float = 12.0) -> None:
+            u = u0
+            while u < u1:
+                v = min(u1, u + step)
+                pygame.draw.polygon(surf, color, [at(u, d0), at(v, d0), at(v, d1), at(u, d1)])
+                u = v
+
+        hw = pit.HALF_WIDTH
+        work0, work1 = pit.RAMP, pit.length - pit.RAMP
+        # concrete apron in front of the garages, the lane itself, then its markings
+        band(work0 - 20, work1 + 20, hw, hw + 50, (112, 114, 118))
+        band(work0 - 20, work1 + 20, hw + 2, hw + 4, (150, 152, 156))
         edges = pit.outline(8.0)
         for (l0, r0), (l1, r1) in zip(edges, edges[1:]):
-            pygame.draw.polygon(surf, (52, 53, 58), [l0, l1, r1, r0])
+            pygame.draw.polygon(surf, (50, 51, 56), [l0, l1, r1, r0])
         for k in range(len(edges) - 1):
             for side in (0, 1):
                 pygame.draw.line(surf, (235, 235, 235), edges[k][side], edges[k + 1][side], 2)
-        font = pygame.font.SysFont("arial", 18, bold=True)
-        for u, text in ((pit.RAMP, "PIT  100"), (pit.length - pit.RAMP, "END")):
+        font = pygame.font.SysFont("arial", 15, bold=True)
+        for u, limit in ((pit.RAMP, True), (pit.length - pit.RAMP, False)):
             p, heading = pit.pose(u)
-            nrm = Vector2(-math.sin(heading), math.cos(heading)) * pit.HALF_WIDTH
-            pygame.draw.line(surf, (255, 210, 40), p - nrm, p + nrm, 3)
-            img = font.render(text, True, (255, 210, 40))
-            surf.blit(img, img.get_rect(center=p + nrm * 2.2))
+            nrm = Vector2(-math.sin(heading), math.cos(heading)) * hw
+            pygame.draw.line(surf, (255, 210, 40), p - nrm, p + nrm, 4)
+            sign = p - nrm * pit.side * 1.9
+            if limit:
+                # the speed limit sign: red ring, white disc
+                pygame.draw.circle(surf, (20, 20, 22), sign + Vector2(2, 2), 17)
+                pygame.draw.circle(surf, (220, 30, 30), sign, 17)
+                pygame.draw.circle(surf, (250, 250, 250), sign, 12)
+                img = font.render("100", True, (20, 20, 22))
+            else:
+                # end of the limit: white disc with a black diagonal
+                pygame.draw.circle(surf, (20, 20, 22), sign + Vector2(2, 2), 15)
+                pygame.draw.circle(surf, (245, 245, 245), sign, 15)
+                pygame.draw.line(surf, (30, 30, 32), sign + Vector2(-9, 9), sign + Vector2(9, -9), 4)
+                img = None
+            if img is not None:
+                surf.blit(img, img.get_rect(center=sign))
 
     def _render_aero_zones(self, surf: pygame.Surface) -> None:
         font = pygame.font.SysFont("arial", 16, bold=True)

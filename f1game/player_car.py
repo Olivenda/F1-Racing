@@ -100,6 +100,19 @@ class Player_Car(Car):
                 super().shift(-1)
         self._feedback(controls, dt)
 
+    def pit_pedals(self, session: "Session") -> tuple[float, float]:
+        """(throttle, brake) in the pit lane, where the driver brakes into the box and pulls away again; the
+        steering follows the lane."""
+        controls = self.remote if self.remote is not None else session.game.controls
+        up, down, _, _ = self.held_keys(controls)
+        throttle, brake = (1.0 if up else 0.0), (1.0 if down else 0.0)
+        pad_throttle, pad_brake = controls.pedal("throttle", self.slot), controls.pedal("brake", self.slot)
+        if pad_throttle is not None:
+            throttle = max(throttle, pad_throttle)
+        if pad_brake is not None:
+            brake = max(brake, pad_brake)
+        return throttle, brake
+
     def held_keys(self, controls) -> tuple[bool, bool, bool, bool]:
         """(throttle, brake, left, right) from this player's keys (rebindable, see Controls.keys)."""
         if self.remote is not None:
